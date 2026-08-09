@@ -121,7 +121,13 @@ fn project_flows(graph: &KnowledgeGraph) -> Vec<DomainFlow> {
 /// points open the walk and the most-imported foundation modules close it.
 /// Score = import fan-out − import fan-in + number of entry-point functions
 /// the file contains; ties break on path, so the order is deterministic.
-fn build_tour(graph: &KnowledgeGraph) -> Vec<TourStep> {
+///
+/// `pub(crate)` for enrichment carry-over (ADR-0005): the mechanical label
+/// is the derivation a stored tour annotation is keyed against, and only
+/// this function can recompute it once an enriched label occupies the slot.
+/// It reads only structural facts (paths, kinds, edges), which enrichment
+/// never edits, so the recomputation is valid on an enriched graph.
+pub(crate) fn build_tour(graph: &KnowledgeGraph) -> Vec<TourStep> {
     let mut fan_in: BTreeMap<&NodeId, i64> = BTreeMap::new();
     let mut fan_out: BTreeMap<&NodeId, i64> = BTreeMap::new();
     for edge in graph.edges.iter().filter(|e| e.kind == EdgeKind::Imports) {

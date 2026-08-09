@@ -12,16 +12,16 @@ update).
 
 **Blocked by:** 06 — Mechanical semantics; 11 — Enrichment core.
 
-**Status:** ready
+**Status:** done
 
-- [ ] Layer names, domain-flow names, and tour narration are typed slots
+- [x] Layer names, domain-flow names, and tour narration are typed slots
       filled through the provider trait
-- [ ] No prompt contains the full serialized graph — only summarized topology
+- [x] No prompt contains the full serialized graph — only summarized topology
       and the slots in question (bounded-prompt property asserted at the
       provider seam)
-- [ ] Carry-over applies: unchanged layers/flows/tour steps are not re-sent
+- [x] Carry-over applies: unchanged layers/flows/tour steps are not re-sent
       on incremental runs
-- [ ] With enrichment absent or failed, the mechanical labels from ticket 06
+- [x] With enrichment absent or failed, the mechanical labels from ticket 06
       remain — degrade, never break
-- [ ] Fake-provider tests assert answers land in the right slots and the map
+- [x] Fake-provider tests assert answers land in the right slots and the map
       stays schema-valid

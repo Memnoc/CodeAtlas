@@ -13,8 +13,10 @@
 //!
 //! Prompts are bounded: [`super::fill_slots`] batches at most
 //! [`super::BATCH_SIZE`] slots per request, and [`build_request_body`]
-//! serializes only those slots (id, kind, name, path, mechanical summary)
-//! plus the project name — never the graph.
+//! serializes only those slots — a node's id/kind/name/path and mechanical
+//! summary, a layer's directory and file count, a flow's domain and opening
+//! step names, a tour stop's path and fan-in/out — plus the project name.
+//! Never the graph: no edges, no member lists.
 //!
 //! Credentials resolve like the SDKs (ADR-0004): `ANTHROPIC_API_KEY`
 //! first (sent as `x-api-key`), then the `ant auth login` OAuth profile —
@@ -33,7 +35,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{EnrichmentProvider, EnrichmentRequest, EnrichmentResponse};
+use super::{EnrichmentProvider, EnrichmentRequest, EnrichmentResponse, EnrichmentSlot};
 
 /// The one URL this binary can ever talk to (ADR-0006). Hardcoded on
 /// purpose: no env var, flag, or config may redirect enrichment traffic —
@@ -55,11 +57,15 @@ const OAUTH_BETA: &str = "oauth-2025-04-20";
 /// reasoning counted against the same cap.
 const MAX_TOKENS: u32 = 8192;
 
-const SYSTEM_PROMPT: &str = "You write one-line summaries for entities in a code \
-map. For each entity you are given (a file, function, or class), write a single \
-concise sentence describing its purpose, grounded in its id, kind, name, path, \
-and the mechanical summary provided. Echo each entity's id exactly as given. \
-Answer for every entity.";
+const SYSTEM_PROMPT: &str = "You fill labeling slots in a code map. Each slot \
+has a kind and a key; echo each slot's key exactly as given and answer for \
+every slot. Slot kinds: 'summary' — one concise sentence describing the \
+entity's purpose, grounded in its kind, name, path, and mechanical summary; \
+'layer-name' — a short human-readable name (a few words) for the group of \
+files under the given directory; 'flow-name' — a short business-domain name \
+for the call flow described by its entry point and steps; 'tour-label' — one \
+engaging sentence narrating this stop on a guided tour of the codebase, \
+grounded in the path and its import fan-in/fan-out.";
 
 /// The Claude Messages API provider behind the [`EnrichmentProvider`]
 /// trait. Holds only the model name; credentials are resolved per call so
@@ -132,26 +138,53 @@ fn auth_headers(credentials: &Credentials) -> Vec<(&'static str, String)> {
     }
 }
 
+/// One slot as it rides the prompt: its kind, its response key, and the
+/// mechanically summarized topology that slot kind carries — nothing else
+/// (spec: bounded prompts).
+fn slot_payload(slot: &EnrichmentSlot) -> serde_json::Value {
+    let key = slot.key();
+    match slot {
+        EnrichmentSlot::NodeSummary(s) => json!({
+            "slot": "summary",
+            "key": key,
+            "kind": s.kind,
+            "name": s.name,
+            "path": s.path,
+            "mechanical_summary": s.mechanical_summary,
+        }),
+        EnrichmentSlot::LayerName(s) => json!({
+            "slot": "layer-name",
+            "key": key,
+            "directory": s.id,
+            "member_files": s.member_files,
+        }),
+        EnrichmentSlot::FlowName(s) => json!({
+            "slot": "flow-name",
+            "key": key,
+            "domain": s.domain,
+            "entry_point": s.entry,
+            "steps": s.step_names,
+            "step_count": s.step_count,
+        }),
+        EnrichmentSlot::TourLabel(s) => json!({
+            "slot": "tour-label",
+            "key": key,
+            "path": s.path,
+            "fan_in": s.fan_in,
+            "fan_out": s.fan_out,
+            "mechanical_label": s.mechanical_label,
+        }),
+    }
+}
+
 /// Builds the Messages API request body for one batch: the slots being
 /// enriched and the project name — nothing else (spec: bounded prompts).
 /// `output_config.format` carries the JSON schema the response must
 /// satisfy; a map with dynamic keys is not expressible under structured
 /// outputs (`additionalProperties` must be `false`), so answers arrive as
-/// an array of `{id, summary}` objects.
+/// an array of `{key, text}` objects.
 fn build_request_body(model: &str, request: &EnrichmentRequest) -> serde_json::Value {
-    let entities: Vec<serde_json::Value> = request
-        .slots
-        .iter()
-        .map(|slot| {
-            json!({
-                "id": slot.node.as_str(),
-                "kind": slot.kind,
-                "name": slot.name,
-                "path": slot.path,
-                "mechanical_summary": slot.mechanical_summary,
-            })
-        })
-        .collect();
+    let slots: Vec<serde_json::Value> = request.slots.iter().map(slot_payload).collect();
     json!({
         "model": model,
         "max_tokens": MAX_TOKENS,
@@ -159,9 +192,9 @@ fn build_request_body(model: &str, request: &EnrichmentRequest) -> serde_json::V
         "messages": [{
             "role": "user",
             "content": format!(
-                "Project: {}\n\nEntities to summarize:\n{}",
+                "Project: {}\n\nSlots to fill:\n{}",
                 request.project,
-                serde_json::to_string_pretty(&entities).expect("slots serialize"),
+                serde_json::to_string_pretty(&slots).expect("slots serialize"),
             ),
         }],
         "output_config": {
@@ -170,26 +203,26 @@ fn build_request_body(model: &str, request: &EnrichmentRequest) -> serde_json::V
                 "schema": {
                     "type": "object",
                     "properties": {
-                        "summaries": {
+                        "answers": {
                             "type": "array",
                             "items": {
                                 "type": "object",
                                 "properties": {
-                                    "id": {
+                                    "key": {
                                         "type": "string",
-                                        "description": "The entity id, exactly as given",
+                                        "description": "The slot key, exactly as given",
                                     },
-                                    "summary": {
+                                    "text": {
                                         "type": "string",
-                                        "description": "One concise sentence",
+                                        "description": "The text filling the slot",
                                     },
                                 },
-                                "required": ["id", "summary"],
+                                "required": ["key", "text"],
                                 "additionalProperties": false,
                             },
                         },
                     },
-                    "required": ["summaries"],
+                    "required": ["answers"],
                     "additionalProperties": false,
                 },
             },
@@ -218,13 +251,13 @@ struct ContentBlock {
 /// [`build_request_body`].
 #[derive(Deserialize)]
 struct Answers {
-    summaries: Vec<Answer>,
+    answers: Vec<Answer>,
 }
 
 #[derive(Deserialize)]
 struct Answer {
-    id: String,
-    summary: String,
+    key: String,
+    text: String,
 }
 
 /// Turns a successful (HTTP 2xx) Messages API response into a typed
@@ -252,10 +285,10 @@ fn parse_response(raw: &str) -> Result<EnrichmentResponse> {
     let answers: Answers = serde_json::from_str(text)
         .context("the structured output did not match the requested schema")?;
     Ok(EnrichmentResponse {
-        summaries: answers
-            .summaries
+        answers: answers
+            .answers
             .into_iter()
-            .map(|answer| (answer.id, answer.summary))
+            .map(|answer| (answer.key, answer.text))
             .collect(),
     })
 }
@@ -327,20 +360,38 @@ mod tests {
         EnrichmentRequest {
             project: "demo".into(),
             slots: vec![
-                super::super::SummarySlot {
+                EnrichmentSlot::NodeSummary(super::super::SummarySlot {
                     node: NodeId::file("src/a.ts"),
                     kind: NodeKind::File,
                     name: "a.ts".into(),
                     path: "src/a.ts".into(),
                     mechanical_summary: "TypeScript file with 1 function.".into(),
-                },
-                super::super::SummarySlot {
+                }),
+                EnrichmentSlot::NodeSummary(super::super::SummarySlot {
                     node: NodeId::symbol(NodeKind::Function, "src/a.ts", "go"),
                     kind: NodeKind::Function,
                     name: "go".into(),
                     path: "src/a.ts".into(),
                     mechanical_summary: "Function go, called by main.".into(),
-                },
+                }),
+                EnrichmentSlot::LayerName(super::super::LayerSlot {
+                    id: "src".into(),
+                    member_files: 12,
+                }),
+                EnrichmentSlot::FlowName(super::super::FlowSlot {
+                    id: "flow:function:src/a.ts:go".into(),
+                    domain: "src".into(),
+                    entry: "go".into(),
+                    step_names: vec!["go".into(), "greet".into()],
+                    step_count: 2,
+                }),
+                EnrichmentSlot::TourLabel(super::super::TourSlot {
+                    node: NodeId::file("src/a.ts"),
+                    path: "src/a.ts".into(),
+                    fan_in: 3,
+                    fan_out: 1,
+                    mechanical_label: "Entry point: src/a.ts — fan-in 3, fan-out 1".into(),
+                }),
             ],
         }
     }
@@ -356,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn the_request_carries_the_slots_and_demands_schema_valid_output() {
+    fn the_request_carries_typed_slots_and_demands_schema_valid_output() {
         let body = build_request_body(DEFAULT_MODEL, &request());
 
         assert_eq!(body["model"], "claude-opus-5");
@@ -366,24 +417,44 @@ mod tests {
         // so the response is guaranteed to deserialize — no repair code.
         let format = &body["output_config"]["format"];
         assert_eq!(format["type"], "json_schema");
-        let items = &format["schema"]["properties"]["summaries"]["items"];
-        assert_eq!(items["required"], json!(["id", "summary"]));
+        let items = &format["schema"]["properties"]["answers"]["items"];
+        assert_eq!(items["required"], json!(["key", "text"]));
         assert_eq!(items["additionalProperties"], json!(false));
 
-        // Bounded prompt: each slot's identifying fields and mechanical
-        // summary, plus the project name — and nothing graph-shaped.
+        // Bounded prompt: every slot kind rides as its key plus its own
+        // mechanically summarized topology, and the project name.
         let content = body["messages"][0]["content"].as_str().unwrap();
         assert!(content.contains("Project: demo"));
         for needle in [
-            "file:src/a.ts",
-            "function:src/a.ts:go",
+            // node summary slots
+            "summary:file:src/a.ts",
+            "summary:function:src/a.ts:go",
             "TypeScript file with 1 function.",
             "Function go, called by main.",
             "\"kind\": \"function\"",
+            // layer slot: directory + member count, no member list
+            "layer-name:src",
+            "\"member_files\": 12",
+            // flow slot: domain, entry point, step names
+            "flow-name:flow:function:src/a.ts:go",
+            "\"entry_point\": \"go\"",
+            "greet",
+            "\"step_count\": 2",
+            // tour slot: path + fan-in/out numbers
+            "tour-label:file:src/a.ts",
+            "\"fan_in\": 3",
+            "\"fan_out\": 1",
         ] {
             assert!(content.contains(needle), "missing from prompt: {needle}");
         }
-        for forbidden in ["edges", "layers", "tour", "domain_flows"] {
+        // Never the serialized graph: no edge objects, no adjacency.
+        for forbidden in [
+            "\"edges\"",
+            "\"nodes\"",
+            "\"source\"",
+            "\"target\"",
+            "\"weight\"",
+        ] {
             assert!(
                 !content.contains(forbidden),
                 "the prompt must never carry the graph: found {forbidden:?}"
@@ -392,15 +463,16 @@ mod tests {
     }
 
     #[test]
-    fn a_schema_valid_response_becomes_typed_summaries() {
+    fn a_schema_valid_response_becomes_typed_answers() {
         // Thinking blocks (empty text) precede the structured text block —
         // the parser must skip them.
         let raw = json!({
             "content": [
                 {"type": "thinking", "thinking": "..."},
-                {"type": "text", "text": r#"{"summaries": [
-                    {"id": "file:src/a.ts", "summary": "The entry file."},
-                    {"id": "function:src/a.ts:go", "summary": "Runs the show."}
+                {"type": "text", "text": r#"{"answers": [
+                    {"key": "summary:file:src/a.ts", "text": "The entry file."},
+                    {"key": "layer-name:src", "text": "Application core"},
+                    {"key": "tour-label:file:src/a.ts", "text": "Start here."}
                 ]}"#},
             ],
             "stop_reason": "end_turn",
@@ -409,12 +481,16 @@ mod tests {
 
         let response = parse_response(&raw).unwrap();
         assert_eq!(
-            response.summaries,
+            response.answers,
             BTreeMap::from([
-                ("file:src/a.ts".to_string(), "The entry file.".to_string()),
                 (
-                    "function:src/a.ts:go".to_string(),
-                    "Runs the show.".to_string()
+                    "summary:file:src/a.ts".to_string(),
+                    "The entry file.".to_string()
+                ),
+                ("layer-name:src".to_string(), "Application core".to_string()),
+                (
+                    "tour-label:file:src/a.ts".to_string(),
+                    "Start here.".to_string()
                 ),
             ])
         );

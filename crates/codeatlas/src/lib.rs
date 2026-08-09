@@ -93,13 +93,13 @@ pub fn run() -> ExitCode {
             match enrich::run(&root, &mut graph, model.as_deref()) {
                 Ok(enrich::Outcome::NothingToEnrich) => {
                     eprintln!(
-                        "nothing to enrich: every summary is already enriched \
+                        "nothing to enrich: every slot is already enriched \
                          or the map is empty"
                     );
                     ExitCode::SUCCESS
                 }
                 Ok(enrich::Outcome::Enriched(count)) => {
-                    eprintln!("enriched {count} nodes");
+                    eprintln!("enriched {count} slots");
                     ExitCode::SUCCESS
                 }
                 Err(err) => {
