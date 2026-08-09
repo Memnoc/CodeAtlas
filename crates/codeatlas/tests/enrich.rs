@@ -288,6 +288,22 @@ fn provider_failure_mid_run_leaves_a_complete_schema_valid_structural_map() {
 }
 
 #[test]
+fn enrich_with_nothing_to_enrich_succeeds_without_any_provider() {
+    // An empty repo yields zero summary slots, so --enrich has nothing to
+    // purchase: it must succeed without resolving a provider at all (no
+    // env var is set here, and in a network build the default provider
+    // would demand credentials).
+    let repo = tempfile::tempdir().unwrap();
+
+    let assert = scan(repo.path(), true, None).success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("nothing to enrich"),
+        "must explain that no slots needed enrichment: {stderr}"
+    );
+}
+
+#[test]
 fn enrich_without_a_provider_fails_cleanly_but_writes_the_structural_map() {
     let repo = materialize("simple");
     let assert = scan(repo.path(), true, None).failure();

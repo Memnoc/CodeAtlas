@@ -29,9 +29,15 @@ enum Command {
         /// Repository root (defaults to the current directory)
         path: Option<PathBuf>,
         /// After the structural scan, fill summary slots through the
-        /// enrichment provider (ADR-0004)
+        /// enrichment provider (ADR-0004). The default provider is the
+        /// Claude API (credentials: ANTHROPIC_API_KEY, or an `ant auth
+        /// login` profile); CODEATLAS_ENRICH_PROVIDER overrides it.
         #[arg(long)]
         enrich: bool,
+        /// Model for the Claude enrichment provider (default:
+        /// claude-opus-5). Ignored by non-Claude providers.
+        #[arg(long, requires = "enrich")]
+        model: Option<String>,
     },
     /// Overlay a git diff's impact on the map: changed nodes and their
     /// one-hop blast radius, written to .codeatlas/diff-overlay.json.
@@ -58,7 +64,11 @@ enum Command {
 
 pub fn run() -> ExitCode {
     match Cli::parse().command {
-        Command::Scan { path, enrich } => {
+        Command::Scan {
+            path,
+            enrich,
+            model,
+        } => {
             let root = path.unwrap_or_else(|| PathBuf::from("."));
             // The structural map is always built and saved first — with
             // stored annotations re-attached where content is unchanged
@@ -80,8 +90,15 @@ pub fn run() -> ExitCode {
             if !enrich {
                 return ExitCode::SUCCESS;
             }
-            match enrich::run(&root, &mut graph) {
-                Ok(count) => {
+            match enrich::run(&root, &mut graph, model.as_deref()) {
+                Ok(enrich::Outcome::NothingToEnrich) => {
+                    eprintln!(
+                        "nothing to enrich: every summary is already enriched \
+                         or the map is empty"
+                    );
+                    ExitCode::SUCCESS
+                }
+                Ok(enrich::Outcome::Enriched(count)) => {
                     eprintln!("enriched {count} nodes");
                     ExitCode::SUCCESS
                 }

@@ -18,8 +18,22 @@ tree-sitter-javascript = "0.25.0"
 tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.2"
 tree-sitter-typescript = "0.23.2"
+# The Claude API provider's HTTP client (ADR-0004, ADR-0006). ureq over
+# reqwest/tokio: blocking (one POST per batch needs no async runtime),
+# small and audit-friendly. Default features = rustls (via ring) with
+# webpki roots + gzip — the notable transitive additions are rustls,
+# rustls-pki-types, webpki-roots, ring, ureq-proto, base64, flate2, and
+# percent-encoding (`cargo tree -e normal -p ureq` for the full list); no
+# openssl, no async runtime. Optional: compiled in only by the `network`
+# feature, so the sealed build (ADR-0006) contains no HTTP client at all.
+ureq = { version = "3.4.0", optional = true }
 
 [features]
+# Networking is opt-out at compile time (ADR-0006): the default build ships
+# the Claude API enrichment provider, `--no-default-features` produces the
+# sealed build in which no networking code exists (ticket 15 verifies).
+default = ["network"]
+network = ["dep:ureq"]
 # Compiles the offline fake/fail enrichment providers used at the provider
 # seam in tests. Enabled only for test builds through the self
 # dev-dependency below, so shipped binaries carry no test machinery.
@@ -29,7 +43,10 @@ test-provider = []
 assert_cmd = "2.2.2"
 # Self dev-dependency: turns on `test-provider` for every `cargo test`
 # build (including the binary assert_cmd runs) without shipping it.
-codeatlas = { path = ".", features = ["test-provider"] }
+# `default-features = false` so this edge never re-adds `network` — under
+# `cargo test --no-default-features` the crate genuinely builds without
+# networking code, with only the offline test backends compiled in.
+codeatlas = { path = ".", default-features = false, features = ["test-provider"] }
 jsonschema = "0.49.8"
 predicates = "3.1.3"
 tempfile = "3.27.0"

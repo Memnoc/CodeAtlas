@@ -11,11 +11,22 @@
 //! # Provider selection
 //!
 //! The binary resolves its provider from the `CODEATLAS_ENRICH_PROVIDER`
-//! env var. The real Claude API provider is not wired yet (a later ticket,
-//! behind the network feature gate of ADR-0006), so in a plain build
-//! `--enrich` fails cleanly with a clear message. Test builds compile the
-//! crate with the `test-provider` feature (via the self dev-dependency in
-//! `Cargo.toml`), which adds two offline backends for the test seams:
+//! env var; an explicit spec always wins over the default. Recognized
+//! specs and per-build defaults:
+//!
+//! - `claude` — the real Claude API provider ([`claude`], `network`
+//!   builds only). This is also the **default** in a shipped `network`
+//!   build when the env var is unset.
+//! - `fake:<path>` / `fail` — offline test backends (below).
+//! - Unset in a **test build** (`test-provider` feature, enabled by the
+//!   self dev-dependency in `Cargo.toml`) — an error: tests must pick a
+//!   backend explicitly, so none can fall through to a provider that
+//!   opens sockets (the no-network-in-tests rule).
+//! - Unset in a **sealed build** (`--no-default-features`, ADR-0006) — a
+//!   clear "enrichment is not available in this build" error; no
+//!   networking code exists to select.
+//!
+//! The test backends, compiled in only for test builds:
 //!
 //! - `fake:<path>` — canned typed responses from a JSON file mapping
 //!   node ID → summary
@@ -33,8 +44,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::map::{KnowledgeGraph, NodeId, NodeKind, Provenance};
 
+#[cfg(feature = "network")]
+pub mod claude;
+
 /// The env var the CLI resolves its enrichment provider from.
 pub const PROVIDER_ENV: &str = "CODEATLAS_ENRICH_PROVIDER";
+
+/// The most summary slots a single provider request may carry (spec:
+/// bounded prompts — the model never sees the whole serialized graph, and a
+/// request's size cannot grow with the repository). 25 slots keep the
+/// prompt at a few KB and the structured response comfortably inside one
+/// completion; larger repos simply make more requests.
+pub const BATCH_SIZE: usize = 25;
 
 /// One node whose summary slot the provider is asked to fill.
 #[derive(Debug, Clone)]
@@ -213,24 +234,41 @@ fn content_hash(bytes: &[u8]) -> String {
     format!("fnv1a64:{hash:016x}")
 }
 
+/// What the `--enrich` step did — the CLI words its success message from
+/// this, so "no provider was needed" and "the provider answered" stay
+/// distinguishable.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// No structural-provenance node needed a summary (empty map, or every
+    /// summary already enriched/carried over): no provider was resolved and
+    /// no request was made.
+    NothingToEnrich,
+    /// The provider ran; this many nodes were enriched.
+    Enriched(usize),
+}
+
 /// The `--enrich` step, run after the structural map is already saved:
 /// resolve a provider, fill the summary slots of structural-provenance
-/// nodes, and re-save the map. Returns how many nodes were enriched. Any
-/// error leaves the saved structural map untouched.
-pub fn run(root: &Path, graph: &mut KnowledgeGraph) -> Result<usize> {
-    let provider = resolve_provider()?;
+/// nodes, and re-save the map. When nothing needs enrichment this succeeds
+/// without even resolving a provider (a repo with everything carried over
+/// must not demand credentials). Any error leaves the saved structural map
+/// untouched.
+pub fn run(root: &Path, graph: &mut KnowledgeGraph, model: Option<&str>) -> Result<Outcome> {
+    if collect_slots(graph).is_empty() {
+        return Ok(Outcome::NothingToEnrich);
+    }
+    let provider = resolve_provider(model)?;
     let count = fill_slots(graph, provider.as_ref())?;
     save_store(root, graph)?;
     crate::scan::save(root, graph)?;
-    Ok(count)
+    Ok(Outcome::Enriched(count))
 }
 
-/// Fills summary slots through the provider: only `structural`-provenance
-/// nodes are selected (ADR-0005 — enriched nodes are never re-purchased),
-/// and only answered slots change, flipping to `llm` provenance. Unanswered
-/// slots keep their mechanical summary.
-pub fn fill_slots(graph: &mut KnowledgeGraph, provider: &dyn EnrichmentProvider) -> Result<usize> {
-    let slots: Vec<SummarySlot> = graph
+/// The summary slots the provider would be asked to fill: only
+/// `structural`-provenance nodes are selected (ADR-0005 — enriched nodes
+/// are never re-purchased).
+fn collect_slots(graph: &KnowledgeGraph) -> Vec<SummarySlot> {
+    graph
         .nodes
         .iter()
         .filter(|n| n.provenance == Provenance::Structural)
@@ -241,22 +279,39 @@ pub fn fill_slots(graph: &mut KnowledgeGraph, provider: &dyn EnrichmentProvider)
             path: n.path.clone(),
             mechanical_summary: n.summary.clone(),
         })
-        .collect();
+        .collect()
+}
+
+/// Fills summary slots through the provider in batches of at most
+/// [`BATCH_SIZE`] slots per request (spec: bounded prompts). Only answered,
+/// non-blank slots change, flipping to `llm` provenance; a blank or
+/// whitespace-only answer is treated as unanswered, so the mechanical
+/// fallback is never replaced by a hole. Unanswered slots keep their
+/// mechanical summary. Any batch error fails the whole step: the caller
+/// never saves a partially-purchased run.
+pub fn fill_slots(graph: &mut KnowledgeGraph, provider: &dyn EnrichmentProvider) -> Result<usize> {
+    let slots = collect_slots(graph);
     if slots.is_empty() {
         return Ok(0);
     }
-    let request = EnrichmentRequest {
-        project: graph.project.name.clone(),
-        slots,
-    };
-    let response = provider.enrich(&request)?;
+    let mut summaries: BTreeMap<String, String> = BTreeMap::new();
+    for batch in slots.chunks(BATCH_SIZE) {
+        let request = EnrichmentRequest {
+            project: graph.project.name.clone(),
+            slots: batch.to_vec(),
+        };
+        summaries.extend(provider.enrich(&request)?.summaries);
+    }
 
     let mut count = 0;
     for node in &mut graph.nodes {
         if node.provenance != Provenance::Structural {
             continue;
         }
-        if let Some(summary) = response.summaries.get(node.id.as_str()) {
+        if let Some(summary) = summaries.get(node.id.as_str()) {
+            if summary.trim().is_empty() {
+                continue;
+            }
             node.summary = summary.clone();
             node.provenance = Provenance::Llm;
             count += 1;
@@ -265,24 +320,69 @@ pub fn fill_slots(graph: &mut KnowledgeGraph, provider: &dyn EnrichmentProvider)
     Ok(count)
 }
 
-/// Resolves the provider the CLI will use, from [`PROVIDER_ENV`]. Without a
-/// configured provider this fails with a clear message: the structural map
-/// has already been written by the time this runs, so `--enrich` degrades
-/// cleanly (spec story 14).
-pub fn resolve_provider() -> Result<Box<dyn EnrichmentProvider>> {
-    let spec = std::env::var(PROVIDER_ENV).ok();
-    match spec.as_deref() {
+/// Resolves the provider the CLI will use, from [`PROVIDER_ENV`]. `model`
+/// is forwarded to the Claude provider (`--model`); the offline test
+/// backends ignore it. Without a usable provider this fails with a clear
+/// message: the structural map has already been written by the time this
+/// runs, so `--enrich` degrades cleanly (spec story 14).
+pub fn resolve_provider(model: Option<&str>) -> Result<Box<dyn EnrichmentProvider>> {
+    provider_from_spec(std::env::var(PROVIDER_ENV).ok().as_deref(), model)
+}
+
+/// Provider selection separated from the env read so the precedence rules
+/// are unit-testable. An explicit [`PROVIDER_ENV`] spec always wins; with
+/// no spec the default depends on the build (see [`default_provider`]).
+fn provider_from_spec(
+    spec: Option<&str>,
+    model: Option<&str>,
+) -> Result<Box<dyn EnrichmentProvider>> {
+    #[cfg(not(feature = "network"))]
+    let _ = model;
+    match spec {
         #[cfg(feature = "test-provider")]
         Some(spec) if spec.starts_with("fake:") => Ok(Box::new(test_provider::CannedProvider {
             path: spec["fake:".len()..].into(),
         })),
         #[cfg(feature = "test-provider")]
         Some("fail") => Ok(Box::new(test_provider::FailingProvider)),
+        #[cfg(feature = "network")]
+        Some("claude") => Ok(Box::new(claude::ClaudeProvider::new(model))),
         Some(other) => Err(anyhow!("unknown enrichment provider {other:?}")),
-        None => Err(anyhow!(
-            "no enrichment provider is configured: this build has no LLM backend \
-             for --enrich yet; the structural map was written without it"
-        )),
+        None => default_provider(model),
+    }
+}
+
+/// The provider used when [`PROVIDER_ENV`] is unset.
+///
+/// - **Shipped `network` build** — the Claude API provider (ADR-0004): the
+///   one real backend is the default, no configuration needed.
+/// - **Test build (`test-provider`)** — no default: tests must select a
+///   backend explicitly, so no test can ever fall through to a provider
+///   that opens sockets (the no-network-in-tests rule).
+/// - **Sealed build (`--no-default-features`)** — no networking code exists
+///   (ADR-0006); enrichment is simply not available.
+fn default_provider(model: Option<&str>) -> Result<Box<dyn EnrichmentProvider>> {
+    #[cfg(all(feature = "network", not(feature = "test-provider")))]
+    {
+        Ok(Box::new(claude::ClaudeProvider::new(model)))
+    }
+    #[cfg(feature = "test-provider")]
+    {
+        let _ = model;
+        Err(anyhow!(
+            "no enrichment provider is configured: this is a test build, which \
+             has no default provider — set {PROVIDER_ENV}; the structural map \
+             was written without enrichment"
+        ))
+    }
+    #[cfg(not(any(feature = "network", feature = "test-provider")))]
+    {
+        let _ = model;
+        Err(anyhow!(
+            "enrichment is not available in this build: it was compiled without \
+             the `network` feature (ADR-0006 sealed build), so no LLM backend \
+             exists; the structural map was written without enrichment"
+        ))
     }
 }
 
@@ -394,6 +494,86 @@ mod tests {
         let a = &graph.nodes[0];
         assert_eq!(a.summary, "Mechanical summary of a.ts");
         assert_eq!(a.provenance, Provenance::Structural);
+    }
+
+    #[test]
+    fn requests_are_batched_to_at_most_batch_size_slots() {
+        /// Echoes an answer for every offered slot while recording the size
+        /// of each request — the bounded-prompt property observed at the
+        /// provider seam.
+        struct Batching {
+            request_sizes: RefCell<Vec<usize>>,
+        }
+        impl EnrichmentProvider for Batching {
+            fn enrich(&self, request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
+                self.request_sizes.borrow_mut().push(request.slots.len());
+                Ok(EnrichmentResponse {
+                    summaries: request
+                        .slots
+                        .iter()
+                        .map(|s| (s.node.as_str().to_string(), format!("Prose for {}", s.name)))
+                        .collect(),
+                })
+            }
+        }
+
+        let total = 2 * BATCH_SIZE + 3;
+        let mut graph = graph();
+        graph.nodes = (0..total)
+            .map(|i| {
+                let path = format!("src/f{i}.ts");
+                node(
+                    NodeId::file(&path),
+                    NodeKind::File,
+                    &format!("f{i}.ts"),
+                    &path,
+                    Provenance::Structural,
+                )
+            })
+            .collect();
+
+        let provider = Batching {
+            request_sizes: RefCell::new(Vec::new()),
+        };
+        let count = fill_slots(&mut graph, &provider).unwrap();
+        assert_eq!(count, total);
+
+        let sizes = provider.request_sizes.borrow();
+        assert!(
+            sizes.iter().all(|&n| n <= BATCH_SIZE),
+            "a request exceeded the batch bound {BATCH_SIZE}: {sizes:?}"
+        );
+        assert_eq!(
+            sizes.iter().sum::<usize>(),
+            total,
+            "every slot must be offered exactly once: {sizes:?}"
+        );
+        assert_eq!(sizes.len(), total.div_ceil(BATCH_SIZE));
+        for n in &graph.nodes {
+            assert_eq!(n.provenance, Provenance::Llm);
+        }
+    }
+
+    #[test]
+    fn blank_answers_never_replace_the_mechanical_summary() {
+        let mut graph = graph();
+        let fake = Fake {
+            answers: BTreeMap::from([
+                ("file:src/a.ts".to_string(), "".to_string()),
+                ("function:src/a.ts:go".to_string(), " \n\t ".to_string()),
+            ]),
+            requested: RefCell::new(Vec::new()),
+        };
+
+        let count = fill_slots(&mut graph, &fake).unwrap();
+        assert_eq!(count, 0, "blank answers must not count as enrichment");
+
+        // Both slots keep the mechanical fallback and stay structural, so
+        // the next --enrich re-selects them.
+        for node in &graph.nodes[..2] {
+            assert!(node.summary.starts_with("Mechanical summary"));
+            assert_eq!(node.provenance, Provenance::Structural);
+        }
     }
 
     #[test]
