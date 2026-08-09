@@ -443,6 +443,170 @@ fn no_edge_references_a_node_missing_from_the_map() {
 }
 
 #[test]
+fn every_file_node_belongs_to_exactly_one_directory_derived_layer() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let map = read_map(repo.path());
+
+    let layers = map["layers"].as_array().expect("map must carry layers");
+    let layer_ids: Vec<&str> = layers.iter().map(|l| l["id"].as_str().unwrap()).collect();
+    for layer in layers {
+        assert_eq!(layer["provenance"], "structural");
+        assert!(
+            !layer["name"].as_str().unwrap().is_empty(),
+            "layer must carry a mechanical name: {layer:?}"
+        );
+    }
+    {
+        let mut sorted = layer_ids.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            layer_ids.len(),
+            "duplicate layers: {layer_ids:?}"
+        );
+    }
+
+    // No orphan files: every file node names a layer that exists in the list.
+    for node in map["nodes"].as_array().unwrap() {
+        if node["kind"] != "file" {
+            continue;
+        }
+        let layer = node["layer"]
+            .as_str()
+            .unwrap_or_else(|| panic!("file node without a layer: {node:?}"));
+        assert!(
+            layer_ids.contains(&layer),
+            "file names a layer missing from the list: {node:?}"
+        );
+    }
+
+    // Layers are directory-derived: files under src/ share one layer,
+    // top-level files share another, and the two differ.
+    let layer_of = |id: &str| {
+        map["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == id)
+            .unwrap()["layer"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(
+        layer_of("file:src/main.ts"),
+        layer_of("file:src/lib/index.ts")
+    );
+    assert_eq!(layer_of("file:README.md"), layer_of("file:ts"));
+    assert_ne!(layer_of("file:src/main.ts"), layer_of("file:README.md"));
+}
+
+#[test]
+fn domain_flows_are_call_chains_rooted_at_functions_nothing_else_calls() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let map = read_map(repo.path());
+
+    let flows = map["domain_flows"]
+        .as_array()
+        .expect("map must carry domain flows");
+    assert!(!flows.is_empty(), "fixture has call chains, so flows exist");
+
+    // The expected flow: main() is called by nothing and calls greet().
+    let main_flow = flows
+        .iter()
+        .find(|f| f["steps"][0] == "function:src/main.ts:main")
+        .unwrap_or_else(|| panic!("no flow rooted at main: {flows:?}"));
+    let steps: Vec<&str> = main_flow["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s.as_str().unwrap())
+        .collect();
+    assert_eq!(
+        steps,
+        ["function:src/main.ts:main", "function:src/util.ts:greet"]
+    );
+    // Domains come from top-level directories.
+    assert_eq!(main_flow["domain"], "src");
+    assert_eq!(main_flow["provenance"], "structural");
+    assert!(
+        !main_flow["name"].as_str().unwrap().is_empty(),
+        "flow must carry a mechanical name: {main_flow:?}"
+    );
+
+    let node_ids: std::collections::HashSet<String> = node_ids(&map).into_iter().collect();
+    let called: std::collections::HashSet<&str> = map["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "calls")
+        .map(|e| e["target"].as_str().unwrap())
+        .collect();
+    for flow in flows {
+        // Rooted at entry points only: no flow starts at a called function.
+        let root = flow["steps"][0].as_str().unwrap();
+        assert!(!called.contains(root), "flow rooted at a callee: {flow:?}");
+        // Every step references a function node present in the map.
+        for step in flow["steps"].as_array().unwrap() {
+            let id = step.as_str().unwrap();
+            assert!(id.starts_with("function:"), "non-function step: {flow:?}");
+            assert!(node_ids.contains(id), "dangling flow step {id}: {flow:?}");
+        }
+    }
+
+    // A function that calls nothing roots no flow: a chain needs a call.
+    assert!(
+        !flows
+            .iter()
+            .any(|f| f["steps"][0] == "function:src/greeter.ts:Greeter.greet"),
+        "call-less function became a flow root: {flows:?}"
+    );
+}
+
+#[test]
+fn tour_steps_are_topology_ordered_with_mechanical_labels() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let map = read_map(repo.path());
+
+    let tour = map["tour"].as_array().expect("map must carry a tour");
+    assert!(!tour.is_empty());
+
+    let node_ids: std::collections::HashSet<String> = node_ids(&map).into_iter().collect();
+    let mut steps: Vec<&str> = Vec::new();
+    for step in tour {
+        let node = step["node"].as_str().unwrap();
+        assert!(node_ids.contains(node), "dangling tour step: {step:?}");
+        assert!(
+            !step["label"].as_str().unwrap().is_empty(),
+            "tour step must carry a mechanical label: {step:?}"
+        );
+        assert_eq!(step["provenance"], "structural");
+        steps.push(node);
+    }
+    {
+        let mut sorted = steps.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), steps.len(), "node visited twice: {steps:?}");
+    }
+
+    // Topology ordering: entry-point files (nothing imports them, they start
+    // call chains) come before the most-imported foundation module.
+    let position = |id: &str| {
+        steps
+            .iter()
+            .position(|s| *s == id)
+            .unwrap_or_else(|| panic!("{id} missing from tour: {steps:?}"))
+    };
+    assert!(position("file:src/app.ts") < position("file:src/util.ts"));
+    assert!(position("file:src/main.ts") < position("file:src/util.ts"));
+}
+
+#[test]
 fn scanning_the_same_input_twice_is_byte_identical() {
     let repo = materialize("simple");
     scan(repo.path());

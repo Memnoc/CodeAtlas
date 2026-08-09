@@ -60,12 +60,17 @@ pub fn scan(root: &Path) -> Result<KnowledgeGraph> {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "project".to_string());
 
-    Ok(KnowledgeGraph {
+    let mut graph = KnowledgeGraph {
         version: MAP_CONTRACT_VERSION.to_string(),
         project: Project { name: project_name },
         nodes,
         edges,
-    })
+        layers: Vec::new(),
+        domain_flows: Vec::new(),
+        tour: Vec::new(),
+    };
+    crate::semantics::apply(&mut graph);
+    Ok(graph)
 }
 
 /// What one file contributes to the cross-file resolution phase.
@@ -140,6 +145,7 @@ fn extract_file(
         path: path.to_string(),
         summary,
         range: None,
+        layer: None, // assigned by the semantics pass
         provenance: Provenance::Structural,
     });
 
@@ -162,6 +168,7 @@ fn extract_file(
                 start_line: symbol.start_line,
                 end_line: symbol.end_line,
             }),
+            layer: None, // symbols inherit their file's layer via containment
             provenance: Provenance::Structural,
         });
         edges.push(Edge::new(file_id.clone(), id.clone(), EdgeKind::Contains));

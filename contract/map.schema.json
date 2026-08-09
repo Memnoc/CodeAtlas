@@ -3,10 +3,26 @@
   "title": "KnowledgeGraph",
   "type": "object",
   "properties": {
+    "domain_flows": {
+      "description": "Mechanically projected domain flows. Optional in the contract (older\nmaps omit it); always emitted by the CLI.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/DomainFlow"
+      }
+    },
     "edges": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/Edge"
+      }
+    },
+    "layers": {
+      "description": "Directory-derived layers every file node is assigned to. Optional in\nthe contract (older maps omit it); always emitted by the CLI.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Layer"
       }
     },
     "nodes": {
@@ -17,6 +33,14 @@
     },
     "project": {
       "$ref": "#/$defs/Project"
+    },
+    "tour": {
+      "description": "The guided tour: an ordered walk over the file nodes. Optional in the\ncontract (older maps omit it); always emitted by the CLI.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/TourStep"
+      }
     },
     "version": {
       "description": "Semver version of the map contract this file conforms to.",
@@ -30,6 +54,41 @@
     "edges"
   ],
   "$defs": {
+    "DomainFlow": {
+      "description": "A call chain rooted at an entry point — a function nothing else calls.\nThe chain and its domain are structural facts; the name is the enrichable\nslot — mechanically it renders the chain, enrichment may relabel it.",
+      "type": "object",
+      "properties": {
+        "domain": {
+          "description": "The domain this flow belongs to: the top-level directory of the root\nfunction's file, or `root` for files at the repository root.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable flow ID derived from the root function's node ID, e.g.\n`flow:function:src/main.ts:main`.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Mechanical or enriched display name; provenance says which.",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "steps": {
+          "description": "Function node IDs along the chain, root first, in deterministic\ndepth-first call order.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/NodeId"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "domain",
+        "steps",
+        "provenance"
+      ]
+    },
     "Edge": {
       "type": "object",
       "properties": {
@@ -64,6 +123,28 @@
         "calls"
       ]
     },
+    "Layer": {
+      "description": "A horizontal grouping of files. Membership is structural (each file node's\n`layer` field); the name is the enrichable slot — mechanically it is the\nderiving directory, enrichment may relabel it.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Stable layer ID: the top-level directory that derived it, or `root`\nfor files at the repository root.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Mechanical or enriched display name; provenance says which.",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "provenance"
+      ]
+    },
     "Node": {
       "type": "object",
       "properties": {
@@ -73,6 +154,13 @@
         },
         "kind": {
           "$ref": "#/$defs/NodeKind"
+        },
+        "layer": {
+          "description": "ID of the layer this file node belongs to; absent on symbol nodes,\nwhich inherit their file's layer through containment.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "name": {
           "type": "string"
@@ -157,6 +245,28 @@
       "required": [
         "start_line",
         "end_line"
+      ]
+    },
+    "TourStep": {
+      "description": "One stop on the guided tour. The step's position comes from topology\nscoring and is structural; the label is the enrichable slot — mechanical\nby default, enrichment may narrate it.",
+      "type": "object",
+      "properties": {
+        "label": {
+          "description": "Mechanical or enriched narration; provenance says which.",
+          "type": "string"
+        },
+        "node": {
+          "description": "The node this step visits.",
+          "$ref": "#/$defs/NodeId"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        }
+      },
+      "required": [
+        "node",
+        "label",
+        "provenance"
       ]
     }
   }

@@ -6,7 +6,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Semver version of the map contract carried by every emitted map.
-pub const MAP_CONTRACT_VERSION: &str = "0.1.0";
+/// 0.2.0: added optional `layers`, `domain_flows`, `tour`, and `Node.layer`.
+pub const MAP_CONTRACT_VERSION: &str = "0.2.0";
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeGraph {
@@ -15,6 +16,62 @@ pub struct KnowledgeGraph {
     pub project: Project,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    /// Directory-derived layers every file node is assigned to. Optional in
+    /// the contract (older maps omit it); always emitted by the CLI.
+    #[serde(default)]
+    pub layers: Vec<Layer>,
+    /// Mechanically projected domain flows. Optional in the contract (older
+    /// maps omit it); always emitted by the CLI.
+    #[serde(default)]
+    pub domain_flows: Vec<DomainFlow>,
+    /// The guided tour: an ordered walk over the file nodes. Optional in the
+    /// contract (older maps omit it); always emitted by the CLI.
+    #[serde(default)]
+    pub tour: Vec<TourStep>,
+}
+
+/// One stop on the guided tour. The step's position comes from topology
+/// scoring and is structural; the label is the enrichable slot — mechanical
+/// by default, enrichment may narrate it.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct TourStep {
+    /// The node this step visits.
+    pub node: NodeId,
+    /// Mechanical or enriched narration; provenance says which.
+    pub label: String,
+    pub provenance: Provenance,
+}
+
+/// A call chain rooted at an entry point — a function nothing else calls.
+/// The chain and its domain are structural facts; the name is the enrichable
+/// slot — mechanically it renders the chain, enrichment may relabel it.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct DomainFlow {
+    /// Stable flow ID derived from the root function's node ID, e.g.
+    /// `flow:function:src/main.ts:main`.
+    pub id: String,
+    /// Mechanical or enriched display name; provenance says which.
+    pub name: String,
+    /// The domain this flow belongs to: the top-level directory of the root
+    /// function's file, or `root` for files at the repository root.
+    pub domain: String,
+    /// Function node IDs along the chain, root first, in deterministic
+    /// depth-first call order.
+    pub steps: Vec<NodeId>,
+    pub provenance: Provenance,
+}
+
+/// A horizontal grouping of files. Membership is structural (each file node's
+/// `layer` field); the name is the enrichable slot — mechanically it is the
+/// deriving directory, enrichment may relabel it.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct Layer {
+    /// Stable layer ID: the top-level directory that derived it, or `root`
+    /// for files at the repository root.
+    pub id: String,
+    /// Mechanical or enriched display name; provenance says which.
+    pub name: String,
+    pub provenance: Provenance,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
@@ -26,7 +83,9 @@ pub struct Project {
 /// `<kind-prefix>:<path>` for files, `<kind-prefix>:<path>:<symbol>` for
 /// symbols, e.g. `file:src/main.ts` or `function:src/main.ts:main`. All ID
 /// minting goes through the constructors here; nothing else formats IDs.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(transparent)]
 pub struct NodeId(String);
 
@@ -56,6 +115,10 @@ pub struct Node {
     pub summary: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub range: Option<Range>,
+    /// ID of the layer this file node belongs to; absent on symbol nodes,
+    /// which inherit their file's layer through containment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub layer: Option<String>,
     pub provenance: Provenance,
 }
 
@@ -88,7 +151,7 @@ pub struct Range {
 
 /// Whether a node's descriptive fields were produced mechanically or by LLM
 /// enrichment (ADR-0005).
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Provenance {
     Structural,

@@ -10,17 +10,17 @@ ticket creates — "enrichment relabels reality; it never creates it."
 
 **Blocked by:** 03 — Import and call edges.
 
-**Status:** ready
+**Status:** done
 
-- [ ] Every file node is assigned to exactly one layer derived from directory
+- [x] Every file node is assigned to exactly one layer derived from directory
       structure
-- [ ] Domain flows are projected mechanically: domains from top-level
+- [x] Domain flows are projected mechanically: domains from top-level
       directories, flows as call chains starting at functions nothing else
       calls
-- [ ] Tour steps are ordered by topology scoring (fan-in/out, entry-point
+- [x] Tour steps are ordered by topology scoring (fan-in/out, entry-point
       score) and carry mechanical labels
-- [ ] All of this runs in the default deterministic path — zero LLM, zero
+- [x] All of this runs in the default deterministic path — zero LLM, zero
       network — with `provenance: structural` throughout
-- [ ] Same input produces the same layers, flows, and tour order every run
-- [ ] Fixture test asserts layer coverage (no orphan files) and at least one
+- [x] Same input produces the same layers, flows, and tour order every run
+- [x] Fixture test asserts layer coverage (no orphan files) and at least one
       expected flow

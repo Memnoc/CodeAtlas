@@ -1,6 +1,7 @@
 pub mod map;
 pub mod parsers;
 pub mod scan;
+pub mod semantics;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
