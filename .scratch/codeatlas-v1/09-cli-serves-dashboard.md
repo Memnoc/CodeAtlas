@@ -10,13 +10,13 @@ made real.
 
 **Blocked by:** 08 — Dashboard renders a map.
 
-**Status:** ready
+**Status:** done
 
-- [ ] The dashboard's production build is embedded in the binary at compile
+- [x] The dashboard's production build is embedded in the binary at compile
       time
-- [ ] `codeatlas serve` binds only to a loopback address and serves the
+- [x] `codeatlas serve` binds only to a loopback address and serves the
       dashboard plus the local map artifacts
-- [ ] Works on a machine with no Node runtime; nothing is fetched from
+- [x] Works on a machine with no Node runtime; nothing is fetched from
       anywhere at runtime
-- [ ] End-to-end test: scan a fixture repo, serve, fetch the page and the
+- [x] End-to-end test: scan a fixture repo, serve, fetch the page and the
       graph over loopback, assert both respond

@@ -3,6 +3,7 @@ pub mod map;
 pub mod parsers;
 pub mod scan;
 pub mod semantics;
+pub mod serve;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -33,6 +34,17 @@ enum Command {
     },
     /// Print the JSON Schema of the map contract
     Schema,
+    /// Serve the embedded dashboard and the local map on 127.0.0.1
+    Serve {
+        /// Repository root holding .codeatlas/ (defaults to the current
+        /// directory)
+        path: Option<PathBuf>,
+        /// Port on 127.0.0.1 (0 lets the OS pick a free one). There is
+        /// deliberately no --host: the server only ever binds loopback
+        /// (ADR-0006).
+        #[arg(long, default_value_t = 4173)]
+        port: u16,
+    },
 }
 
 pub fn run() -> ExitCode {
@@ -66,6 +78,16 @@ pub fn run() -> ExitCode {
                 }
                 Err(err) => {
                     eprintln!("error: {err:#} (the structural map is intact)");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Serve { path, port } => {
+            let root = path.unwrap_or_else(|| PathBuf::from("."));
+            match serve::serve(&root, port) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("error: {err:#}");
                     ExitCode::FAILURE
                 }
             }

@@ -15,6 +15,18 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # The codeatlas build.rs embeds the dashboard's production build
+      # (ticket 09); compiling the crate therefore needs npm + node_modules
+      # so build.rs can run `npm run build` (it never fetches anything
+      # itself).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install dashboard toolchain (build.rs embeds the dashboard)
+        run: npm ci
+        working-directory: dashboard
       - name: Format
         run: cargo fmt --all --check
       - name: Clippy
