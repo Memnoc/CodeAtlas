@@ -33,6 +33,46 @@ fn known_good_fixture_map_validates_against_the_committed_schema() {
 }
 
 #[test]
+fn committed_schema_carries_a_versioned_id() {
+    let schema = committed_schema();
+    let id = schema["$id"].as_str().expect("schema has no $id");
+    assert_eq!(
+        id, "urn:codeatlas:map-contract:0.3.0",
+        "$id must be the stable contract URI carrying the current version"
+    );
+}
+
+#[test]
+fn committed_schema_rejects_ill_formed_scalar_values() {
+    // Ticket 14 contract tightenings: version is semver-shaped, node IDs
+    // carry a kind prefix, line ranges are 1-based. A permissive schema
+    // accepting any string/integer proves none of the doc-comments.
+    let validator = jsonschema::validator_for(&committed_schema()).unwrap();
+    let good = fixture_map("known-good.json");
+
+    let mut bad_version = good.clone();
+    bad_version["version"] = serde_json::json!("not-a-semver");
+    assert!(
+        !validator.is_valid(&bad_version),
+        "schema accepted a non-semver `version`"
+    );
+
+    let mut bad_id = good.clone();
+    bad_id["nodes"][0]["id"] = serde_json::json!("widget:src/main.ts");
+    assert!(
+        !validator.is_valid(&bad_id),
+        "schema accepted a node ID without a known kind prefix"
+    );
+
+    let mut bad_range = good.clone();
+    bad_range["nodes"][1]["range"]["start_line"] = serde_json::json!(0);
+    assert!(
+        !validator.is_valid(&bad_range),
+        "schema accepted a 0 start_line despite ranges being 1-based"
+    );
+}
+
+#[test]
 fn committed_schema_rejects_a_map_that_breaks_the_contract() {
     let validator = jsonschema::validator_for(&committed_schema()).unwrap();
 

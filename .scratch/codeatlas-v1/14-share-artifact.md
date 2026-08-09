@@ -10,15 +10,15 @@ artifact tells its reader what was redacted (ADR-0006, spec stories 8 and 10).
 
 **Blocked by:** 07 — Published contract; 08 — Dashboard renders a map.
 
-**Status:** ready
+**Status:** done
 
-- [ ] The share command emits a single self-contained HTML file (renderer +
+- [x] The share command emits a single self-contained HTML file (renderer +
       redacted map inlined) that opens from the filesystem
-- [ ] Redaction is an allowlist: every schema field is classified share-safe
+- [x] Redaction is an allowlist: every schema field is classified share-safe
       or redacted
-- [ ] A schema-derived exhaustiveness test fails the build when a field is
+- [x] A schema-derived exhaustiveness test fails the build when a field is
       unclassified — a new field cannot ship silently
-- [ ] The artifact displays a disclosure of what was redacted
-- [ ] The artifact makes zero external requests when opened
-- [ ] Test: generate from a fixture map, assert redacted fields absent from
+- [x] The artifact displays a disclosure of what was redacted
+- [x] The artifact makes zero external requests when opened
+- [x] Test: generate from a fixture map, assert redacted fields absent from
       the file's bytes and disclosure present

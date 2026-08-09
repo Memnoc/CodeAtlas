@@ -42,6 +42,29 @@ body {
   height: 100%;
 }
 
+/* Share mode: the redaction disclosure banner sits above the explorer and
+ * the explorer fills the rest of the viewport. */
+.share-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.share-shell .explorer {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
+.share-banner {
+  padding: 8px 16px;
+  background: #2b2438;
+  border-bottom: 1px solid var(--llm);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .sidebar {
   width: 320px;
   flex-shrink: 0;

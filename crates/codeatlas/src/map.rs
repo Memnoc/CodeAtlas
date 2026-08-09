@@ -7,11 +7,32 @@ use serde::{Deserialize, Serialize};
 
 /// Semver version of the map contract carried by every emitted map.
 /// 0.2.0: added optional `layers`, `domain_flows`, `tour`, and `Node.layer`.
-pub const MAP_CONTRACT_VERSION: &str = "0.2.0";
+/// 0.3.0: tightened validation — semver pattern on `version`, kind-prefix
+/// pattern on node IDs, 1-based minimum on ranges — and gave the schema a
+/// versioned `$id`. Tightening is breaking for producers that emitted
+/// ill-formed values, which standard 0.x semver permits on a minor bump;
+/// the only known producer (this binary) already conformed.
+pub const MAP_CONTRACT_VERSION: &str = "0.3.0";
+
+/// The published contract schema: the schemars-derived schema for
+/// [`KnowledgeGraph`] plus a stable, versioned `$id`. This is the single
+/// generation point — the `schema` subcommand prints it and the contract
+/// tests walk it, so the committed artifact can never diverge from what
+/// tests saw.
+pub fn contract_schema() -> serde_json::Value {
+    let schema = schemars::schema_for!(KnowledgeGraph);
+    let mut value = schema.to_value();
+    value.as_object_mut().unwrap().insert(
+        "$id".to_string(),
+        serde_json::Value::String(format!("urn:codeatlas:map-contract:{MAP_CONTRACT_VERSION}")),
+    );
+    value
+}
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeGraph {
     /// Semver version of the map contract this file conforms to.
+    #[schemars(pattern(r"^\d+\.\d+\.\d+$"))]
     pub version: String,
     pub project: Project,
     pub nodes: Vec<Node>,
@@ -87,7 +108,9 @@ pub struct Project {
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
 )]
 #[serde(transparent)]
-pub struct NodeId(String);
+// The pattern spells out every `NodeKind::id_prefix` — the schema is the
+// public contract, so the closed prefix set is stated here, not inferred.
+pub struct NodeId(#[schemars(pattern(r"^(file|function|class):"))] String);
 
 impl NodeId {
     pub fn file(path: &str) -> Self {
@@ -145,7 +168,9 @@ impl NodeKind {
 /// 1-based inclusive line range within the node's file.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Range {
+    #[schemars(range(min = 1))]
     pub start_line: u32,
+    #[schemars(range(min = 1))]
     pub end_line: u32,
 }
 

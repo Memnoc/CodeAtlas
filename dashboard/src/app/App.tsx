@@ -1,10 +1,15 @@
-// Loads the map — and, when present, the diff overlay — from the local
-// server (dev middleware or the serving binary): same-origin requests to
-// /api/map and /api/diff, never anywhere else.
+// Loads the map: from the embedded share payload when this document is a
+// share artifact (first-class mode — checked before any network), else from
+// the local server (dev middleware or the serving binary) via same-origin
+// requests to /api/map and /api/diff, never anywhere else. In share mode no
+// fetch happens at all, so the artifact works from file:// where fetch is
+// unusable; the diff overlay is a live-workspace feature and is absent.
 import { useEffect, useState } from "react";
 import type { KnowledgeGraph } from "../index.js";
 import { MapExplorer } from "./MapExplorer.js";
 import type { DiffOverlay } from "./overlay.js";
+import { ShareBanner } from "./ShareBanner.js";
+import { readSharePayload } from "./share.js";
 
 type LoadState =
   | { phase: "loading" }
@@ -12,9 +17,14 @@ type LoadState =
   | { phase: "ready"; map: KnowledgeGraph; overlay: DiffOverlay | null };
 
 export function App() {
+  // Read once, synchronously: the payload is static document content.
+  const [share] = useState(readSharePayload);
   const [state, setState] = useState<LoadState>({ phase: "loading" });
 
   useEffect(() => {
+    if (share !== null) {
+      return;
+    }
     let cancelled = false;
     const map = fetch("/api/map").then(async (res) => {
       if (!res.ok) {
@@ -46,7 +56,16 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [share]);
+
+  if (share !== null) {
+    return (
+      <div className="share-shell">
+        <ShareBanner redaction={share.redaction} />
+        <MapExplorer map={share.map} overlay={null} />
+      </div>
+    );
+  }
 
   switch (state.phase) {
     case "loading":

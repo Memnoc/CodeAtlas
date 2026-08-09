@@ -1,62 +1,7 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "KnowledgeGraph",
-  "type": "object",
-  "properties": {
-    "domain_flows": {
-      "description": "Mechanically projected domain flows. Optional in the contract (older\nmaps omit it); always emitted by the CLI.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/DomainFlow"
-      }
-    },
-    "edges": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/Edge"
-      }
-    },
-    "layers": {
-      "description": "Directory-derived layers every file node is assigned to. Optional in\nthe contract (older maps omit it); always emitted by the CLI.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/Layer"
-      }
-    },
-    "nodes": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/Node"
-      }
-    },
-    "project": {
-      "$ref": "#/$defs/Project"
-    },
-    "tour": {
-      "description": "The guided tour: an ordered walk over the file nodes. Optional in the\ncontract (older maps omit it); always emitted by the CLI.",
-      "type": "array",
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/TourStep"
-      }
-    },
-    "version": {
-      "description": "Semver version of the map contract this file conforms to.",
-      "type": "string"
-    }
-  },
-  "required": [
-    "version",
-    "project",
-    "nodes",
-    "edges"
-  ],
   "$defs": {
     "DomainFlow": {
       "description": "A call chain rooted at an entry point — a function nothing else calls.\nThe chain and its domain are structural facts; the name is the enrichable\nslot — mechanically it renders the chain, enrichment may relabel it.",
-      "type": "object",
       "properties": {
         "domain": {
           "description": "The domain this flow belongs to: the top-level directory of the root\nfunction's file, or `root` for files at the repository root.",
@@ -75,10 +20,10 @@
         },
         "steps": {
           "description": "Function node IDs along the chain, root first, in deterministic\ndepth-first call order.",
-          "type": "array",
           "items": {
             "$ref": "#/$defs/NodeId"
-          }
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -87,10 +32,10 @@
         "domain",
         "steps",
         "provenance"
-      ]
+      ],
+      "type": "object"
     },
     "Edge": {
-      "type": "object",
       "properties": {
         "kind": {
           "$ref": "#/$defs/EdgeKind"
@@ -103,8 +48,8 @@
         },
         "weight": {
           "description": "Fixed weight determined by `kind`; see [`EdgeKind::weight`].",
-          "type": "number",
-          "format": "double"
+          "format": "double",
+          "type": "number"
         }
       },
       "required": [
@@ -112,20 +57,20 @@
         "target",
         "kind",
         "weight"
-      ]
+      ],
+      "type": "object"
     },
     "EdgeKind": {
-      "type": "string",
       "enum": [
         "contains",
         "imports",
         "exports",
         "calls"
-      ]
+      ],
+      "type": "string"
     },
     "Layer": {
       "description": "A horizontal grouping of files. Membership is structural (each file node's\n`layer` field); the name is the enrichable slot — mechanically it is the\nderiving directory, enrichment may relabel it.",
-      "type": "object",
       "properties": {
         "id": {
           "description": "Stable layer ID: the top-level directory that derived it, or `root`\nfor files at the repository root.",
@@ -143,14 +88,14 @@
         "id",
         "name",
         "provenance"
-      ]
+      ],
+      "type": "object"
     },
     "Node": {
-      "type": "object",
       "properties": {
         "id": {
-          "description": "Typed ID, e.g. `file:src/main.ts` or `function:src/main.ts:main`.",
-          "$ref": "#/$defs/NodeId"
+          "$ref": "#/$defs/NodeId",
+          "description": "Typed ID, e.g. `file:src/main.ts` or `function:src/main.ts:main`."
         },
         "kind": {
           "$ref": "#/$defs/NodeKind"
@@ -194,22 +139,23 @@
         "path",
         "summary",
         "provenance"
-      ]
+      ],
+      "type": "object"
     },
     "NodeId": {
       "description": "Typed node ID — the map's identity primitive. Format:\n`<kind-prefix>:<path>` for files, `<kind-prefix>:<path>:<symbol>` for\nsymbols, e.g. `file:src/main.ts` or `function:src/main.ts:main`. All ID\nminting goes through the constructors here; nothing else formats IDs.",
+      "pattern": "^(file|function|class):",
       "type": "string"
     },
     "NodeKind": {
-      "type": "string",
       "enum": [
         "file",
         "function",
         "class"
-      ]
+      ],
+      "type": "string"
     },
     "Project": {
-      "type": "object",
       "properties": {
         "name": {
           "type": "string"
@@ -217,47 +163,47 @@
       },
       "required": [
         "name"
-      ]
+      ],
+      "type": "object"
     },
     "Provenance": {
       "description": "Whether a node's descriptive fields were produced mechanically or by LLM\nenrichment (ADR-0005).",
-      "type": "string",
       "enum": [
         "structural",
         "llm"
-      ]
+      ],
+      "type": "string"
     },
     "Range": {
       "description": "1-based inclusive line range within the node's file.",
-      "type": "object",
       "properties": {
         "end_line": {
-          "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 1,
+          "type": "integer"
         },
         "start_line": {
-          "type": "integer",
           "format": "uint32",
-          "minimum": 0
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": [
         "start_line",
         "end_line"
-      ]
+      ],
+      "type": "object"
     },
     "TourStep": {
       "description": "One stop on the guided tour. The step's position comes from topology\nscoring and is structural; the label is the enrichable slot — mechanical\nby default, enrichment may narrate it.",
-      "type": "object",
       "properties": {
         "label": {
           "description": "Mechanical or enriched narration; provenance says which.",
           "type": "string"
         },
         "node": {
-          "description": "The node this step visits.",
-          "$ref": "#/$defs/NodeId"
+          "$ref": "#/$defs/NodeId",
+          "description": "The node this step visits."
         },
         "provenance": {
           "$ref": "#/$defs/Provenance"
@@ -267,7 +213,64 @@
         "node",
         "label",
         "provenance"
-      ]
+      ],
+      "type": "object"
     }
-  }
+  },
+  "$id": "urn:codeatlas:map-contract:0.3.0",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "domain_flows": {
+      "default": [],
+      "description": "Mechanically projected domain flows. Optional in the contract (older\nmaps omit it); always emitted by the CLI.",
+      "items": {
+        "$ref": "#/$defs/DomainFlow"
+      },
+      "type": "array"
+    },
+    "edges": {
+      "items": {
+        "$ref": "#/$defs/Edge"
+      },
+      "type": "array"
+    },
+    "layers": {
+      "default": [],
+      "description": "Directory-derived layers every file node is assigned to. Optional in\nthe contract (older maps omit it); always emitted by the CLI.",
+      "items": {
+        "$ref": "#/$defs/Layer"
+      },
+      "type": "array"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/Node"
+      },
+      "type": "array"
+    },
+    "project": {
+      "$ref": "#/$defs/Project"
+    },
+    "tour": {
+      "default": [],
+      "description": "The guided tour: an ordered walk over the file nodes. Optional in the\ncontract (older maps omit it); always emitted by the CLI.",
+      "items": {
+        "$ref": "#/$defs/TourStep"
+      },
+      "type": "array"
+    },
+    "version": {
+      "description": "Semver version of the map contract this file conforms to.",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "project",
+    "nodes",
+    "edges"
+  ],
+  "title": "KnowledgeGraph",
+  "type": "object"
 }

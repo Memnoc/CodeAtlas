@@ -58,6 +58,18 @@ describe("zero egress", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("build references no websocket endpoint and no protocol-relative host", () => {
+    for (const file of filesUnder(distDir)) {
+      const content = readFileSync(file, "utf8");
+      // ws:// and wss:// are as much egress as http(s); nothing may
+      // reference them, in any context, with no allowlist.
+      expect(content).not.toMatch(/wss?:\/\//);
+      // Protocol-relative //host in a markup src/href context resolves to
+      // an external origin when served over http(s).
+      expect(content).not.toMatch(/(?:src|href)\s*=\s*["']\/\//);
+    }
+  });
+
   it("index.html loads every asset from a local relative path", () => {
     const html = readFileSync(path.join(distDir, "index.html"), "utf8");
     for (const match of html.matchAll(/(?:src|href)="([^"]*)"/g)) {

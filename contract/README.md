@@ -22,9 +22,13 @@ the code.
 
 ## Versioning
 
-The contract is versioned with **semver**, currently **0.2.0**
+The contract is versioned with **semver**, currently **0.3.0**
 (`MAP_CONTRACT_VERSION` in `crates/codeatlas/src/map.rs`). Every map file
-carries the contract version it conforms to in its top-level `version` field.
+carries the contract version it conforms to in its top-level `version` field,
+and the schema itself carries a versioned `$id`
+(`urn:codeatlas:map-contract:<version>`) so any copy of the artifact
+identifies which contract it is. The URN form is deliberate: a schema ID
+must never look like something a tool should fetch (ADR-0006).
 
 - **Major** — breaking change: removing or renaming a field, narrowing a
   type, adding a *required* field, removing an enum variant. Consumers must
@@ -33,8 +37,12 @@ carries the contract version it conforms to in its top-level `version` field.
   enum variant, a loosened constraint. Existing maps stay valid.
 - **Patch** — no shape change: descriptions, docs, generation details.
 
-While the major version is 0, minor bumps may still break (standard semver
-0.x semantics); the contract stabilizes at 1.0.0.
+**Tightened validation** (a new `pattern` or `minimum` on an existing field)
+is breaking for producers that emitted values the old schema tolerated, and
+after 1.0.0 requires a major bump. While the major version is 0, minor bumps
+may still break (standard semver 0.x semantics), and tightenings that all
+known producers already conform to ship as minor bumps — 0.3.0 did exactly
+this; the contract stabilizes at 1.0.0.
 
 Any change to the schema **must** bump `MAP_CONTRACT_VERSION` accordingly and
 regenerate the committed artifacts in the same commit.

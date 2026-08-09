@@ -5,6 +5,7 @@ pub mod parsers;
 pub mod scan;
 pub mod semantics;
 pub mod serve;
+pub mod share;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -49,6 +50,16 @@ enum Command {
     },
     /// Print the JSON Schema of the map contract
     Schema,
+    /// Export the map as one self-contained, redacted HTML file at
+    /// .codeatlas/share.html — opens by double-click, no server, no
+    /// external requests. LLM-enriched prose is redacted (allowlist over
+    /// the map contract, ADR-0006); the artifact discloses what was
+    /// removed.
+    Share {
+        /// Repository root holding .codeatlas/ (defaults to the current
+        /// directory)
+        path: Option<PathBuf>,
+    },
     /// Serve the embedded dashboard and the local map on 127.0.0.1
     Serve {
         /// Repository root holding .codeatlas/ (defaults to the current
@@ -137,8 +148,31 @@ pub fn run() -> ExitCode {
                 }
             }
         }
+        Command::Share { path } => {
+            let root = path.unwrap_or_else(|| PathBuf::from("."));
+            match share::run(&root) {
+                Ok(summary) => {
+                    if summary.redacted.is_empty() {
+                        eprintln!("nothing redacted: the map contains no LLM-enriched prose");
+                    } else {
+                        let fields: Vec<String> = summary
+                            .redacted
+                            .iter()
+                            .map(|(field, count)| format!("{field} ×{count}"))
+                            .collect();
+                        eprintln!("redacted {}", fields.join(", "));
+                    }
+                    println!("share artifact at {}", summary.path.display());
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("error: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Command::Schema => {
-            let schema = schemars::schema_for!(map::KnowledgeGraph);
+            let schema = map::contract_schema();
             println!("{}", serde_json::to_string_pretty(&schema).unwrap());
             ExitCode::SUCCESS
         }
