@@ -212,3 +212,100 @@ boundaries; no test reaches into pipeline internals.
 - Source material: [intake digest](../intake/2026-08-07-codeatlas-pitch-and-adr-agenda.md),
   [baseline research](../research/2026-08-07-baseline-repoatlas-understand-anything.md),
   [ADR index](../adr/README.md).
+
+## Verification
+
+`/harden` walked all 17 user stories against the assembled system on
+**2026-08-09**, after all 15 build tickets read `done` (baseline `0a523da`;
+a concurrent session landed the README commit `2aff081` partway through,
+which touches no code).
+Stories were driven through the real binaries — a default build, a sealed
+`--no-default-features` build, and a `test-provider` build for the enrichment
+seam — against real repositories, not by reading code, except where noted.
+
+| # | Story | Verdict |
+|---|-------|---------|
+| 1 | Complete structural map in seconds, no LLM | pass |
+| 2 | Relationships: imports, calls, containment, exports | pass |
+| 3 | Interactive local dashboard | pass¹ |
+| 4 | Opt-in enrichment fills prose slots | pass |
+| 5 | Re-runs re-purchase only changed content | pass |
+| 6 | Domain flows and an ordered guided tour | **fail** |
+| 7 | Diff's changed nodes and one-hop blast radius | pass |
+| 8 | Single self-contained redacted HTML export | pass¹ |
+| 9 | Sealed build with no networking code, plus egress suite | pass |
+| 10 | Shared artifact discloses what was redacted | pass |
+| 11 | Structural graph rebuilt from scratch every run | pass |
+| 12 | Annotations re-attach only on unchanged content hash | pass |
+| 13 | Schema-guaranteed structured output, no repair machinery | pass² |
+| 14 | Enrichment failure leaves a valid structural map | pass |
+| 15 | Unparseable files still appear as nodes | pass |
+| 16 | Published, semver-versioned map schema | pass |
+| 17 | Dashboard consumes only local files, zero external requests | pass |
+
+### The failure
+
+**Story 6 — domain flows and an ordered guided tour.** Both artifacts are
+produced correctly and land in the map file, but **no consumer renders
+either one**: `tour` and `domain_flows` appear in `dashboard/src/` only in
+the generated types and the `index.ts` re-export. A newcomer can reach the
+tour only by reading raw JSON — precisely what story 3 says the dashboard
+exists to prevent. The tour is also unbounded: exactly one step per file
+node (148 on CodeAtlas itself, 3000 on a 3000-file repo, including
+`Cargo.lock` and every fixture), and its top-ranked step on CodeAtlas's own
+map is an isolated file with fan-in 0 and fan-out 0, ahead of `lib.rs` at
+step 9.
+
+This is a between-the-slices gap, not a ticket defect: ticket 06 projects
+flows and orders the tour, ticket 13 enriches their labels, and ticket 08's
+scope stops at "nodes and edges grouped by layer". Each passed its own
+criteria; nobody owned surfacing the result. Filed as
+`.scratch/codeatlas-v1/16-surface-flows-and-tour.md` (`Status: ready`),
+covering both the missing affordances and the tour's boundedness.
+
+### Notes on the passes
+
+1. **Stories 3 and 8** — no browser was available in the harden session, so
+   neither the dashboard nor the share artifact was watched rendering in a
+   real browser. Both were driven through their real React components with
+   real user events (22 dashboard tests: canvas nodes and edges, layer
+   groups, search narrowing, node detail with provenance badge, edge
+   navigation, and share mode rendering with `globalThis.fetch` deleted
+   outright), and the served dashboard was exercised over HTTP from the
+   binary. Layout and paint remain unwatched.
+2. **Story 13** — verified at the provider seam: canned typed answers land in
+   the right slots, and three deliberately malformed keys (nonexistent node,
+   wrong prefix, no prefix) were silently ignored rather than repaired. The
+   Claude-facing half (`output_config.format` with a JSON schema, parsed
+   exactly once, no repair or retry-on-parse path) was confirmed by reading
+   `enrich/claude.rs`; it was not exercised against the live API, which would
+   require credentials and spend.
+
+Other evidence worth recording: scans are byte-identical across repeated runs
+and identical cold vs. warm (story 11); 3000 files map in 0.56s (story 1);
+editing one file dropped re-purchase from 14 slots to 4 (story 5); restoring
+a file's original content re-attached its stored prose with no provider call
+(story 12); all five network-namespace egress tests genuinely ran here rather
+than skipping, and both CI feature configurations are green (59 and 60 tests);
+the sealed build links no networking crates at all and every command works in
+it; and regenerating the schema and the dashboard's TS types produced no drift.
+
+### Known limitations confirmed, not blocking
+
+- The map contract's `version` pattern is release-only semver: `0.3.0-rc.1`
+  and `1.0.0+build.5` are rejected. The contract README documents semver
+  policy without stating that prereleases are disallowed.
+- Enrichment carry-over is keyed at file-content granularity — a class and
+  its file share a content hash — so touching one line in a large file
+  re-purchases every node in it. Conservative and never stale, but coarser
+  than "only the code that changed".
+- The "mapped N files" message reports node count, not file count (599 vs.
+  148 on CodeAtlas itself).
+- A partial-batch enrichment failure discarding earlier successful batches
+  could not be reproduced through the CLI seam: both offline test providers
+  are all-or-nothing, so this remains a code-review finding only.
+
+**Shipped status:** 16 of 17 stories pass. Story 6 is open on ticket 16;
+this section should be updated after that ticket lands and harden re-walks it.
+The two browser-dependent passes and the live-API half of story 13 are
+recorded above as unwatched and await explicit acceptance.
