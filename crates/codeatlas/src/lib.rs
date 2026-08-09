@@ -1,3 +1,4 @@
+pub mod enrich;
 pub mod map;
 pub mod parsers;
 pub mod scan;
@@ -25,6 +26,10 @@ enum Command {
     Scan {
         /// Repository root (defaults to the current directory)
         path: Option<PathBuf>,
+        /// After the structural scan, fill summary slots through the
+        /// enrichment provider (ADR-0004)
+        #[arg(long)]
+        enrich: bool,
     },
     /// Print the JSON Schema of the map contract
     Schema,
@@ -32,19 +37,35 @@ enum Command {
 
 pub fn run() -> ExitCode {
     match Cli::parse().command {
-        Command::Scan { path } => {
+        Command::Scan { path, enrich } => {
             let root = path.unwrap_or_else(|| PathBuf::from("."));
-            let result = scan::scan(&root).and_then(|graph| {
+            // The structural map is always built and saved first — with
+            // stored annotations re-attached where content is unchanged
+            // (ADR-0005) — so any enrichment failure leaves a complete map
+            // behind (story 14).
+            let result = scan::scan(&root).and_then(|mut graph| {
+                enrich::AnnotationStore::load(&root).reattach(&root, &mut graph);
                 scan::save(&root, &graph)?;
                 Ok(graph)
             });
-            match result {
-                Ok(graph) => {
-                    eprintln!("mapped {} files", graph.nodes.len());
+            let mut graph = match result {
+                Ok(graph) => graph,
+                Err(err) => {
+                    eprintln!("error: {err:#}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            eprintln!("mapped {} files", graph.nodes.len());
+            if !enrich {
+                return ExitCode::SUCCESS;
+            }
+            match enrich::run(&root, &mut graph) {
+                Ok(count) => {
+                    eprintln!("enriched {count} nodes");
                     ExitCode::SUCCESS
                 }
                 Err(err) => {
-                    eprintln!("error: {err:#}");
+                    eprintln!("error: {err:#} (the structural map is intact)");
                     ExitCode::FAILURE
                 }
             }

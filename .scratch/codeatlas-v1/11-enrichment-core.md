@@ -11,16 +11,16 @@ API provider is ticket 12.
 
 **Blocked by:** 02 — Parser interface + TS/JS extraction.
 
-**Status:** ready
+**Status:** done
 
-- [ ] A provider trait abstracts enrichment; a fake provider returns canned
+- [x] A provider trait abstracts enrichment; a fake provider returns canned
       typed responses in tests
-- [ ] `--enrich` selects only `provenance: structural` nodes and fills their
+- [x] `--enrich` selects only `provenance: structural` nodes and fills their
       summary slots; enriched nodes flip to `provenance: llm`
-- [ ] Annotations persist in `.codeatlas/` keyed by node identity + content
+- [x] Annotations persist in `.codeatlas/` keyed by node identity + content
       hash and re-attach on later runs without any provider call
-- [ ] Editing a fixture file expires its annotation: the node reverts to
+- [x] Editing a fixture file expires its annotation: the node reverts to
       structural provenance and is re-selected on the next `--enrich`
-- [ ] A provider failure mid-run leaves a complete, schema-valid structural
+- [x] A provider failure mid-run leaves a complete, schema-valid structural
       map (spec story 14)
-- [ ] No test in this ticket performs network I/O
+- [x] No test in this ticket performs network I/O
