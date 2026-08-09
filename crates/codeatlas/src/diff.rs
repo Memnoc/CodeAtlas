@@ -8,8 +8,10 @@
 //!
 //! "Changed" means the working tree differs from `HEAD`:
 //!
-//! - `git diff --name-only HEAD` — staged and unstaged edits, additions,
-//!   and deletions of tracked files, in one pass;
+//! - `git diff --name-only --no-renames HEAD` — staged and unstaged edits,
+//!   additions, and deletions of tracked files, in one pass; renames are
+//!   deliberately reported as delete+add so both the old path (which the
+//!   map knows) and the new one (which it does not) count as changed;
 //! - plus `git ls-files --others --exclude-standard` — untracked files that
 //!   are not ignored.
 //!
@@ -116,9 +118,22 @@ fn changed_paths(root: &Path) -> Result<BTreeSet<String>> {
 
     let mut paths = BTreeSet::new();
     if head_exists {
+        // `--no-renames`: rename detection (diff.renames defaults on) would
+        // collapse a rename into one pair and print only the destination —
+        // a path the map has never seen — so the old path's nodes would go
+        // unmarked and a rename would render as zero risk. As delete+add,
+        // the old path drives the blast radius and the new one is noted as
+        // unmapped.
         paths.extend(git_paths(
             root,
-            &["diff", "--name-only", "-z", "--relative", "HEAD"],
+            &[
+                "diff",
+                "--name-only",
+                "--no-renames",
+                "-z",
+                "--relative",
+                "HEAD",
+            ],
         )?);
         paths.extend(git_paths(
             root,

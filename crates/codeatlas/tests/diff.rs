@@ -203,6 +203,40 @@ fn changed_paths_absent_from_the_map_are_noted_and_never_dangle() {
 }
 
 #[test]
+fn renaming_a_file_reports_the_old_paths_nodes_and_their_blast_radius() {
+    let repo = materialize("diffrepo");
+    git_init_and_commit(repo.path());
+    scan(repo.path());
+
+    // A staged rename. Git's rename detection (diff.renames defaults on)
+    // would collapse this into one pair and report only the destination —
+    // which the map has never seen — leaving the old path's nodes unmarked
+    // and the blast radius empty: a rename must never render as zero risk.
+    git(repo.path(), &["mv", "src/util.ts", "src/renamed.ts"]);
+    diff(repo.path());
+
+    let overlay = read_overlay(repo.path());
+    // The old path is what the map knows: its file and symbol nodes are the
+    // changed set, and its importers/callers are the blast radius.
+    assert_eq!(
+        strings(&overlay, "changed"),
+        vec!["file:src/util.ts", "function:src/util.ts:greet"],
+        "overlay: {overlay}"
+    );
+    assert_eq!(
+        strings(&overlay, "affected"),
+        vec!["file:src/app.ts", "function:src/app.ts:main"],
+        "overlay: {overlay}"
+    );
+    // The destination is unknown to the map until the next scan: noted.
+    assert_eq!(
+        strings(&overlay, "unmapped_paths"),
+        vec!["src/renamed.ts"],
+        "overlay: {overlay}"
+    );
+}
+
+#[test]
 fn running_diff_twice_on_identical_state_is_byte_identical() {
     let repo = materialize("diffrepo");
     git_init_and_commit(repo.path());
