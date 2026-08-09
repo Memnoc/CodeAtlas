@@ -84,10 +84,92 @@ fn scan_emits_a_map_with_typed_file_nodes() {
     assert!(ids.contains(&"file:README.md".to_string()));
 
     for node in map["nodes"].as_array().unwrap() {
-        assert_eq!(node["kind"], "file");
         assert_eq!(node["provenance"], "structural");
+        if node["id"].as_str().unwrap().starts_with("file:") {
+            assert_eq!(node["kind"], "file");
+        }
     }
-    assert!(map["edges"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn scan_extracts_functions_and_classes_with_contains_edges() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let ids = node_ids(&map);
+
+    assert!(
+        ids.contains(&"function:src/util.ts:greet".to_string()),
+        "ids: {ids:?}"
+    );
+    assert!(ids.contains(&"function:src/main.ts:main".to_string()));
+    assert!(ids.contains(&"class:src/greeter.ts:Greeter".to_string()));
+
+    let nodes = map["nodes"].as_array().unwrap();
+    let greet = nodes
+        .iter()
+        .find(|n| n["id"] == "function:src/util.ts:greet")
+        .unwrap();
+    assert_eq!(greet["kind"], "function");
+    assert_eq!(greet["range"]["start_line"], 1);
+    assert_eq!(greet["range"]["end_line"], 3);
+
+    let util_file = nodes
+        .iter()
+        .find(|n| n["id"] == "file:src/util.ts")
+        .unwrap();
+    let summary = util_file["summary"].as_str().unwrap();
+    assert!(
+        summary.contains("TypeScript") && summary.contains("1 function"),
+        "mechanical summary expected, got: {summary}"
+    );
+
+    let edges = map["edges"].as_array().unwrap();
+    assert!(
+        edges.iter().any(|e| e["source"] == "file:src/util.ts"
+            && e["target"] == "function:src/util.ts:greet"
+            && e["kind"] == "contains"),
+        "missing contains edge: {edges:?}"
+    );
+
+    // Same-named methods in different classes must not collide: IDs are the
+    // map's identity primitive (carry-over and referential integrity sit on
+    // them), so methods are scope-qualified.
+    assert!(
+        ids.contains(&"function:src/pair.ts:Alpha.run".to_string()),
+        "ids: {ids:?}"
+    );
+    assert!(ids.contains(&"function:src/pair.ts:Beta.run".to_string()));
+    let mut sorted = ids.clone();
+    sorted.sort();
+    sorted.dedup();
+    assert_eq!(sorted.len(), ids.len(), "duplicate node IDs: {ids:?}");
+}
+
+#[test]
+fn files_that_cannot_be_parsed_still_appear_as_file_nodes() {
+    let repo = materialize("simple");
+    scan(repo.path()); // asserts the run completes despite broken.ts
+    let map = read_map(repo.path());
+    let ids = node_ids(&map);
+
+    assert!(
+        ids.contains(&"file:src/broken.ts".to_string()),
+        "unparseable file must still be a file node: {ids:?}"
+    );
+    // Unsupported-for-symbols files stay bare file nodes.
+    assert!(
+        !ids.iter()
+            .any(|id| id.ends_with("README.md") && !id.starts_with("file:")),
+        "no symbol nodes may come from unsupported files: {ids:?}"
+    );
+    // A file with no extension is unsupported, even if its bare name matches
+    // a supported extension (fixture has a file literally named `ts`).
+    assert!(ids.contains(&"file:ts".to_string()), "ids: {ids:?}");
+    assert!(
+        !ids.contains(&"function:ts:sneaky".to_string()),
+        "extensionless file must not be parsed: {ids:?}"
+    );
 }
 
 #[test]

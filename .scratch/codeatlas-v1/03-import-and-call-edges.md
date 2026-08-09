@@ -12,6 +12,12 @@ never emitted dangling.
 
 **Status:** ready
 
+**Carry-over from ticket 02 crosscheck:** introduce a typed node-ID type
+before more ID-minting sites appear (three inline `format!` sites exist);
+consolidate the symbol-kind → node-kind/id-prefix mapping into one place;
+decide whether arrow functions assigned to consts count as functions
+(currently they don't, which undercounts idiomatic TS).
+
 - [ ] Import statements resolve to `imports` edges between file nodes for
       TS/JS, including relative paths and index-file conventions
 - [ ] Exported symbols produce `exports` edges; function invocations produce

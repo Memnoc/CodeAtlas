@@ -24,12 +24,16 @@ pub struct Project {
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Node {
-    /// Typed ID, e.g. `file:src/main.ts`.
+    /// Typed ID, e.g. `file:src/main.ts` or `function:src/main.ts:main`.
     pub id: String,
     pub kind: NodeKind,
     pub name: String,
     /// Repo-relative path with forward slashes.
     pub path: String,
+    /// Mechanical or enriched description; provenance says which.
+    pub summary: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<Range>,
     pub provenance: Provenance,
 }
 
@@ -37,6 +41,15 @@ pub struct Node {
 #[serde(rename_all = "snake_case")]
 pub enum NodeKind {
     File,
+    Function,
+    Class,
+}
+
+/// 1-based inclusive line range within the node's file.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct Range {
+    pub start_line: u32,
+    pub end_line: u32,
 }
 
 /// Whether a node's descriptive fields were produced mechanically or by LLM

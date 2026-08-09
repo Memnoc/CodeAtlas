@@ -1,4 +1,5 @@
 pub mod map;
+pub mod parsers;
 pub mod scan;
 
 use std::path::PathBuf;
