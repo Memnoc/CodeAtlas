@@ -60,6 +60,7 @@ impl Parser for Rust {
         importer: &str,
         specifier: &str,
         files: &HashSet<String>,
+        _root: &std::path::Path,
     ) -> Option<String> {
         if let Some(name) = specifier.strip_prefix(MOD_PREFIX) {
             // `mod foo;` declares a child module: sibling file or directory.

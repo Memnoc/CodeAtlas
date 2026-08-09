@@ -2,7 +2,9 @@
 //! [`Parser`]; everything else in the pipeline is language-agnostic.
 
 use std::collections::HashSet;
+use std::path::Path;
 
+mod c_cpp;
 mod go;
 mod markdown;
 mod python;
@@ -90,6 +92,9 @@ pub trait Parser: Send + Sync {
     fn parse(&self, source: &str) -> Analysis;
     /// Resolves an import specifier written in `importer` (repo-relative
     /// path) to a repo-relative file path, given the set of scanned files.
+    /// `root` is the scanned repository root, for the rare language whose
+    /// resolution is anchored by a config file (Go reads `go.mod` from it);
+    /// most parsers resolve from paths alone and ignore it.
     /// `None` when unresolvable (bare package, file outside the map) — the
     /// caller drops the edge rather than emit it dangling.
     fn resolve_import(
@@ -97,6 +102,7 @@ pub trait Parser: Send + Sync {
         importer: &str,
         specifier: &str,
         files: &HashSet<String>,
+        root: &Path,
     ) -> Option<String>;
     /// Whether all files in one directory share a single namespace (Go
     /// packages): a plain-identifier call may then resolve to a function
@@ -116,6 +122,7 @@ fn registry() -> &'static [Box<dyn Parser>] {
         parsers.extend(rust::parsers());
         parsers.extend(python::parsers());
         parsers.extend(go::parsers());
+        parsers.extend(c_cpp::parsers());
         parsers.extend(markdown::parsers());
         parsers
     })

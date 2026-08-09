@@ -59,6 +59,7 @@ impl Parser for Markdown {
         importer: &str,
         specifier: &str,
         files: &HashSet<String>,
+        _root: &std::path::Path,
     ) -> Option<String> {
         let mut parts: Vec<&str> = importer.split('/').collect();
         parts.pop(); // drop the linking file's name

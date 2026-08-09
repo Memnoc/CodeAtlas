@@ -57,6 +57,7 @@ impl Parser for Python {
         importer: &str,
         specifier: &str,
         files: &HashSet<String>,
+        _root: &std::path::Path,
     ) -> Option<String> {
         let dots = specifier.chars().take_while(|c| *c == '.').count();
         let rest: Vec<&str> = specifier[dots..]

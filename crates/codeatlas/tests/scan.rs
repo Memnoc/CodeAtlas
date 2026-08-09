@@ -909,6 +909,314 @@ fn go_files_yield_symbols_imports_and_calls() {
 }
 
 #[test]
+fn c_files_yield_symbols_with_linkage_exports() {
+    let repo = materialize("cproj");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let ids = node_ids(&map);
+    let edges = map["edges"].as_array().unwrap();
+
+    // Function definitions with line ranges; named structs (and typedef
+    // structs) are the C analog of classes.
+    assert!(
+        ids.contains(&"function:main.c:main".to_string()),
+        "ids: {ids:?}"
+    );
+    assert!(ids.contains(&"function:util.c:util_greet".to_string()));
+    assert!(ids.contains(&"function:util.c:decorate".to_string()));
+    assert!(ids.contains(&"class:util.c:point".to_string()));
+    assert!(ids.contains(&"class:util.h:frame".to_string()));
+
+    let nodes = map["nodes"].as_array().unwrap();
+    let greet = nodes
+        .iter()
+        .find(|n| n["id"] == "function:util.c:util_greet")
+        .unwrap();
+    assert_eq!(greet["range"]["start_line"], 17);
+    assert_eq!(greet["range"]["end_line"], 19);
+
+    let util = nodes.iter().find(|n| n["id"] == "file:util.c").unwrap();
+    let summary = util["summary"].as_str().unwrap();
+    assert!(
+        summary.starts_with("C file") && summary.contains("2 functions"),
+        "summary: {summary}"
+    );
+
+    // Linkage is the export convention: non-static file-scope functions are
+    // exported, `static` ones are not.
+    assert!(has_edge(
+        &map,
+        "exports",
+        "file:util.c",
+        "function:util.c:util_greet"
+    ));
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e["kind"] == "exports" && e["target"] == "function:util.c:decorate"),
+        "static fn got an exports edge: {edges:?}"
+    );
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e["kind"] == "exports" && e["target"] == "function:main.c:local_note"),
+        "static fn got an exports edge: {edges:?}"
+    );
+    // A header's prototypes are declarations, not definitions: no function
+    // node for a bare prototype.
+    assert!(
+        !ids.contains(&"function:util.h:util_greet".to_string()),
+        "prototype became a function node: {ids:?}"
+    );
+}
+
+#[test]
+fn quoted_includes_resolve_to_imports_edges_and_pair_header_with_source() {
+    let repo = materialize("cproj");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let edges = map["edges"].as_array().unwrap();
+
+    // Includer-dir-relative resolution, including `../` traversal, and the
+    // repo-internal include chain main.c → app/app.h → util.h.
+    assert!(
+        has_edge(&map, "imports", "file:main.c", "file:app/app.h"),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(&map, "imports", "file:app/app.h", "file:util.h"),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(&map, "imports", "file:main.c", "file:util.h"),
+        "edges: {edges:?}"
+    );
+    // Repo-root-relative fallback: app/app.c includes "util.h" which is not
+    // next to it but at the root (the -I<root> build convention).
+    assert!(
+        has_edge(&map, "imports", "file:app/app.c", "file:util.h"),
+        "edges: {edges:?}"
+    );
+    // Header/source pairing: the implementation includes its own header.
+    assert!(
+        has_edge(&map, "imports", "file:util.c", "file:util.h"),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(&map, "imports", "file:app/app.c", "file:app/app.h"),
+        "edges: {edges:?}"
+    );
+    // System includes are ignored: no edge, and certainly never a dangling
+    // one.
+    assert!(
+        !edges.iter().any(|e| {
+            e["target"]
+                .as_str()
+                .is_some_and(|t| t.contains("stdio") || t.contains("string.h"))
+        }),
+        "system include leaked into the map: {edges:?}"
+    );
+}
+
+#[test]
+fn c_calls_resolve_through_included_headers_to_the_implementation() {
+    let repo = materialize("cproj");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let edges = map["edges"].as_array().unwrap();
+
+    // Same-file call, static callee included.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:util.c:util_greet",
+            "function:util.c:decorate"
+        ),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:main.c:main",
+            "function:main.c:local_note"
+        ),
+        "edges: {edges:?}"
+    );
+    // Cross-file: the call lands on the implementation, not the header —
+    // `#include "util.h"` routes util_greet() to util.c where it is defined.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:main.c:main",
+            "function:util.c:util_greet"
+        ),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:app/app.c:app_run",
+            "function:util.c:util_greet"
+        ),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:main.c:main",
+            "function:app/app.c:app_run"
+        ),
+        "edges: {edges:?}"
+    );
+    // Out-of-repo callees (printf, puts, strcpy) never become edges.
+    assert!(
+        !edges.iter().any(|e| {
+            e["kind"] == "calls"
+                && e["target"].as_str().is_some_and(|t| {
+                    t.contains("printf") || t.contains("puts") || t.contains("strcpy")
+                })
+        }),
+        "libc call leaked into the map: {edges:?}"
+    );
+}
+
+#[test]
+fn cpp_files_yield_classes_methods_includes_and_calls() {
+    let repo = materialize("cppproj");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let ids = node_ids(&map);
+    let edges = map["edges"].as_array().unwrap();
+
+    // Classes, inline methods scope-qualified, and out-of-class qualified
+    // definitions (`Circle::area`) landing in the implementation file.
+    assert!(
+        ids.contains(&"class:geometry.hpp:Circle".to_string()),
+        "ids: {ids:?}"
+    );
+    assert!(ids.contains(&"function:geometry.hpp:Circle.radius".to_string()));
+    assert!(ids.contains(&"function:geometry.cpp:Circle.area".to_string()));
+    assert!(ids.contains(&"function:geometry.cpp:tau".to_string()));
+    assert!(ids.contains(&"function:main.cpp:main".to_string()));
+    // The `.cc` extension is C++ too.
+    assert!(ids.contains(&"function:report.cc:report".to_string()));
+
+    let geom = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == "file:geometry.cpp")
+        .unwrap();
+    assert!(
+        geom["summary"].as_str().unwrap().starts_with("C++ file"),
+        "summary: {}",
+        geom["summary"]
+    );
+
+    // Linkage exports: free functions yes, static and methods no.
+    assert!(has_edge(
+        &map,
+        "exports",
+        "file:geometry.cpp",
+        "function:geometry.cpp:tau"
+    ));
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e["kind"] == "exports" && e["target"] == "function:geometry.cpp:square"),
+        "static fn got an exports edge: {edges:?}"
+    );
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e["kind"] == "exports" && e["target"] == "function:geometry.cpp:Circle.area"),
+        "method got an exports edge: {edges:?}"
+    );
+
+    // Includes and pairing, across .cpp and .cc implementations.
+    assert!(
+        has_edge(&map, "imports", "file:main.cpp", "file:geometry.hpp"),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(&map, "imports", "file:geometry.cpp", "file:geometry.hpp"),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(&map, "imports", "file:report.cc", "file:report.hpp"),
+        "edges: {edges:?}"
+    );
+
+    // Calls resolve through headers to the implementation: a .cpp pair, a
+    // .cc pair, and a C-parsed `.h` header fronting a C++ source.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:main.cpp:main",
+            "function:report.cc:report"
+        ),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:main.cpp:main",
+            "function:legacy.cpp:legacy_go"
+        ),
+        "edges: {edges:?}"
+    );
+    // Same-file calls from a qualified method definition.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:geometry.cpp:Circle.area",
+            "function:geometry.cpp:tau"
+        ),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:geometry.cpp:Circle.area",
+            "function:geometry.cpp:square"
+        ),
+        "edges: {edges:?}"
+    );
+}
+
+#[test]
+fn external_go_modules_with_colliding_package_suffixes_produce_no_edge() {
+    let repo = materialize("goproj");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let edges = map["edges"].as_array().unwrap();
+
+    // external.go imports github.com/external/lib/util — an external module
+    // whose trailing segment collides with the in-repo util/ package. The
+    // go.mod module line (example.com/demo) says it is not ours: no edge.
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e["kind"] == "imports" && e["source"] == "file:external.go"),
+        "external module import leaked into the map: {edges:?}"
+    );
+    // The genuine module-path import still resolves.
+    assert!(
+        has_edge(&map, "imports", "file:main.go", "file:util/util.go"),
+        "edges: {edges:?}"
+    );
+}
+
+#[test]
 fn markdown_relative_links_become_edges_between_file_nodes() {
     let repo = materialize("rustproj");
     scan(repo.path());
@@ -1112,4 +1420,31 @@ fn scanning_the_same_input_twice_is_byte_identical() {
     scan(repo.path());
     let second = fs::read(repo.path().join(".codeatlas/knowledge-graph.json")).unwrap();
     assert_eq!(first, second);
+}
+
+#[test]
+fn scanning_a_polyglot_repo_twice_is_byte_identical() {
+    // Determinism across every supported language in one map: TS, Rust,
+    // Python, Go, C, C++, and Markdown.
+    let repo = materialize("polyglot");
+    scan(repo.path());
+    let first = fs::read(repo.path().join(".codeatlas/knowledge-graph.json")).unwrap();
+    scan(repo.path());
+    let second = fs::read(repo.path().join(".codeatlas/knowledge-graph.json")).unwrap();
+    assert_eq!(first, second);
+
+    // The fixture is honest: every language actually contributed symbols.
+    let map: serde_json::Value = serde_json::from_slice(&first).unwrap();
+    let ids = node_ids(&map);
+    for expected in [
+        "function:hello.ts:greet",
+        "function:hello.rs:greet",
+        "function:hello.py:greet",
+        "function:hello.go:Greet",
+        "function:hello.c:hello_greet",
+        "function:shape.cpp:Shape.area",
+        "file:README.md",
+    ] {
+        assert!(ids.contains(&expected.to_string()), "ids: {ids:?}");
+    }
 }

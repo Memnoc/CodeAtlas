@@ -52,8 +52,8 @@ pub fn scan(root: &Path) -> Result<KnowledgeGraph> {
         .map(|path| extract_file(&root, path, &mut nodes, &mut edges))
         .collect();
 
-    resolve_imports(&paths, &facts, &mut edges);
-    resolve_calls(&paths, &facts, &mut edges);
+    resolve_imports(&paths, &facts, &mut edges, &root);
+    resolve_calls(&paths, &facts, &mut edges, &root);
 
     let project_name = root
         .file_name()
@@ -200,7 +200,7 @@ fn extract_file(
 /// Resolves each file's import specifiers against the scanned file set and
 /// emits `imports` edges between file nodes. Unresolvable imports (bare
 /// packages, files outside the map) are dropped, never emitted dangling.
-fn resolve_imports(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>) {
+fn resolve_imports(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>, root: &Path) {
     let files: HashSet<String> = paths.iter().cloned().collect();
     let mut seen: HashSet<(NodeId, NodeId)> = HashSet::new();
     for file in facts {
@@ -208,7 +208,8 @@ fn resolve_imports(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>)
             continue;
         };
         for import in &file.imports {
-            let Some(target) = parser.resolve_import(&file.path, &import.specifier, &files) else {
+            let Some(target) = parser.resolve_import(&file.path, &import.specifier, &files, root)
+            else {
                 continue;
             };
             let edge = (NodeId::file(&file.path), NodeId::file(&target));
@@ -226,7 +227,7 @@ fn resolve_imports(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>)
 /// must actually be exported by its defining file, possibly through one
 /// level of export alias or re-export. Anything else — member calls,
 /// packages, files outside the map — is dropped, never emitted dangling.
-fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>) {
+fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>, root: &Path) {
     let files: HashSet<String> = paths.iter().cloned().collect();
     let facts_by_path: HashMap<&str, &FileFacts> =
         facts.iter().map(|f| (f.path.as_str(), f)).collect();
@@ -251,7 +252,7 @@ fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>) {
             // chains stay unresolved).
             Some(specifier) => {
                 let parser = parsers::for_extension(extension_of(file))?;
-                let defining = parser.resolve_import(file, specifier, &files)?;
+                let defining = parser.resolve_import(file, specifier, &files, root)?;
                 facts_by_path
                     .get(defining.as_str())?
                     .exported_functions
@@ -266,12 +267,21 @@ fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>) {
         let Some(parser) = parsers::for_extension(extension_of(&file.path)) else {
             continue;
         };
-        // Local binding name → (defining file, exported name).
-        let mut bindings: HashMap<&str, (String, &str)> = HashMap::new();
+        // Local binding name → candidate (defining file, exported name)
+        // pairs, in import order. Most languages bind a name once; C-family
+        // includes offer every unresolved callee to every header, so a name
+        // may carry several candidates and resolution keeps the first that
+        // works, trying later bindings first (a later import shadows an
+        // earlier one, matching source semantics).
+        let mut bindings: HashMap<&str, Vec<(String, &str)>> = HashMap::new();
         for import in &file.imports {
-            if let Some(target) = parser.resolve_import(&file.path, &import.specifier, &files) {
+            if let Some(target) = parser.resolve_import(&file.path, &import.specifier, &files, root)
+            {
                 for name in &import.names {
-                    bindings.insert(name.local.as_str(), (target.clone(), &name.imported));
+                    bindings
+                        .entry(name.local.as_str())
+                        .or_default()
+                        .push((target.clone(), &name.imported));
                 }
             }
         }
@@ -296,9 +306,12 @@ fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>) {
             {
                 Some((sibling.path.clone(), call.callee.clone()))
             } else {
-                bindings
-                    .get(call.callee.as_str())
-                    .and_then(|(target_file, imported)| resolve_exported(target_file, imported))
+                bindings.get(call.callee.as_str()).and_then(|candidates| {
+                    candidates
+                        .iter()
+                        .rev()
+                        .find_map(|(target_file, imported)| resolve_exported(target_file, imported))
+                })
             };
             let Some((target_file, target_fn)) = target else {
                 continue;

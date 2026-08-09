@@ -1,10 +1,11 @@
 //! Go extraction via the compiled-in tree-sitter grammar.
 //!
-//! Go's unit of import is the package (a directory). Resolution is
-//! deliberately conservative (ticket 04): an import path resolves only when
-//! stripping its module prefix leaves exactly one in-map directory holding
-//! Go files — the honest reading of "module-relative paths you can map to
-//! in-repo directories" without duplicating a full go.mod resolver. The
+//! Go's unit of import is the package (a directory). Module-path imports are
+//! anchored by the root go.mod's `module` line: only imports under this
+//! module's own path resolve, so an external module whose suffix collides
+//! with an in-repo directory never produces an edge. Repos without a go.mod
+//! fall back to conservative prefix-stripping (documented residual risk at
+//! the fallback site; nested go.mod modules are not modeled). The
 //! resolved edge points at the package's anchor file (`<dir>/<dir>.go` when
 //! present, else the first Go file in the directory). Stdlib and external
 //! modules never resolve. Same-package calls need no import at all —
@@ -61,6 +62,7 @@ impl Parser for Go {
         importer: &str,
         specifier: &str,
         files: &HashSet<String>,
+        root: &std::path::Path,
     ) -> Option<String> {
         // Legacy relative imports resolve like any path.
         if specifier.starts_with("./") || specifier.starts_with("../") {
@@ -78,8 +80,23 @@ impl Parser for Go {
             return package_anchor(&parts.join("/"), files);
         }
 
-        // Module path: strip 1..n-1 leading segments (the module name) and
-        // keep the result only when it names exactly one in-map package.
+        // Module path: anchored by the root go.mod when present — the
+        // import must start with this module's own path, everything else is
+        // an external module even when its trailing segments collide with an
+        // in-repo directory (e.g. github.com/external/lib/util vs ./util).
+        if files.contains("go.mod") {
+            let module = std::fs::read_to_string(root.join("go.mod"))
+                .ok()
+                .and_then(|src| module_path(&src))?;
+            let rest = specifier.strip_prefix(&module)?.strip_prefix('/')?;
+            return package_anchor(rest, files);
+        }
+
+        // No go.mod (legacy layout): fall back to prefix-stripping — keep
+        // the import only when stripping 1..n-1 leading segments names
+        // exactly one in-map package. Residual risk, accepted for module-
+        // less repos only: an external import whose suffix uniquely matches
+        // an in-repo directory still produces a false edge.
         let segments: Vec<&str> = specifier.split('/').collect();
         let mut matches: Vec<String> = (1..segments.len())
             .filter_map(|skip| {
@@ -94,6 +111,16 @@ impl Parser for Go {
             _ => None, // no match, or ambiguous — resolution declined
         }
     }
+}
+
+/// The `module` line of a go.mod: `module example.com/demo` → the path.
+fn module_path(go_mod: &str) -> Option<String> {
+    go_mod.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix("module")
+            .and_then(|rest| rest.strip_prefix(char::is_whitespace))
+            .map(|path| path.trim().trim_matches('"').to_string())
+    })
 }
 
 /// The file an edge to package directory `dir` points at: `<dir>/<name>.go`

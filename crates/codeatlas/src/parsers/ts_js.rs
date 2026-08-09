@@ -84,6 +84,7 @@ impl Parser for TsJs {
         importer: &str,
         specifier: &str,
         files: &HashSet<String>,
+        _root: &std::path::Path,
     ) -> Option<String> {
         if !specifier.starts_with("./") && !specifier.starts_with("../") {
             return None;
