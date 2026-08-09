@@ -1,3 +1,4 @@
 /target
 .codeatlas/
 node_modules/
+dashboard/dist/

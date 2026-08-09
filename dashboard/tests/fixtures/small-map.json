@@ -1,0 +1,109 @@
+{
+  "version": "0.2.0",
+  "project": {
+    "name": "fixture-app"
+  },
+  "nodes": [
+    {
+      "id": "file:src/main.ts",
+      "kind": "file",
+      "name": "main.ts",
+      "path": "src/main.ts",
+      "summary": "TypeScript file, 12 lines: 1 function",
+      "layer": "src",
+      "provenance": "structural"
+    },
+    {
+      "id": "function:src/main.ts:main",
+      "kind": "function",
+      "name": "main",
+      "path": "src/main.ts",
+      "summary": "Entry point that greets the user.",
+      "range": {
+        "start_line": 3,
+        "end_line": 9
+      },
+      "provenance": "llm"
+    },
+    {
+      "id": "file:src/greeter.ts",
+      "kind": "file",
+      "name": "greeter.ts",
+      "path": "src/greeter.ts",
+      "summary": "TypeScript file, 14 lines: 1 class",
+      "layer": "src",
+      "provenance": "structural"
+    },
+    {
+      "id": "class:src/greeter.ts:Greeter",
+      "kind": "class",
+      "name": "Greeter",
+      "path": "src/greeter.ts",
+      "summary": "Class Greeter, lines 1-14",
+      "range": {
+        "start_line": 1,
+        "end_line": 14
+      },
+      "provenance": "structural"
+    },
+    {
+      "id": "file:docs/guide.md",
+      "kind": "file",
+      "name": "guide.md",
+      "path": "docs/guide.md",
+      "summary": "Plain file, 40 lines",
+      "layer": "docs",
+      "provenance": "structural"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/main.ts",
+      "target": "function:src/main.ts:main",
+      "kind": "contains",
+      "weight": 1.0
+    },
+    {
+      "source": "file:src/main.ts",
+      "target": "file:src/greeter.ts",
+      "kind": "imports",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/greeter.ts",
+      "target": "class:src/greeter.ts:Greeter",
+      "kind": "exports",
+      "weight": 0.5
+    }
+  ],
+  "layers": [
+    {
+      "id": "docs",
+      "name": "docs",
+      "provenance": "structural"
+    },
+    {
+      "id": "src",
+      "name": "Source code",
+      "provenance": "llm"
+    }
+  ],
+  "domain_flows": [
+    {
+      "id": "flow:function:src/main.ts:main",
+      "domain": "src",
+      "name": "main → greet",
+      "provenance": "structural",
+      "steps": [
+        "function:src/main.ts:main"
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "node": "file:src/main.ts",
+      "label": "Start here: the entry point",
+      "provenance": "structural"
+    }
+  ]
+}

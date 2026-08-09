@@ -10,14 +10,14 @@ is ticket 09.
 
 **Blocked by:** 06 — Mechanical semantics; 07 — Published contract.
 
-**Status:** ready
+**Status:** done
 
-- [ ] The dashboard loads a graph file conforming to the contract and renders
+- [x] The dashboard loads a graph file conforming to the contract and renders
       nodes and edges on a React Flow canvas grouped by layer
-- [ ] Search finds nodes by name/path; selecting a node shows its detail
+- [x] Search finds nodes by name/path; selecting a node shows its detail
       (summary, edges, line range, provenance badge)
-- [ ] Rendering makes zero external requests — all assets and fonts are local
+- [x] Rendering makes zero external requests — all assets and fonts are local
       (asserted, not assumed)
-- [ ] The dashboard compiles against the generated TS types only
-- [ ] Renders both a small fixture map and CodeAtlas's own self-scan map
+- [x] The dashboard compiles against the generated TS types only
+- [x] Renders both a small fixture map and CodeAtlas's own self-scan map
       without errors

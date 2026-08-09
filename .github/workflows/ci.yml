@@ -55,3 +55,28 @@ jobs:
       - name: Typecheck dashboard package
         run: npm run typecheck
         working-directory: dashboard
+
+  dashboard:
+    name: Dashboard tests + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The self-scan test drives the real binary to emit this repo's map.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+        working-directory: dashboard
+      - name: Production build
+        run: npm run build
+        working-directory: dashboard
+      # Includes the zero-egress scan of the production build and the
+      # self-scan render (cargo run -p codeatlas -- scan .).
+      - name: Tests
+        run: npm test
+        working-directory: dashboard
