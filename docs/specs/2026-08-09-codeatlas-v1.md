@@ -136,10 +136,12 @@ Spec-level decisions on top of those:
 - **The dashboard is served by the CLI** on a loopback address, from assets
   embedded in the binary — no Node runtime, no dev server, no downloads. The
   share artifact is the same renderer inlined into one HTML file.
-- **V1 languages**: TypeScript/JavaScript, Rust, Python, and Go grammars with
-  import resolution, plus Markdown link edges. This covers CodeAtlas itself
+- **V1 languages**: TypeScript/JavaScript, Rust, Python, Go, C, and C++
+  grammars with import resolution (`#include` resolution and header/source
+  pairing for C/C++), plus Markdown link edges. This covers CodeAtlas itself
   (dogfooding both halves) and the mainstream cases; each further language is
   one grammar plus one import resolver behind the same parser interface.
+  Settled 2026-08-09 during ticketing.
 - **Language coverage is honest**: unsupported or unparseable files degrade
   per story 15 rather than disappearing.
 
@@ -197,9 +199,8 @@ boundaries; no test reaches into pipeline internals.
 
 ## Further Notes
 
-- **Open question**: the V1 language list above is a proposal grounded in
-  dogfooding needs; confirm or trim it during `/to-tickets` before parser work
-  is scheduled.
+- The V1 language list was confirmed — and extended with C and C++ — during
+  `/to-tickets` on 2026-08-09.
 - **Open question**: enrichment batching granularity (how many nodes' slots
   per API request) is left to implementation and should be settled by
   measurement, not up front.
