@@ -426,6 +426,53 @@ fn share_artifact_is_deterministic() {
 }
 
 #[test]
+fn share_refuses_a_map_that_does_not_conform_to_the_contract() {
+    // Fail closed on malformed input (ticket 15 carry-over): redaction
+    // reasons about typed fields, so a map whose shape lies — a string
+    // where an object belongs, an unknown node kind — must abort the
+    // share, not ship the mystery value verbatim.
+    for (label, mutate) in [
+        (
+            "string where the project object belongs",
+            Box::new(|map: &mut Value| map["project"] = json!("just-a-string"))
+                as Box<dyn Fn(&mut Value)>,
+        ),
+        (
+            "unknown node kind",
+            Box::new(|map: &mut Value| map["nodes"][0]["kind"] = json!("blob")),
+        ),
+        (
+            "string where the range object belongs",
+            Box::new(|map: &mut Value| map["nodes"][1]["range"] = json!("1-9")),
+        ),
+    ] {
+        let root = share_fixture_root();
+        let map_path = root.path().join(".codeatlas/knowledge-graph.json");
+        let mut map: Value = serde_json::from_str(&fs::read_to_string(&map_path).unwrap()).unwrap();
+        mutate(&mut map);
+        fs::write(&map_path, serde_json::to_string(&map).unwrap()).unwrap();
+
+        let output = Command::new(env!("CARGO_BIN_EXE_codeatlas"))
+            .args(["share", root.path().to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "share must fail closed on a map with a {label}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("does not conform"),
+            "share error must say the map is non-conforming ({label}): {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !root.path().join(".codeatlas/share.html").exists(),
+            "no artifact may be written from a non-conforming map ({label})"
+        );
+    }
+}
+
+#[test]
 fn share_without_a_map_fails_with_guidance() {
     let dir = tempfile::tempdir().unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_codeatlas"))

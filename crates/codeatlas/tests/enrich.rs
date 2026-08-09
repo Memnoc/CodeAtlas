@@ -618,6 +618,30 @@ fn enrich_with_nothing_to_enrich_succeeds_without_any_provider() {
     );
 }
 
+/// Sealed builds only (ticket 15, ADR-0006): with the `network` feature off
+/// the Claude provider does not merely refuse to run — it does not exist to
+/// be selected. Asking for it by name fails cleanly, and the structural map
+/// still ships. (The genuinely sealed *binary* — no dev-deps, so also no
+/// test-provider — reports its own "compiled without the `network` feature"
+/// message; CI's `scripts/sealed-probe.sh` asserts that one, since every
+/// `cargo test` build carries test-provider via the self dev-dependency.)
+#[cfg(not(feature = "network"))]
+#[test]
+fn the_claude_provider_does_not_exist_in_sealed_builds() {
+    let repo = materialize("simple");
+    let assert = scan(repo.path(), true, Some("claude")).failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("unknown enrichment provider"),
+        "sealed build must not know a provider named claude: {stderr}"
+    );
+
+    // Spec story 14 holds even here: the structural map survives.
+    let map = read_map(repo.path());
+    assert_schema_valid(&map);
+    assert!(!map["nodes"].as_array().unwrap().is_empty());
+}
+
 #[test]
 fn enrich_without_a_provider_fails_cleanly_but_writes_the_structural_map() {
     let repo = materialize("simple");

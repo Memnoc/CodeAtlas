@@ -221,6 +221,19 @@ pub fn run(root: &Path) -> Result<Summary> {
     })?;
     let map: Value = serde_json::from_str(&raw)
         .with_context(|| format!("invalid map at {}", map_path.display()))?;
+    // Fail closed on shape (ticket 15 carry-over): redaction reasons about
+    // typed fields, so the map must deserialize into the contract types
+    // before anything ships — a string where an object belongs, or an
+    // unknown enum value, aborts the share instead of passing through the
+    // walker unrecognized. Fields the types do not know at all are not an
+    // error here; the allowlist walker drops and discloses them below.
+    serde_json::from_str::<crate::map::KnowledgeGraph>(&raw).with_context(|| {
+        format!(
+            "the map at {} does not conform to the map contract, refusing to \
+             share it — re-run `codeatlas scan` to regenerate it",
+            map_path.display()
+        )
+    })?;
 
     let redaction = redact(&map);
     let policy: Vec<&str> = FIELD_CLASSIFICATIONS
@@ -301,7 +314,7 @@ fn build_html(payload: &Value) -> Result<String> {
                     .find("</script>")
                     .context("unclosed script tag")?
                 + "</script>".len();
-            let js = content.replace("</script", "<\\/script");
+            let js = inline_js(asset.path, content)?;
             edits.push((
                 tag_start,
                 tag_end,
@@ -333,4 +346,55 @@ fn build_html(payload: &Value) -> Result<String> {
         out.replace_range(start..end, &replacement);
     }
     Ok(out)
+}
+
+/// Prepares a JS bundle for embedding in an inline `<script>` element.
+///
+/// `<\/script` is identical to `</script` inside JS strings and regexes, and
+/// a bare `</script` cannot appear in valid module code — so the rewrite
+/// closes the only script-breakout vector. `<!--`, however, opens the HTML
+/// parser's script-data-escaped state, in which a later `</script`-shaped
+/// sequence stops closing the element — the same class of hazard as
+/// `</style` in CSS, and unlike `</script` it has no safe universal rewrite
+/// (HTML-like comments are legal JS). Bail rather than emit an artifact
+/// whose parsing differs from the served dashboard.
+fn inline_js(path: &str, content: &str) -> Result<String> {
+    if content.contains("<!--") {
+        bail!(
+            "embedded script {path} contains '<!--' (script-data escaping \
+             hazard) and cannot be inlined"
+        );
+    }
+    Ok(content.replace("</script", "<\\/script"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inline_js_escapes_script_close_sequences() {
+        // `<\/script` is identical to `</script` inside JS strings and
+        // regexes, so the rewrite is safe — and without it the artifact's
+        // <script> element would end mid-bundle.
+        let js = inline_js("assets/app.js", "const s = \"</script>\";").unwrap();
+        assert_eq!(js, "const s = \"<\\/script>\";");
+        assert!(!js.contains("</script"));
+    }
+
+    #[test]
+    fn inline_js_refuses_bundles_containing_html_comment_openers() {
+        // Ticket 15 carry-over (review finding on ticket 14): `<!--` inside
+        // a <script> flips the HTML parser into script-data-escaped state,
+        // where a later `</script`-shaped sequence no longer closes the
+        // element — and unlike `</script` there is no universal rewrite
+        // (HTML-like comments are legal JS). The inliner must bail, like
+        // the existing `</style` bail for CSS, not emit an artifact that
+        // parses differently from the served dashboard.
+        let err = inline_js("assets/app.js", "let x = 1; <!-- lurking")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("assets/app.js"), "names the asset: {err}");
+        assert!(err.contains("<!--"), "names the hazard: {err}");
+    }
 }

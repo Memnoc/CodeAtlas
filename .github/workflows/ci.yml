@@ -36,6 +36,50 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+  sealed:
+    name: Sealed build + tests (--no-default-features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # build.rs embeds the dashboard in every configuration (serve/share are
+      # not feature-gated), so the sealed build needs the npm toolchain too.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install dashboard toolchain (build.rs embeds the dashboard)
+        run: npm ci
+        working-directory: dashboard
+      # tests/sealed.rs runs `cargo tree --locked --offline` for BOTH feature
+      # configurations; fetch the full lockfile up front so the offline tree
+      # walk always has every package's manifest, even before any
+      # default-features build has run in this job.
+      - name: Fetch locked dependencies (offline cargo tree probes)
+        run: cargo fetch --locked
+      - name: Clippy (sealed configuration)
+        run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
+      # The genuinely sealed artifact: no default features AND no
+      # dev-dependencies (cargo test builds always carry `test-provider`
+      # via the self dev-dependency, so no test binary is this artifact).
+      - name: Build the sealed binary (ADR-0006 audit artifact)
+        run: |
+          cargo build --workspace --no-default-features
+          cp target/debug/codeatlas "$RUNNER_TEMP/codeatlas-sealed"
+      - name: Test (sealed configuration)
+        # Includes tests/sealed.rs (dependency-tree probe) and, on this
+        # runner (unprivileged user namespaces available on ubuntu-latest),
+        # the netns egress suite in tests/egress.rs.
+        run: cargo test --workspace --no-default-features
+      - name: Build the default binary (byte-probe control)
+        run: cargo build --workspace
+      - name: Sealed binary byte probe (no API host, no HTTP client, --enrich refuses)
+        run: scripts/sealed-probe.sh "$RUNNER_TEMP/codeatlas-sealed" target/debug/codeatlas
+
   contract:
     name: Contract drift + TS typecheck
     runs-on: ubuntu-latest

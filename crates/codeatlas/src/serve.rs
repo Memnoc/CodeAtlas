@@ -15,6 +15,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
@@ -69,10 +70,23 @@ pub fn serve(root: &Path, port: u16) -> Result<()> {
     Ok(())
 }
 
+/// How long a handler thread waits on a read before giving up on the
+/// connection. Generous for a loopback client, but finite: a client that
+/// connects and never finishes its request must not park a thread forever.
+const READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Per-connection socket setup: every accepted stream gets [`READ_TIMEOUT`]
+/// so a half-open request errors out instead of blocking its thread
+/// indefinitely.
+fn prepare(stream: TcpStream) -> std::io::Result<TcpStream> {
+    stream.set_read_timeout(Some(READ_TIMEOUT))?;
+    Ok(stream)
+}
+
 /// Answers one request and closes the connection (`Connection: close` — the
 /// dashboard is a handful of requests, keep-alive buys nothing but state).
 fn handle(stream: TcpStream, map_path: &PathBuf, overlay_path: &PathBuf) -> std::io::Result<()> {
-    let mut reader = BufReader::new(stream);
+    let mut reader = BufReader::new(prepare(stream)?);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
     // Drain the headers; nothing in them changes how we respond.
@@ -153,4 +167,27 @@ fn respond(
     )?;
     stream.write_all(body)?;
     stream.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepted_connections_carry_a_read_timeout() {
+        // Ticket 15 carry-over (review finding on ticket 09): a client that
+        // connects and then sends nothing must not park a handler thread
+        // forever — every accepted stream gets a finite read timeout, so a
+        // half-open request errors out and the thread exits. Asserting the
+        // configured timeout (rather than waiting it out) keeps the test
+        // instant; the timeout value itself is not behavior worth pinning
+        // beyond "finite".
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let _client = TcpStream::connect(addr).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+
+        let stream = prepare(stream).unwrap();
+        assert_eq!(stream.read_timeout().unwrap(), Some(READ_TIMEOUT));
+    }
 }

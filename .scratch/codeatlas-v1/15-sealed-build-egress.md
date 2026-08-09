@@ -12,17 +12,17 @@ change.
 **Blocked by:** 09 — CLI serves the embedded dashboard; 12 — Claude API
 provider.
 
-**Status:** ready
+**Status:** done
 
-- [ ] The sealed build compiles with the network feature off and links no
+- [x] The sealed build compiles with the network feature off and links no
       networking dependencies (verified mechanically, e.g. against the
       dependency tree)
-- [ ] Every command works in the sealed build; `--enrich` fails with a clear
+- [x] Every command works in the sealed build; `--enrich` fails with a clear
       "not in this build" message
-- [ ] Egress tests assert the default path (scan, serve, diff, share) opens
+- [x] Egress tests assert the default path (scan, serve, diff, share) opens
       no non-loopback sockets in the standard build
-- [ ] CI builds and runs the test suite in both feature configurations
-- [ ] The redaction exhaustiveness test (ticket 14) and the contract drift
+- [x] CI builds and runs the test suite in both feature configurations
+- [x] The redaction exhaustiveness test (ticket 14) and the contract drift
       check (ticket 07) run in the same CI gate
-- [ ] A short security document states the guarantee and points at the tests
+- [x] A short security document states the guarantee and points at the tests
       and build config that enforce it — the audit entry point
