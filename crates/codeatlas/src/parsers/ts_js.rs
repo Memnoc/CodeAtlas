@@ -163,15 +163,8 @@ fn collect(
         });
     }
 
-    if node.kind() == "export_specifier" {
-        // `export { local }` / `export { local as alias }`: the local name
-        // identifies the symbol being exported.
-        if let Some(name) = node
-            .child_by_field_name("name")
-            .and_then(|n| n.utf8_text(source).ok())
-        {
-            export_clause_names.push(name.to_string());
-        }
+    if node.kind() == "export_statement" {
+        collect_export_clause(node, source, out, export_clause_names);
     }
 
     let kind = match node.kind() {
@@ -229,6 +222,62 @@ fn collect(
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect(child, source, child_ctx, out, export_clause_names);
+    }
+}
+
+/// Handles an export statement's clause and source, if any.
+///
+/// - `export { local }` / `export { local as alias }` marks the local symbol
+///   exported and records the alias indirection.
+/// - `export { x } from "./y"` is a re-export: the file depends on `./y`
+///   (an import edge) and importers of `x` are pointed one level onward.
+///   Deeper barrel chains (a barrel re-exporting another barrel's
+///   re-export) are out of scope: resolution follows exactly one hop.
+/// - `export * from "./y"` records only the file-level dependency — the
+///   names it forwards are unknowable without reading `./y`.
+fn collect_export_clause(
+    node: TsNode,
+    source: &[u8],
+    out: &mut Analysis,
+    export_clause_names: &mut Vec<String>,
+) {
+    let from = string_text(node.child_by_field_name("source"), source);
+    if let Some(specifier) = from.clone() {
+        out.imports.push(Import {
+            specifier,
+            names: Vec::new(),
+        });
+    }
+    let mut clause_cursor = node.walk();
+    let Some(clause) = node
+        .children(&mut clause_cursor)
+        .find(|c| c.kind() == "export_clause")
+    else {
+        return;
+    };
+    let mut cursor = clause.walk();
+    for specifier in clause.named_children(&mut cursor) {
+        if specifier.kind() != "export_specifier" {
+            continue;
+        }
+        let Some(name) = specifier
+            .child_by_field_name("name")
+            .and_then(|n| n.utf8_text(source).ok())
+        else {
+            continue;
+        };
+        let alias = specifier
+            .child_by_field_name("alias")
+            .and_then(|n| n.utf8_text(source).ok());
+        if from.is_none() {
+            // The local symbol named by the clause is exported.
+            export_clause_names.push(name.to_string());
+        }
+        out.reexports.push(super::Reexport {
+            exported: alias.unwrap_or(name).to_string(),
+            local: name.to_string(),
+            specifier: from.clone(),
+        });
     }
 }
 

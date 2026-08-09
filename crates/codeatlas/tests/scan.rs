@@ -607,6 +607,504 @@ fn tour_steps_are_topology_ordered_with_mechanical_labels() {
 }
 
 #[test]
+fn rust_files_yield_symbols_imports_and_calls() {
+    let repo = materialize("rustproj");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let ids = node_ids(&map);
+    let edges = map["edges"].as_array().unwrap();
+
+    // Functions, structs (as classes), and impl methods scope-qualified.
+    assert!(
+        ids.contains(&"function:src/main.rs:main".to_string()),
+        "ids: {ids:?}"
+    );
+    assert!(ids.contains(&"function:src/util.rs:greet".to_string()));
+    assert!(ids.contains(&"class:src/shapes/mod.rs:Circle".to_string()));
+    assert!(ids.contains(&"function:src/shapes/mod.rs:Circle.area".to_string()));
+
+    // Mechanical summary names the language.
+    let util = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == "file:src/util.rs")
+        .unwrap();
+    assert!(
+        util["summary"].as_str().unwrap().contains("Rust"),
+        "summary: {}",
+        util["summary"]
+    );
+
+    // `pub` is exported; a private fn is not; methods are not.
+    assert!(has_edge(
+        &map,
+        "exports",
+        "file:src/util.rs",
+        "function:src/util.rs:greet"
+    ));
+    assert!(has_edge(
+        &map,
+        "exports",
+        "file:src/shapes/mod.rs",
+        "class:src/shapes/mod.rs:Circle"
+    ));
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e["kind"] == "exports" && e["target"] == "function:src/util.rs:decorate"),
+        "private fn got an exports edge: {edges:?}"
+    );
+
+    // `mod foo;` resolves to foo.rs / foo/mod.rs; `use crate::…` resolves
+    // against the src/ layout.
+    assert!(
+        has_edge(&map, "imports", "file:src/main.rs", "file:src/util.rs"),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(
+            &map,
+            "imports",
+            "file:src/main.rs",
+            "file:src/shapes/mod.rs"
+        ),
+        "edges: {edges:?}"
+    );
+    // std/external paths never resolve into the map.
+    assert!(
+        !edges.iter().any(|e| {
+            e["kind"] == "imports" && e["target"].as_str().is_some_and(|t| t.contains("std"))
+        }),
+        "external import leaked: {edges:?}"
+    );
+
+    // Cross-file call through the `use` binding; same-file call to a
+    // private fn.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:src/main.rs:main",
+            "function:src/util.rs:greet"
+        ),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:src/util.rs:greet",
+            "function:src/util.rs:decorate"
+        ),
+        "edges: {edges:?}"
+    );
+}
+
+#[test]
+fn python_files_yield_symbols_imports_and_calls() {
+    let repo = materialize("pyproj");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let ids = node_ids(&map);
+    let edges = map["edges"].as_array().unwrap();
+
+    // Functions, classes, and methods scope-qualified.
+    assert!(
+        ids.contains(&"function:app.py:main".to_string()),
+        "ids: {ids:?}"
+    );
+    assert!(ids.contains(&"function:utils.py:shout".to_string()));
+    assert!(ids.contains(&"class:models.py:Greeter".to_string()));
+    assert!(ids.contains(&"function:models.py:Greeter.greet".to_string()));
+
+    let utils = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == "file:utils.py")
+        .unwrap();
+    assert!(
+        utils["summary"].as_str().unwrap().contains("Python"),
+        "summary: {}",
+        utils["summary"]
+    );
+
+    // Convention: non-underscore top-level names are exported; underscore
+    // names and methods are not.
+    assert!(has_edge(
+        &map,
+        "exports",
+        "file:utils.py",
+        "function:utils.py:shout"
+    ));
+    assert!(has_edge(
+        &map,
+        "exports",
+        "file:models.py",
+        "class:models.py:Greeter"
+    ));
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e["kind"] == "exports" && e["target"] == "function:utils.py:_decorate"),
+        "underscore name got an exports edge: {edges:?}"
+    );
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e["kind"] == "exports" && e["target"] == "function:models.py:Greeter.greet"),
+        "method got an exports edge: {edges:?}"
+    );
+
+    // Same-package module import, relative import, and package import
+    // through __init__.py.
+    assert!(
+        has_edge(&map, "imports", "file:app.py", "file:utils.py"),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(&map, "imports", "file:pkg/core.py", "file:pkg/helpers.py"),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(&map, "imports", "file:use_pkg.py", "file:pkg/__init__.py"),
+        "edges: {edges:?}"
+    );
+
+    // Calls: cross-file through an import, same-file to a private helper,
+    // and into a package's __init__.py.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:app.py:main",
+            "function:utils.py:shout"
+        ),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:utils.py:shout",
+            "function:utils.py:_decorate"
+        ),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:pkg/core.py:run",
+            "function:pkg/helpers.py:fmt"
+        ),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:use_pkg.py:boot",
+            "function:pkg/__init__.py:api"
+        ),
+        "edges: {edges:?}"
+    );
+}
+
+#[test]
+fn go_files_yield_symbols_imports_and_calls() {
+    let repo = materialize("goproj");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let ids = node_ids(&map);
+    let edges = map["edges"].as_array().unwrap();
+
+    // Functions, structs (as classes), and methods receiver-qualified.
+    assert!(
+        ids.contains(&"function:main.go:main".to_string()),
+        "ids: {ids:?}"
+    );
+    assert!(ids.contains(&"function:util/util.go:Format".to_string()));
+    assert!(ids.contains(&"class:util/util.go:Formatter".to_string()));
+    assert!(ids.contains(&"function:util/util.go:Formatter.Render".to_string()));
+
+    let util = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == "file:util/util.go")
+        .unwrap();
+    assert!(
+        util["summary"].as_str().unwrap().contains("Go"),
+        "summary: {}",
+        util["summary"]
+    );
+
+    // Capitalized names are exported; lowercase names and methods are not.
+    assert!(has_edge(
+        &map,
+        "exports",
+        "file:util/util.go",
+        "function:util/util.go:Format"
+    ));
+    assert!(has_edge(
+        &map,
+        "exports",
+        "file:util/util.go",
+        "class:util/util.go:Formatter"
+    ));
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e["kind"] == "exports" && e["target"] == "function:util/util.go:indent"),
+        "lowercase fn got an exports edge: {edges:?}"
+    );
+
+    // Module-path import resolves to the in-repo package; stdlib never
+    // resolves.
+    assert!(
+        has_edge(&map, "imports", "file:main.go", "file:util/util.go"),
+        "edges: {edges:?}"
+    );
+    assert!(
+        !edges.iter().any(|e| {
+            e["kind"] == "imports"
+                && e["target"]
+                    .as_str()
+                    .is_some_and(|t| t.contains("fmt") || t.contains("strings"))
+        }),
+        "stdlib import leaked: {edges:?}"
+    );
+
+    // Same-package calls resolve across files without an import; same-file
+    // calls resolve as everywhere else.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:main.go:main",
+            "function:server.go:run"
+        ),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:server.go:run",
+            "function:server.go:banner"
+        ),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:util/util.go:Format",
+            "function:util/util.go:indent"
+        ),
+        "edges: {edges:?}"
+    );
+}
+
+#[test]
+fn markdown_relative_links_become_edges_between_file_nodes() {
+    let repo = materialize("rustproj");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let ids = node_ids(&map);
+    let edges = map["edges"].as_array().unwrap();
+
+    // Relative links — bare, `./`-prefixed, `../`-traversing, and carrying
+    // anchors — resolve to any in-map file.
+    assert!(
+        has_edge(&map, "imports", "file:README.md", "file:docs/guide.md"),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(&map, "imports", "file:README.md", "file:src/main.rs"),
+        "edges: {edges:?}"
+    );
+    assert!(
+        has_edge(&map, "imports", "file:docs/guide.md", "file:README.md"),
+        "edges: {edges:?}"
+    );
+
+    // External URLs, missing files, pure anchors, and links inside code
+    // fences produce no edge.
+    assert!(
+        !edges.iter().any(|e| {
+            e["source"] == "file:README.md"
+                && e["target"]
+                    .as_str()
+                    .is_some_and(|t| t.contains("nope") || t.contains("example.com"))
+        }),
+        "unresolvable markdown link leaked: {edges:?}"
+    );
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e["source"] == "file:docs/guide.md" && e["target"] == "file:src/util.rs"),
+        "code-fence link became an edge: {edges:?}"
+    );
+
+    // Markdown files contribute no symbol nodes.
+    assert!(
+        !ids.iter()
+            .any(|id| id.contains(".md") && !id.starts_with("file:")),
+        "markdown produced symbol nodes: {ids:?}"
+    );
+    let readme = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == "file:README.md")
+        .unwrap();
+    assert!(
+        readme["summary"].as_str().unwrap().contains("Markdown"),
+        "summary: {}",
+        readme["summary"]
+    );
+}
+
+#[test]
+fn importing_a_non_exported_function_produces_no_call_edge() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let edges = map["edges"].as_array().unwrap();
+
+    // hidden.ts keeps `secret` module-private; sneak.ts imports and calls it
+    // anyway. The map must not claim a call relationship the module system
+    // does not allow.
+    assert!(
+        !edges.iter().any(|e| e["kind"] == "calls"
+            && e["source"] == "function:src/sneak.ts:trySneak"
+            && e["target"] == "function:src/hidden.ts:secret"),
+        "call to a non-exported import leaked: {edges:?}"
+    );
+    // The legitimate in-file call to the private function still exists.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:src/hidden.ts:open",
+            "function:src/hidden.ts:secret"
+        ),
+        "edges: {edges:?}"
+    );
+}
+
+#[test]
+fn barrel_reexports_resolve_one_level_to_the_defining_file() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let edges = map["edges"].as_array().unwrap();
+
+    // useBarrel.ts imports greet from barrel.ts, which re-exports it from
+    // util.ts: the call resolves through the barrel to the defining file.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:src/useBarrel.ts:viaBarrel",
+            "function:src/util.ts:greet"
+        ),
+        "edges: {edges:?}"
+    );
+    // The re-export is also a file-level dependency of the barrel.
+    assert!(
+        has_edge(&map, "imports", "file:src/barrel.ts", "file:src/util.ts"),
+        "edges: {edges:?}"
+    );
+}
+
+#[test]
+fn aliased_exports_resolve_calls_to_the_defining_function() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let edges = map["edges"].as_array().unwrap();
+
+    // alias.ts publishes `internal` as `external`; a call through the alias
+    // lands on the defining function node.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:src/useAlias.ts:callAliased",
+            "function:src/alias.ts:internal"
+        ),
+        "edges: {edges:?}"
+    );
+    // The aliased export still marks the local symbol exported.
+    assert!(
+        has_edge(
+            &map,
+            "exports",
+            "file:src/alias.ts",
+            "function:src/alias.ts:internal"
+        ),
+        "edges: {edges:?}"
+    );
+}
+
+#[test]
+fn dogfood_scanning_codeatlas_itself_yields_a_schema_valid_polyglot_map() {
+    // The dogfood milestone: CodeAtlas maps its own repository — the Rust
+    // core, the TS dashboard, and the documentation's link structure.
+    let repo_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    assert_cmd::Command::cargo_bin("codeatlas")
+        .unwrap()
+        .arg("scan")
+        .arg(&repo_root)
+        .assert()
+        .success();
+    let map = read_map(&repo_root);
+
+    // Schema-valid against the binary's own generated schema.
+    let output = assert_cmd::Command::cargo_bin("codeatlas")
+        .unwrap()
+        .arg("schema")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let schema: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let errors: Vec<String> = validator.iter_errors(&map).map(|e| e.to_string()).collect();
+    assert!(
+        errors.is_empty(),
+        "self-scan violates the schema: {errors:?}"
+    );
+
+    // Function nodes from the Rust source.
+    let ids = node_ids(&map);
+    assert!(
+        ids.contains(&"function:crates/codeatlas/src/scan.rs:scan".to_string()),
+        "missing Rust function node"
+    );
+    // Function nodes from the TypeScript dashboard.
+    assert!(
+        ids.iter()
+            .any(|id| id.starts_with("function:dashboard/src/")),
+        "missing TS function node"
+    );
+    // At least one Markdown link edge (the docs cross-reference heavily).
+    assert!(
+        map["edges"].as_array().unwrap().iter().any(|e| {
+            e["kind"] == "imports"
+                && e["source"].as_str().is_some_and(|s| s.ends_with(".md"))
+                && e["target"].as_str().is_some_and(|t| t.starts_with("file:"))
+        }),
+        "no markdown link edge in the self-scan"
+    );
+}
+
+#[test]
 fn scanning_the_same_input_twice_is_byte_identical() {
     let repo = materialize("simple");
     scan(repo.path());

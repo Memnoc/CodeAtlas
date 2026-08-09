@@ -10,14 +10,14 @@ own repository, both the Rust core and the TS dashboard.
 
 **Blocked by:** 02 — Parser interface; 03 — Import and call edges.
 
-**Status:** ready
+**Status:** done
 
-- [ ] Rust, Python, and Go each implement the parser interface with grammars
+- [x] Rust, Python, and Go each implement the parser interface with grammars
       compiled in and language-appropriate import resolution (`use` / `mod`,
       Python imports, Go packages)
-- [ ] Call edges emitted where resolvable, same rules as TS/JS
-- [ ] Markdown files appear as file nodes with link edges to files they
+- [x] Call edges emitted where resolvable, same rules as TS/JS
+- [x] Markdown files appear as file nodes with link edges to files they
       reference by relative path
-- [ ] Per-language fixture tests assert expected nodes and edges
-- [ ] Smoke test: running `codeatlas scan` on the CodeAtlas repo itself
+- [x] Per-language fixture tests assert expected nodes and edges
+- [x] Smoke test: running `codeatlas scan` on the CodeAtlas repo itself
       produces a schema-valid map containing nodes from both languages

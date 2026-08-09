@@ -80,6 +80,11 @@ struct FileFacts {
     calls: Vec<parsers::Call>,
     /// Final (post-dedup) names of this file's function nodes.
     functions: HashSet<String>,
+    /// The subset of `functions` this file exports — an imported callee must
+    /// come from here, not merely exist in the defining file.
+    exported_functions: HashSet<String>,
+    /// Export-clause indirections: aliases and one-level re-exports.
+    reexports: Vec<parsers::Reexport>,
 }
 
 /// Emits the file node and, where a parser handles the language, its symbol
@@ -115,6 +120,11 @@ fn extract_file(
     let functions: HashSet<String> = symbols
         .iter()
         .filter(|s| s.kind == SymbolKind::Function)
+        .map(|s| s.name.clone())
+        .collect();
+    let exported_functions: HashSet<String> = symbols
+        .iter()
+        .filter(|s| s.kind == SymbolKind::Function && s.exported)
         .map(|s| s.name.clone())
         .collect();
     let classes = symbols
@@ -182,6 +192,8 @@ fn extract_file(
         imports: analysis.imports,
         calls: analysis.calls,
         functions,
+        exported_functions,
+        reexports: analysis.reexports,
     }
 }
 
@@ -208,15 +220,47 @@ fn resolve_imports(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>)
 }
 
 /// Connects invocations to function nodes and emits `calls` edges. A callee
-/// resolves within its own file first, then through a named import whose
-/// module resolved into the map. Anything else — member calls, packages,
-/// files outside the map — is dropped, never emitted dangling.
+/// resolves within its own file first, then within its directory where the
+/// language shares one namespace per directory (Go packages), then through a
+/// named import whose module resolved into the map — and an imported callee
+/// must actually be exported by its defining file, possibly through one
+/// level of export alias or re-export. Anything else — member calls,
+/// packages, files outside the map — is dropped, never emitted dangling.
 fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>) {
     let files: HashSet<String> = paths.iter().cloned().collect();
-    let fn_index: HashMap<&str, &HashSet<String>> = facts
-        .iter()
-        .map(|f| (f.path.as_str(), &f.functions))
-        .collect();
+    let facts_by_path: HashMap<&str, &FileFacts> =
+        facts.iter().map(|f| (f.path.as_str(), f)).collect();
+
+    // Where an import of `name` from `file` actually lands: the file's own
+    // exported function, an aliased local (`export { internal as external }`),
+    // or — one level deep — the file a re-export clause forwards to.
+    let resolve_exported = |file: &str, name: &str| -> Option<(String, String)> {
+        let target = facts_by_path.get(file)?;
+        if target.exported_functions.contains(name) {
+            return Some((file.to_string(), name.to_string()));
+        }
+        let reexport = target.reexports.iter().find(|r| r.exported == name)?;
+        match &reexport.specifier {
+            // Alias of a local symbol; the clause itself exports it.
+            None => target
+                .exported_functions
+                .contains(&reexport.local)
+                .then(|| (file.to_string(), reexport.local.clone())),
+            // Re-export from another module: follow exactly one hop; the
+            // defining file must export the name itself (deeper barrel
+            // chains stay unresolved).
+            Some(specifier) => {
+                let parser = parsers::for_extension(extension_of(file))?;
+                let defining = parser.resolve_import(file, specifier, &files)?;
+                facts_by_path
+                    .get(defining.as_str())?
+                    .exported_functions
+                    .contains(&reexport.local)
+                    .then(|| (defining, reexport.local.clone()))
+            }
+        }
+    };
+
     let mut seen: HashSet<(NodeId, NodeId)> = HashSet::new();
     for file in facts {
         let Some(parser) = parsers::for_extension(extension_of(&file.path)) else {
@@ -232,17 +276,29 @@ fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>) {
             }
         }
         for call in &file.calls {
-            let target = if file.functions.contains(&call.callee) {
-                Some((file.path.as_str(), call.callee.as_str()))
+            let target: Option<(String, String)> = if file.functions.contains(&call.callee) {
+                Some((file.path.clone(), call.callee.clone()))
+            } else if let Some(sibling) = parser
+                .directory_shares_scope()
+                .then(|| {
+                    // Go packages: sibling files in the directory share one
+                    // namespace, so the callee may live next door with no
+                    // import. Facts are path-sorted, so the match is
+                    // deterministic.
+                    facts.iter().find(|other| {
+                        other.path != file.path
+                            && directory_of(&other.path) == directory_of(&file.path)
+                            && parser.extensions().contains(&extension_of(&other.path))
+                            && other.functions.contains(&call.callee)
+                    })
+                })
+                .flatten()
+            {
+                Some((sibling.path.clone(), call.callee.clone()))
             } else {
                 bindings
                     .get(call.callee.as_str())
-                    .filter(|(target_file, imported)| {
-                        fn_index
-                            .get(target_file.as_str())
-                            .is_some_and(|fns| fns.contains(*imported))
-                    })
-                    .map(|(target_file, imported)| (target_file.as_str(), *imported))
+                    .and_then(|(target_file, imported)| resolve_exported(target_file, imported))
             };
             let Some((target_file, target_fn)) = target else {
                 continue;
@@ -253,13 +309,17 @@ fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>) {
             }
             let edge = (
                 NodeId::symbol(NodeKind::Function, &file.path, &call.caller),
-                NodeId::symbol(NodeKind::Function, target_file, target_fn),
+                NodeId::symbol(NodeKind::Function, &target_file, &target_fn),
             );
             if seen.insert(edge.clone()) {
                 edges.push(Edge::new(edge.0, edge.1, EdgeKind::Calls));
             }
         }
     }
+}
+
+fn directory_of(path: &str) -> &str {
+    path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("")
 }
 
 fn extension_of(path: &str) -> &str {

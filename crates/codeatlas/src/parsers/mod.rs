@@ -3,6 +3,10 @@
 
 use std::collections::HashSet;
 
+mod go;
+mod markdown;
+mod python;
+mod rust;
 mod ts_js;
 
 /// Everything a parser extracts from one file: the structural facts only.
@@ -11,6 +15,23 @@ pub struct Analysis {
     pub symbols: Vec<Symbol>,
     pub imports: Vec<Import>,
     pub calls: Vec<Call>,
+    /// Names published by export clauses that need indirection to resolve:
+    /// aliases (`export { internal as external }`) and one-level re-exports
+    /// (`export { x } from "./y"`).
+    pub reexports: Vec<Reexport>,
+}
+
+/// A name an export clause makes available to importers under a possibly
+/// different name, possibly from another module.
+#[derive(Debug)]
+pub struct Reexport {
+    /// The name importers see.
+    pub exported: String,
+    /// The name as defined — in this file when `specifier` is `None`,
+    /// otherwise in the module the specifier names.
+    pub local: String,
+    /// Present for `export … from`: the module the name actually comes from.
+    pub specifier: Option<String>,
 }
 
 /// A symbol extracted from one file.
@@ -77,6 +98,12 @@ pub trait Parser: Send + Sync {
         specifier: &str,
         files: &HashSet<String>,
     ) -> Option<String>;
+    /// Whether all files in one directory share a single namespace (Go
+    /// packages): a plain-identifier call may then resolve to a function
+    /// defined in a sibling file without any import.
+    fn directory_shares_scope(&self) -> bool {
+        false
+    }
 }
 
 /// The registry of compiled-in language parsers (ADR-0006: no runtime
@@ -84,7 +111,14 @@ pub trait Parser: Send + Sync {
 fn registry() -> &'static [Box<dyn Parser>] {
     use std::sync::OnceLock;
     static REGISTRY: OnceLock<Vec<Box<dyn Parser>>> = OnceLock::new();
-    REGISTRY.get_or_init(ts_js::parsers)
+    REGISTRY.get_or_init(|| {
+        let mut parsers = ts_js::parsers();
+        parsers.extend(rust::parsers());
+        parsers.extend(python::parsers());
+        parsers.extend(go::parsers());
+        parsers.extend(markdown::parsers());
+        parsers
+    })
 }
 
 /// Finds the parser for a file extension, if the language is supported.
