@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -5,8 +6,8 @@ use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 
 use crate::map::{
-    Edge, EdgeKind, KnowledgeGraph, MAP_CONTRACT_VERSION, Node, NodeKind, Project, Provenance,
-    Range,
+    Edge, EdgeKind, KnowledgeGraph, MAP_CONTRACT_VERSION, Node, NodeId, NodeKind, Project,
+    Provenance, Range,
 };
 use crate::parsers::{self, SymbolKind};
 
@@ -46,9 +47,13 @@ pub fn scan(root: &Path) -> Result<KnowledgeGraph> {
 
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
-    for path in paths {
-        extract_file(&root, &path, &mut nodes, &mut edges);
-    }
+    let facts: Vec<FileFacts> = paths
+        .iter()
+        .map(|path| extract_file(&root, path, &mut nodes, &mut edges))
+        .collect();
+
+    resolve_imports(&paths, &facts, &mut edges);
+    resolve_calls(&paths, &facts, &mut edges);
 
     let project_name = root
         .file_name()
@@ -63,21 +68,33 @@ pub fn scan(root: &Path) -> Result<KnowledgeGraph> {
     })
 }
 
+/// What one file contributes to the cross-file resolution phase.
+struct FileFacts {
+    path: String,
+    imports: Vec<parsers::Import>,
+    calls: Vec<parsers::Call>,
+    /// Final (post-dedup) names of this file's function nodes.
+    functions: HashSet<String>,
+}
+
 /// Emits the file node and, where a parser handles the language, its symbol
 /// nodes and `contains` edges. Extraction failures degrade to a bare file
-/// node; they never fail the scan.
-fn extract_file(root: &Path, path: &str, nodes: &mut Vec<Node>, edges: &mut Vec<Edge>) {
+/// node; they never fail the scan. Returns the facts cross-file resolution
+/// needs.
+fn extract_file(
+    root: &Path,
+    path: &str,
+    nodes: &mut Vec<Node>,
+    edges: &mut Vec<Edge>,
+) -> FileFacts {
     let source = fs::read(root.join(path))
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default();
     let line_count = source.lines().count();
 
-    let extension = Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or_default();
-    let parser = parsers::for_extension(extension);
-    let mut symbols = parser.map(|p| p.parse(&source)).unwrap_or_default();
+    let parser = parsers::for_extension(extension_of(path));
+    let analysis = parser.map(|p| p.parse(&source)).unwrap_or_default();
+    let mut symbols = analysis.symbols;
 
     // Safety net: any symbols still sharing a name within this file get
     // deterministic ordinal suffixes, so node IDs are always unique.
@@ -90,23 +107,25 @@ fn extract_file(root: &Path, path: &str, nodes: &mut Vec<Node>, edges: &mut Vec<
         }
     }
 
-    let functions = symbols
+    let functions: HashSet<String> = symbols
         .iter()
         .filter(|s| s.kind == SymbolKind::Function)
-        .count();
+        .map(|s| s.name.clone())
+        .collect();
     let classes = symbols
         .iter()
         .filter(|s| s.kind == SymbolKind::Class)
         .count();
 
-    let file_id = format!("file:{path}");
+    let file_id = NodeId::file(path);
     let file_label = parser.map_or("Plain", |p| p.language_name());
     let mut summary = format!("{file_label} file, {line_count} lines");
     if !symbols.is_empty() {
         summary.push_str(": ");
         let mut parts = Vec::new();
-        if functions > 0 {
-            parts.push(format!("{functions} {}", plural("function", functions)));
+        if !functions.is_empty() {
+            let n = functions.len();
+            parts.push(format!("{n} {}", plural("function", n)));
         }
         if classes > 0 {
             parts.push(format!("{classes} {}", plural("class", classes)));
@@ -125,11 +144,11 @@ fn extract_file(root: &Path, path: &str, nodes: &mut Vec<Node>, edges: &mut Vec<
     });
 
     for symbol in symbols {
-        let (kind, id_prefix, label) = match symbol.kind {
-            SymbolKind::Function => (NodeKind::Function, "function", "Function"),
-            SymbolKind::Class => (NodeKind::Class, "class", "Class"),
+        let (kind, label) = match symbol.kind {
+            SymbolKind::Function => (NodeKind::Function, "Function"),
+            SymbolKind::Class => (NodeKind::Class, "Class"),
         };
-        let id = format!("{id_prefix}:{path}:{}", symbol.name);
+        let id = NodeId::symbol(kind, path, &symbol.name);
         nodes.push(Node {
             id: id.clone(),
             kind,
@@ -145,12 +164,102 @@ fn extract_file(root: &Path, path: &str, nodes: &mut Vec<Node>, edges: &mut Vec<
             }),
             provenance: Provenance::Structural,
         });
-        edges.push(Edge {
-            source: file_id.clone(),
-            target: id,
-            kind: EdgeKind::Contains,
-        });
+        edges.push(Edge::new(file_id.clone(), id.clone(), EdgeKind::Contains));
+        if symbol.exported {
+            edges.push(Edge::new(file_id.clone(), id, EdgeKind::Exports));
+        }
     }
+
+    FileFacts {
+        path: path.to_string(),
+        imports: analysis.imports,
+        calls: analysis.calls,
+        functions,
+    }
+}
+
+/// Resolves each file's import specifiers against the scanned file set and
+/// emits `imports` edges between file nodes. Unresolvable imports (bare
+/// packages, files outside the map) are dropped, never emitted dangling.
+fn resolve_imports(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>) {
+    let files: HashSet<String> = paths.iter().cloned().collect();
+    let mut seen: HashSet<(NodeId, NodeId)> = HashSet::new();
+    for file in facts {
+        let Some(parser) = parsers::for_extension(extension_of(&file.path)) else {
+            continue;
+        };
+        for import in &file.imports {
+            let Some(target) = parser.resolve_import(&file.path, &import.specifier, &files) else {
+                continue;
+            };
+            let edge = (NodeId::file(&file.path), NodeId::file(&target));
+            if seen.insert(edge.clone()) {
+                edges.push(Edge::new(edge.0, edge.1, EdgeKind::Imports));
+            }
+        }
+    }
+}
+
+/// Connects invocations to function nodes and emits `calls` edges. A callee
+/// resolves within its own file first, then through a named import whose
+/// module resolved into the map. Anything else — member calls, packages,
+/// files outside the map — is dropped, never emitted dangling.
+fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>) {
+    let files: HashSet<String> = paths.iter().cloned().collect();
+    let fn_index: HashMap<&str, &HashSet<String>> = facts
+        .iter()
+        .map(|f| (f.path.as_str(), &f.functions))
+        .collect();
+    let mut seen: HashSet<(NodeId, NodeId)> = HashSet::new();
+    for file in facts {
+        let Some(parser) = parsers::for_extension(extension_of(&file.path)) else {
+            continue;
+        };
+        // Local binding name → (defining file, exported name).
+        let mut bindings: HashMap<&str, (String, &str)> = HashMap::new();
+        for import in &file.imports {
+            if let Some(target) = parser.resolve_import(&file.path, &import.specifier, &files) {
+                for name in &import.names {
+                    bindings.insert(name.local.as_str(), (target.clone(), &name.imported));
+                }
+            }
+        }
+        for call in &file.calls {
+            let target = if file.functions.contains(&call.callee) {
+                Some((file.path.as_str(), call.callee.as_str()))
+            } else {
+                bindings
+                    .get(call.callee.as_str())
+                    .filter(|(target_file, imported)| {
+                        fn_index
+                            .get(target_file.as_str())
+                            .is_some_and(|fns| fns.contains(*imported))
+                    })
+                    .map(|(target_file, imported)| (target_file.as_str(), *imported))
+            };
+            let Some((target_file, target_fn)) = target else {
+                continue;
+            };
+            // The caller must exist as a node too (its name survived dedup).
+            if !file.functions.contains(&call.caller) {
+                continue;
+            }
+            let edge = (
+                NodeId::symbol(NodeKind::Function, &file.path, &call.caller),
+                NodeId::symbol(NodeKind::Function, target_file, target_fn),
+            );
+            if seen.insert(edge.clone()) {
+                edges.push(Edge::new(edge.0, edge.1, EdgeKind::Calls));
+            }
+        }
+    }
+}
+
+fn extension_of(path: &str) -> &str {
+    Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
 }
 
 fn plural(word: &str, n: usize) -> String {
