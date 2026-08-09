@@ -1,0 +1,15 @@
+{
+  "name": "@codeatlas/dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CodeAtlas dashboard. Map types are generated from the published contract (contract/map.schema.json); run `npm run generate` after the schema changes.",
+  "type": "module",
+  "scripts": {
+    "generate": "json2ts --input ../contract/map.schema.json --output src/map.generated.ts --bannerComment \"/* Generated from contract/map.schema.json by json-schema-to-typescript. DO NOT EDIT — run \\`npm run generate\\` in dashboard/. */\" --additionalProperties false",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "json-schema-to-typescript": "^15.0.4",
+    "typescript": "^5.9.3"
+  }
+}

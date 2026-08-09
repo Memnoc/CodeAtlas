@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  rust:
+    name: Rust build + tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Build
+        run: cargo build --workspace
+      - name: Test
+        run: cargo test --workspace
+
+  contract:
+    name: Contract drift + TS typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install TS toolchain
+        run: npm ci
+        working-directory: dashboard
+      - name: Regenerate JSON Schema
+        run: cargo run -p codeatlas -- schema > contract/map.schema.json
+      - name: Regenerate TypeScript types
+        run: npm run generate
+        working-directory: dashboard
+      - name: Fail on drift against committed artifacts
+        run: |
+          git diff --exit-code -- contract/ dashboard/ || {
+            echo "::error::Committed contract artifacts drift from the Rust structs."
+            echo "Regenerate with: cargo run -p codeatlas -- schema > contract/map.schema.json"
+            echo "            and: (cd dashboard && npm run generate)"
+            exit 1
+          }
+      - name: Typecheck dashboard package
+        run: npm run typecheck
+        working-directory: dashboard

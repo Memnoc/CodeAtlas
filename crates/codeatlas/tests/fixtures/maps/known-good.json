@@ -1,0 +1,60 @@
+{
+  "version": "0.1.0",
+  "project": {
+    "name": "external-producer-demo"
+  },
+  "nodes": [
+    {
+      "id": "file:src/main.ts",
+      "kind": "file",
+      "name": "main.ts",
+      "path": "src/main.ts",
+      "summary": "TypeScript file, 12 lines: 1 function",
+      "provenance": "structural"
+    },
+    {
+      "id": "function:src/main.ts:main",
+      "kind": "function",
+      "name": "main",
+      "path": "src/main.ts",
+      "summary": "Entry point that greets the user.",
+      "range": {
+        "start_line": 3,
+        "end_line": 9
+      },
+      "provenance": "llm"
+    },
+    {
+      "id": "class:src/greeter.ts:Greeter",
+      "kind": "class",
+      "name": "Greeter",
+      "path": "src/greeter.ts",
+      "summary": "TypeScript class",
+      "range": {
+        "start_line": 1,
+        "end_line": 14
+      },
+      "provenance": "structural"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:src/main.ts",
+      "target": "function:src/main.ts:main",
+      "kind": "contains",
+      "weight": 1.0
+    },
+    {
+      "source": "file:src/main.ts",
+      "target": "file:src/greeter.ts",
+      "kind": "imports",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/greeter.ts",
+      "target": "class:src/greeter.ts:Greeter",
+      "kind": "exports",
+      "weight": 0.5
+    }
+  ]
+}

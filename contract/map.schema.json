@@ -1,0 +1,163 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "KnowledgeGraph",
+  "type": "object",
+  "properties": {
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Edge"
+      }
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Node"
+      }
+    },
+    "project": {
+      "$ref": "#/$defs/Project"
+    },
+    "version": {
+      "description": "Semver version of the map contract this file conforms to.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "version",
+    "project",
+    "nodes",
+    "edges"
+  ],
+  "$defs": {
+    "Edge": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/EdgeKind"
+        },
+        "source": {
+          "$ref": "#/$defs/NodeId"
+        },
+        "target": {
+          "$ref": "#/$defs/NodeId"
+        },
+        "weight": {
+          "description": "Fixed weight determined by `kind`; see [`EdgeKind::weight`].",
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "source",
+        "target",
+        "kind",
+        "weight"
+      ]
+    },
+    "EdgeKind": {
+      "type": "string",
+      "enum": [
+        "contains",
+        "imports",
+        "exports",
+        "calls"
+      ]
+    },
+    "Node": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "description": "Typed ID, e.g. `file:src/main.ts` or `function:src/main.ts:main`.",
+          "$ref": "#/$defs/NodeId"
+        },
+        "kind": {
+          "$ref": "#/$defs/NodeKind"
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "description": "Repo-relative path with forward slashes.",
+          "type": "string"
+        },
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Range"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "description": "Mechanical or enriched description; provenance says which.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "name",
+        "path",
+        "summary",
+        "provenance"
+      ]
+    },
+    "NodeId": {
+      "description": "Typed node ID — the map's identity primitive. Format:\n`<kind-prefix>:<path>` for files, `<kind-prefix>:<path>:<symbol>` for\nsymbols, e.g. `file:src/main.ts` or `function:src/main.ts:main`. All ID\nminting goes through the constructors here; nothing else formats IDs.",
+      "type": "string"
+    },
+    "NodeKind": {
+      "type": "string",
+      "enum": [
+        "file",
+        "function",
+        "class"
+      ]
+    },
+    "Project": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "Provenance": {
+      "description": "Whether a node's descriptive fields were produced mechanically or by LLM\nenrichment (ADR-0005).",
+      "type": "string",
+      "enum": [
+        "structural",
+        "llm"
+      ]
+    },
+    "Range": {
+      "description": "1-based inclusive line range within the node's file.",
+      "type": "object",
+      "properties": {
+        "end_line": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "start_line": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "start_line",
+        "end_line"
+      ]
+    }
+  }
+}
