@@ -2,9 +2,13 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 import type { EntityFlowNode, LayerFlowNode } from "./graph.js";
 
 export function EntityNode({ data }: NodeProps<EntityFlowNode>) {
-  const { node } = data;
+  const { node, highlight } = data;
+  const highlightClass = highlight === undefined ? "" : ` entity-${highlight}`;
   return (
-    <div className={`entity entity-${node.kind}`} title={node.path}>
+    <div
+      className={`entity entity-${node.kind}${highlightClass}`}
+      title={node.path}
+    >
       <Handle type="target" position={Position.Top} />
       <span className="entity-kind">{node.kind}</span>
       <span className="entity-name">{node.name}</span>

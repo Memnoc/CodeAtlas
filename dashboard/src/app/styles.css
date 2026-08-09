@@ -9,6 +9,8 @@
   --accent: #7aa2f7;
   --structural: #4d5a86;
   --llm: #8459c8;
+  --changed: #f7768e;
+  --affected: #e0af68;
 }
 
 * {
@@ -229,6 +231,33 @@ body {
 
 .entity-class {
   border-left: 3px solid #e0af68;
+}
+
+/* Diff impact overlay: changed nodes and their one-hop blast radius are
+ * visually distinct from each other and from everything else. */
+.entity-changed {
+  border-color: var(--changed);
+  box-shadow: 0 0 0 2px var(--changed);
+}
+
+.entity-affected {
+  border-color: var(--affected);
+  box-shadow: 0 0 0 1px var(--affected);
+  border-style: dashed;
+}
+
+.overlay-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.overlay-counts {
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .entity-kind {

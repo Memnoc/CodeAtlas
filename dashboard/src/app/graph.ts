@@ -4,7 +4,11 @@
 import { Position, type Edge as FlowEdge, type Node as FlowNode } from "@xyflow/react";
 import type { KnowledgeGraph, Node as MapNode } from "../index.js";
 
-export type EntityData = { node: MapNode };
+export type EntityData = {
+  node: MapNode;
+  /** Diff-overlay highlight, set only while the overlay toggle is on. */
+  highlight?: "changed" | "affected";
+};
 export type LayerData = { layerId: string; label: string };
 
 export type EntityFlowNode = FlowNode<EntityData, "entity">;

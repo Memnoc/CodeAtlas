@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "changed": [
+    "file:src/main.ts",
+    "function:src/main.ts:main"
+  ],
+  "affected": [
+    "file:src/greeter.ts"
+  ],
+  "unmapped_paths": []
+}

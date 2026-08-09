@@ -7,13 +7,45 @@ import { useMemo, useState } from "react";
 import type { KnowledgeGraph, Node as MapNode } from "../index.js";
 import { searchNodes, toFlow } from "./graph.js";
 import { nodeTypes } from "./nodes.js";
+import type { DiffOverlay } from "./overlay.js";
 import "@xyflow/react/dist/style.css";
 import "./styles.css";
 
-export function MapExplorer({ map }: { map: KnowledgeGraph }) {
+export function MapExplorer({
+  map,
+  overlay,
+}: {
+  map: KnowledgeGraph;
+  /** Diff impact overlay, when `codeatlas diff` produced one. */
+  overlay?: DiffOverlay | null;
+}) {
   const { nodes, edges } = useMemo(() => toFlow(map), [map]);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showOverlay, setShowOverlay] = useState(false);
+
+  // With the toggle on, entity nodes in the overlay's sets carry a
+  // highlight; everything else renders exactly as without an overlay.
+  const shownNodes = useMemo(() => {
+    if (!showOverlay || !overlay) {
+      return nodes;
+    }
+    const changed = new Set(overlay.changed);
+    const affected = new Set(overlay.affected);
+    return nodes.map((node) => {
+      if (node.type !== "entity") {
+        return node;
+      }
+      const highlight = changed.has(node.id)
+        ? ("changed" as const)
+        : affected.has(node.id)
+          ? ("affected" as const)
+          : undefined;
+      return highlight === undefined
+        ? node
+        : { ...node, data: { ...node.data, highlight } };
+    });
+  }, [nodes, overlay, showOverlay]);
 
   const results = useMemo(() => searchNodes(map, query), [map, query]);
   const selected = useMemo(
@@ -35,6 +67,21 @@ export function MapExplorer({ map }: { map: KnowledgeGraph }) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+        {overlay && (
+          <label className="overlay-toggle">
+            <input
+              type="checkbox"
+              aria-label="Diff overlay"
+              checked={showOverlay}
+              onChange={(e) => setShowOverlay(e.target.checked)}
+            />
+            Diff overlay
+            <span className="overlay-counts">
+              {overlay.changed.length} changed · {overlay.affected.length}{" "}
+              affected
+            </span>
+          </label>
+        )}
         {query.trim() !== "" && (
           <ul className="search-results" aria-label="Search results">
             {results.map((n) => (
@@ -54,7 +101,7 @@ export function MapExplorer({ map }: { map: KnowledgeGraph }) {
       </aside>
       <main className="canvas">
         <ReactFlow
-          nodes={nodes}
+          nodes={shownNodes}
           edges={edges}
           nodeTypes={nodeTypes}
           onNodeClick={(_event, node) => {

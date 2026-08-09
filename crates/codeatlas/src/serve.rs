@@ -24,15 +24,17 @@ use crate::scan::OUTPUT_DIR;
 // URL path with precomputed MIME types.
 include!(concat!(env!("OUT_DIR"), "/embedded_assets.rs"));
 
-/// Serves the embedded dashboard and `<root>/.codeatlas/knowledge-graph.json`
-/// on 127.0.0.1 until the process is interrupted. Loopback is hardcoded — the
-/// listener cannot be pointed at a routable interface (ADR-0006). Port 0 asks
-/// the OS for a free port; the actually bound URL is printed to stdout.
+/// Serves the embedded dashboard, `<root>/.codeatlas/knowledge-graph.json`,
+/// and — when present — the diff overlay next to it, on 127.0.0.1 until the
+/// process is interrupted. Loopback is hardcoded — the listener cannot be
+/// pointed at a routable interface (ADR-0006). Port 0 asks the OS for a free
+/// port; the actually bound URL is printed to stdout.
 pub fn serve(root: &Path, port: u16) -> Result<()> {
     let root = root
         .canonicalize()
         .with_context(|| format!("cannot serve {}", root.display()))?;
     let map_path = root.join(OUTPUT_DIR).join("knowledge-graph.json");
+    let overlay_path = root.join(OUTPUT_DIR).join(crate::diff::OVERLAY_FILE);
     if !map_path.exists() {
         bail!(
             "no map at {} — run `codeatlas scan {}` first",
@@ -57,10 +59,11 @@ pub fn serve(root: &Path, port: u16) -> Result<()> {
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         let map_path = map_path.clone();
+        let overlay_path = overlay_path.clone();
         thread::spawn(move || {
             // Per-connection errors (client hung up mid-request) only affect
             // that client; the server must outlive them.
-            let _ = handle(stream, &map_path);
+            let _ = handle(stream, &map_path, &overlay_path);
         });
     }
     Ok(())
@@ -68,7 +71,7 @@ pub fn serve(root: &Path, port: u16) -> Result<()> {
 
 /// Answers one request and closes the connection (`Connection: close` — the
 /// dashboard is a handful of requests, keep-alive buys nothing but state).
-fn handle(stream: TcpStream, map_path: &PathBuf) -> std::io::Result<()> {
+fn handle(stream: TcpStream, map_path: &PathBuf, overlay_path: &PathBuf) -> std::io::Result<()> {
     let mut reader = BufReader::new(stream);
     let mut request_line = String::new();
     reader.read_line(&mut request_line)?;
@@ -109,6 +112,20 @@ fn handle(stream: TcpStream, map_path: &PathBuf) -> std::io::Result<()> {
                     map_path.display()
                 )
                 .as_bytes(),
+            ),
+        };
+    }
+
+    if path == "/api/diff" {
+        // The overlay is optional: absent means `codeatlas diff` has not
+        // run, and the dashboard hides its toggle on the 404.
+        return match std::fs::read(overlay_path) {
+            Ok(overlay) => respond(&mut stream, "200 OK", "application/json", &overlay),
+            Err(_) => respond(
+                &mut stream,
+                "404 Not Found",
+                "application/json",
+                b"{\"error\":\"no diff overlay - run `codeatlas diff` first\"}",
             ),
         };
     }

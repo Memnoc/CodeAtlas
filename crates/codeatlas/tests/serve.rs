@@ -193,6 +193,43 @@ fn serve_delivers_assets_with_correct_mime_types() {
 }
 
 #[test]
+fn serve_delivers_the_diff_overlay_as_json() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    // The route serves whatever overlay `codeatlas diff` left on disk; the
+    // seam is the artifact, so writing it directly is equivalent and keeps
+    // this test free of git setup.
+    fs::write(
+        repo.path().join(".codeatlas/diff-overlay.json"),
+        "{\"version\":1,\"changed\":[\"file:src/util.ts\"],\"affected\":[\"file:src/main.ts\"],\"unmapped_paths\":[]}\n",
+    )
+    .unwrap();
+    let server = serve(repo.path());
+
+    let (status, headers, body) = http_get(server.port, "/api/diff");
+    assert!(status.contains("200"), "overlay status: {status}");
+    assert_eq!(header(&headers, "Content-Type"), Some("application/json"));
+    let overlay: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(overlay["changed"][0], "file:src/util.ts");
+    assert_eq!(overlay["affected"][0], "file:src/main.ts");
+}
+
+#[test]
+fn serve_returns_404_when_no_diff_overlay_exists() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let server = serve(repo.path());
+
+    let (status, _, body) = http_get(server.port, "/api/diff");
+    assert!(status.contains("404"), "expected 404, got: {status}");
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        error["error"].as_str().unwrap().contains("codeatlas diff"),
+        "error must say how to produce an overlay: {error}"
+    );
+}
+
+#[test]
 fn serve_returns_404_for_unknown_paths() {
     let repo = materialize("simple");
     scan(repo.path());

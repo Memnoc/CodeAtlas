@@ -9,14 +9,14 @@ dashboard toggle renders it. Zero LLM involvement (spec story 7).
 
 **Blocked by:** 03 — Import and call edges; 08 — Dashboard renders a map.
 
-**Status:** ready
+**Status:** done
 
-- [ ] The diff command derives changed nodes from git diff, including
+- [x] The diff command derives changed nodes from git diff, including
       uncommitted working-tree changes
-- [ ] The one-hop blast radius over the graph's edges is computed and written
+- [x] The one-hop blast radius over the graph's edges is computed and written
       as an overlay artifact in `.codeatlas/`
-- [ ] The dashboard offers an overlay toggle that highlights changed and
+- [x] The dashboard offers an overlay toggle that highlights changed and
       affected nodes distinctly
-- [ ] Fixture test: modify one file, assert the overlay contains exactly the
+- [x] Fixture test: modify one file, assert the overlay contains exactly the
       expected changed and affected node sets
-- [ ] Runs on the deterministic path — no LLM, no network
+- [x] Runs on the deterministic path — no LLM, no network

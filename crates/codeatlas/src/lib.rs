@@ -1,3 +1,4 @@
+pub mod diff;
 pub mod enrich;
 pub mod map;
 pub mod parsers;
@@ -31,6 +32,14 @@ enum Command {
         /// enrichment provider (ADR-0004)
         #[arg(long)]
         enrich: bool,
+    },
+    /// Overlay a git diff's impact on the map: changed nodes and their
+    /// one-hop blast radius, written to .codeatlas/diff-overlay.json.
+    /// Deterministic — git in, overlay out, no LLM, no network.
+    Diff {
+        /// Repository root holding .codeatlas/ (defaults to the current
+        /// directory)
+        path: Option<PathBuf>,
     },
     /// Print the JSON Schema of the map contract
     Schema,
@@ -78,6 +87,25 @@ pub fn run() -> ExitCode {
                 }
                 Err(err) => {
                     eprintln!("error: {err:#} (the structural map is intact)");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Command::Diff { path } => {
+            let root = path.unwrap_or_else(|| PathBuf::from("."));
+            match diff::run(&root) {
+                Ok(overlay) => {
+                    eprintln!(
+                        "{} changed nodes, {} affected — overlay at {}/{}",
+                        overlay.changed.len(),
+                        overlay.affected.len(),
+                        scan::OUTPUT_DIR,
+                        diff::OVERLAY_FILE
+                    );
+                    ExitCode::SUCCESS
+                }
+                Err(err) => {
+                    eprintln!("error: {err:#}");
                     ExitCode::FAILURE
                 }
             }
