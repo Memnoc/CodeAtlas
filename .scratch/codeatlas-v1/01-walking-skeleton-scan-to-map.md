@@ -11,16 +11,16 @@ ticket thickens.
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready
+**Status:** done
 
-- [ ] A Cargo workspace builds a single `codeatlas` binary
-- [ ] `codeatlas scan` walks the repo honoring ignore rules (gitignore plus
+- [x] A Cargo workspace builds a single `codeatlas` binary
+- [x] `codeatlas scan` walks the repo honoring ignore rules (gitignore plus
       sensible defaults like `node_modules`, `target`, `.git`)
-- [ ] The emitted map has a semver `version` field, project metadata, and file
+- [x] The emitted map has a semver `version` field, project metadata, and file
       nodes with typed IDs (`file:<relative-path>`)
-- [ ] The JSON Schema is generated from the Rust structs (schemars), not
-      written by hand
-- [ ] A fixture repo committed in-tree has a test asserting the emitted map
+- [x] The JSON Schema is generated from the Rust structs (schemars), not
+      written by hand (`codeatlas schema` emits it)
+- [x] A fixture repo committed in-tree has a test asserting the emitted map
       contains the expected file nodes and validates against the generated
       schema
-- [ ] Two runs on the same input produce identical output
+- [x] Two runs on the same input produce identical output
