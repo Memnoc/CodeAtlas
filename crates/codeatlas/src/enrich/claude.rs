@@ -36,7 +36,9 @@ use serde_json::json;
 use super::{EnrichmentProvider, EnrichmentRequest, EnrichmentResponse};
 
 /// The one URL this binary can ever talk to (ADR-0006). Hardcoded on
-/// purpose: no env var, flag, or config may redirect enrichment traffic.
+/// purpose: no env var, flag, or config may redirect enrichment traffic —
+/// which [`agent`] enforces at the transport level too, by refusing to
+/// follow redirects and ignoring proxy env vars.
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 
 /// Spec decision: the default enrichment model, overridable with `--model`.
@@ -262,13 +264,33 @@ fn parse_response(raw: &str) -> Result<EnrichmentResponse> {
 /// [`API_URL`]. Deliberately a thin, untested shim — everything worth
 /// testing lives in the pure functions above. Any transport or HTTP-status
 /// failure degrades the enrichment step with a clear message.
-fn post(body: &serde_json::Value, credentials: &Credentials) -> Result<String> {
-    let agent: ureq::Agent = ureq::Agent::config_builder()
+/// The one place the HTTP agent is configured; [`post`] uses it for every
+/// call and a unit test pins the egress-critical settings via
+/// `Agent::config()`.
+///
+/// Two ureq defaults are explicitly overridden because they would break
+/// ADR-0006's single-egress-destination guarantee:
+///
+/// - `max_redirects(0)` — ureq follows up to 10 redirects by default, and
+///   a 3xx Location may point at any host while `x-api-key` and
+///   `anthropic-beta` are retained cross-host (only `authorization` and
+///   `cookie` are stripped). A redirecting response must be an ordinary
+///   error, never a request to a second destination.
+/// - `proxy(None)` — ureq honors `HTTPS_PROXY`/`ALL_PROXY` by default,
+///   which would let the environment choose the TCP egress destination.
+///   The socket goes direct to [`API_URL`]'s host or nowhere.
+fn agent() -> ureq::Agent {
+    ureq::Agent::config_builder()
         .http_status_as_error(false)
         .timeout_global(Some(Duration::from_secs(300)))
+        .max_redirects(0)
+        .proxy(None)
         .build()
-        .into();
-    let mut request = agent
+        .into()
+}
+
+fn post(body: &serde_json::Value, credentials: &Credentials) -> Result<String> {
+    let mut request = agent()
         .post(API_URL)
         .header("content-type", "application/json")
         .header("anthropic-version", ANTHROPIC_VERSION);
@@ -422,6 +444,42 @@ mod tests {
         .to_string();
         let err = parse_response(&raw).unwrap_err();
         assert!(err.to_string().contains("schema"), "{err}");
+    }
+
+    #[test]
+    fn the_agent_can_neither_follow_redirects_nor_use_an_env_proxy() {
+        // ADR-0006: api.anthropic.com is the binary's only possible egress
+        // destination. Two ureq defaults would break that guarantee —
+        // following 3xx redirects to an attacker-chosen Location (with the
+        // x-api-key header retained cross-host), and honoring
+        // HTTPS_PROXY/ALL_PROXY so the TCP destination becomes
+        // env-controlled. Declare a proxy here to prove the agent ignores
+        // it: ureq reads these env vars when the config is built, so a
+        // pre-fix agent would show Some(proxy).
+        //
+        // SAFETY: set_var is process-global; no other test in this crate
+        // reads proxy env vars, and nothing else runs `post()` in tests.
+        unsafe {
+            std::env::set_var("HTTPS_PROXY", "http://127.0.0.1:39999");
+            std::env::set_var("ALL_PROXY", "http://127.0.0.1:39999");
+        }
+        let agent = agent();
+        let config = agent.config();
+        assert_eq!(
+            config.max_redirects(),
+            0,
+            "redirects must be hard-disabled: a 3xx must never move the \
+             request (or the API key) to another host"
+        );
+        assert!(
+            config.proxy().is_none(),
+            "the agent must ignore proxy env vars: the socket goes direct \
+             to api.anthropic.com or nowhere"
+        );
+        unsafe {
+            std::env::remove_var("HTTPS_PROXY");
+            std::env::remove_var("ALL_PROXY");
+        }
     }
 
     #[test]
