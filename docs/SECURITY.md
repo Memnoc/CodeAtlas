@@ -72,11 +72,13 @@ that build; `scan --enrich` fails with a clear "compiled without the
 
 - `crates/codeatlas/tests/sealed.rs` —
   `sealed_dependency_tree_links_no_networking_crates` shells out to
-  `cargo tree --no-default-features --locked --offline` and asserts none of
-  ureq, rustls, webpki(-roots), tokio, hyper, reqwest, native-tls, or
+  `cargo tree -e normal --no-default-features --locked --offline` and asserts
+  none of ureq, rustls, webpki(-roots), tokio, hyper, reqwest, native-tls, or
   openssl (nor any crate in their families) is linked;
   `default_dependency_tree_contains_the_http_client_control` proves the
-  probe is live by asserting the default tree DOES contain `ureq`
+  probe is live by asserting the default tree DOES contain `ureq`.
+  The `-e normal` is load-bearing — see "Reproducing the tree probe by hand"
+  below before reading anything into a raw `cargo tree`
 - `scripts/sealed-probe.sh` (CI `sealed` job) — byte-scans the genuinely
   sealed binary for `api.anthropic.com` and `ureq` (absent), with the
   default binary as a live control (present), and runs sealed
@@ -154,6 +156,28 @@ The artifact also self-discloses which fields were redacted and how often.
   server. This affects availability of the local dashboard only, never
   confidentiality: the server reads just the map and overlay from disk and
   serves embedded assets.
+- **Reproducing the tree probe by hand.** `cargo tree` shows
+  dev-dependencies by default, and the test-only `jsonschema` crate pulls in
+  `reqwest` and `tokio`. So the obvious hand-check —
+
+  ```
+  cargo tree -p codeatlas --no-default-features | grep -iE 'reqwest|tokio|rustls'
+  ```
+
+  — returns dozens of hits and looks alarming. Those crates are linked into
+  *test* binaries only; none is a dependency of the shipped binary. Pass
+  `-e normal` to see the shipping tree, which is what
+  `sealed_dependency_tree_links_no_networking_crates` asserts against:
+
+  ```
+  cargo tree -p codeatlas -e normal --no-default-features   # 0 networking crates
+  cargo tree -p codeatlas -e normal                         # ureq + rustls, as expected
+  ```
+
+  Two independent checks confirm the shipped artifact rather than the
+  resolver's view of it: the sealed binary contains no `api.anthropic.com`
+  bytes (`scripts/sealed-probe.sh`), and it dynamically links only `libc`
+  and `libgcc_s` (`ldd`).
 - **Trust boundary of the probes.** `cargo tree` reads `Cargo.lock`
   (`--locked --offline`, so it can neither rewrite the lockfile nor touch
   the network); a compromised toolchain is out of scope, as for any build.
