@@ -451,6 +451,14 @@ attribution.
   emitted one, and the dashboard renders such a map without throwing. Worth a
   decision in V2: either the schema cannot express it and the check belongs in
   `share`, or the contract README should say plainly that producers own it.
+- **One dashboard egress assertion can pass without asserting anything.**
+  Found 2026-08-10, after this walk, and filed as ticket 19: the egress test
+  and the Rust build script both build into `dashboard/dist`, and when the
+  build script wins the race the "no websocket endpoint" check loops over an
+  empty directory and reports success. Story 17's verdict does not rest on it
+  — the served production bundle was audited directly over HTTP, independently
+  of `dist` — but the phrase "37 dashboard tests" above should be read knowing
+  one of them cannot fail under the right timing.
 - **The dashboard renders React Flow's attribution link** to
   `reactflow.dev?utm_source=attribution`, in the served page and in the share
   artifact. It is an `<a>`, not a request, so stories 8 and 17 hold — nothing
