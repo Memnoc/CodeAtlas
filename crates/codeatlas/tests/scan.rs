@@ -58,6 +58,21 @@ fn node_ids(map: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
+/// The number a mechanical tour label cites after `key` — e.g.
+/// `cited("src/util.ts — fan-in 4, fan-out 0", "fan-in ")` is 4.
+fn cited(label: &str, key: &str) -> u64 {
+    let at = label
+        .find(key)
+        .unwrap_or_else(|| panic!("label does not cite `{key}`: {label}"));
+    let digits: String = label[at + key.len()..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits
+        .parse()
+        .unwrap_or_else(|_| panic!("no number after `{key}`: {label}"))
+}
+
 fn has_edge(map: &serde_json::Value, kind: &str, source: &str, target: &str) -> bool {
     map["edges"]
         .as_array()
@@ -262,6 +277,43 @@ fn import_statements_resolve_to_imports_edges_between_file_nodes() {
                     .is_some_and(|t| t.contains("missing") || t.contains("node:fs"))
         }),
         "unresolvable import leaked into the map: {edges:?}"
+    );
+}
+
+#[test]
+fn typescript_nodenext_specifiers_resolve_to_their_source_files() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let edges = map["edges"].as_array().unwrap();
+
+    // TypeScript under NodeNext requires source to name the emitted file:
+    // `./util.js` is `util.ts` on disk. Dropping these leaves whole
+    // TypeScript codebases looking unconnected.
+    assert!(
+        has_edge(&map, "imports", "file:src/nodenext.ts", "file:src/util.ts"),
+        "`./util.js` did not resolve to util.ts: {edges:?}"
+    );
+    assert!(
+        has_edge(
+            &map,
+            "imports",
+            "file:src/nodenext.ts",
+            "file:src/widget.tsx"
+        ),
+        "`./widget.jsx` did not resolve to widget.tsx: {edges:?}"
+    );
+
+    // The literal path still wins. `twin.js` genuinely exists beside
+    // `twin.ts`, so rewriting the extension must not shadow it — otherwise
+    // the fix breaks every JavaScript project it touches.
+    assert!(
+        has_edge(&map, "imports", "file:src/nodenext.ts", "file:src/twin.js"),
+        "a real .js file lost to its .ts sibling: {edges:?}"
+    );
+    assert!(
+        !has_edge(&map, "imports", "file:src/nodenext.ts", "file:src/twin.ts"),
+        "specifier resolved past a file that exists: {edges:?}"
     );
 }
 
@@ -575,14 +627,40 @@ fn tour_steps_are_topology_ordered_with_mechanical_labels() {
     let tour = map["tour"].as_array().expect("map must carry a tour");
     assert!(!tour.is_empty());
 
+    // Import degree read straight off the emitted edges. The mechanical
+    // label claims these numbers, so the test checks the claim rather than
+    // hard-coding counts that every new fixture file would invalidate.
+    let mut fan_in: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+    let mut fan_out: std::collections::HashMap<&str, u64> = std::collections::HashMap::new();
+    for edge in map["edges"].as_array().unwrap() {
+        if edge["kind"] != "imports" {
+            continue;
+        }
+        *fan_out.entry(edge["source"].as_str().unwrap()).or_default() += 1;
+        *fan_in.entry(edge["target"].as_str().unwrap()).or_default() += 1;
+    }
+
     let node_ids: std::collections::HashSet<String> = node_ids(&map).into_iter().collect();
     let mut steps: Vec<&str> = Vec::new();
     for step in tour {
         let node = step["node"].as_str().unwrap();
         assert!(node_ids.contains(node), "dangling tour step: {step:?}");
+        let label = step["label"].as_str().unwrap();
         assert!(
-            !step["label"].as_str().unwrap().is_empty(),
+            !label.is_empty(),
             "tour step must carry a mechanical label: {step:?}"
+        );
+        // A label that cites topology must cite the topology actually
+        // emitted, or it quietly lies as the graph grows around it.
+        assert_eq!(
+            cited(label, "fan-in "),
+            fan_in.get(node).copied().unwrap_or(0),
+            "label cites a fan-in the graph does not have: {step:?}"
+        );
+        assert_eq!(
+            cited(label, "fan-out "),
+            fan_out.get(node).copied().unwrap_or(0),
+            "label cites a fan-out the graph does not have: {step:?}"
         );
         assert_eq!(step["provenance"], "structural");
         steps.push(node);

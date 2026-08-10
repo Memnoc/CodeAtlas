@@ -119,6 +119,41 @@ describe("CodeAtlas's own self-scan map", () => {
     );
   });
 
+  it("resolves the NodeNext import specifiers the dashboard is written with", () => {
+    const byId = new Map(map.nodes.map((n) => [n.id, n]));
+    const imports = map.edges
+      .filter((e) => e.kind === "imports")
+      .map(
+        (e) =>
+          [byId.get(e.source)?.path, byId.get(e.target)?.path] as const,
+      );
+
+    // TypeScript under NodeNext obliges this source to say "./graph.js"
+    // for a file that is graph.ts.
+    expect(imports).toContainEqual([
+      "dashboard/src/app/MapExplorer.tsx",
+      "dashboard/src/app/graph.ts",
+    ]);
+
+    // Throughout, not merely somewhere. While these specifiers went
+    // unresolved the whole subtree was islands: eleven files in src/app
+    // sharing one edge between them.
+    const connected = new Set(imports.flat());
+    const orphans = map.nodes
+      .filter((n) => n.kind === "file" && n.path.startsWith("dashboard/src/"))
+      .map((n) => n.path)
+      .filter((path) => !connected.has(path));
+    expect(orphans).toEqual([]);
+
+    // And the consequence that made it visible: the tour ranks by import
+    // degree, so an edgeless dashboard could never appear on the walk. It
+    // held none of the twelve stops.
+    const tourPaths = (map.tour ?? []).map((step) => byId.get(step.node)?.path);
+    expect(
+      tourPaths.filter((path) => path?.startsWith("dashboard/")),
+    ).not.toHaveLength(0);
+  });
+
   it("groups the self-scan's domain flows by domain", () => {
     render(<MapExplorer map={map} />);
 

@@ -9,6 +9,19 @@ use super::{Analysis, Call, Import, ImportedName, Parser, Symbol, SymbolKind};
 /// Extensions tried, in order, when an import specifier omits one.
 const RESOLVE_EXTENSIONS: &[&str] = &["ts", "tsx", "js", "jsx", "mjs", "cjs"];
 
+/// TypeScript's NodeNext module resolution obliges source to name the file
+/// the compiler will *emit*, not the one on disk: `import … from "./x.js"`
+/// in a TypeScript project means `x.ts`. Each entry maps an emitted
+/// extension to the source extensions it may stand for, tried in order.
+///
+/// Extensions are spelled without their dot on both sides, as in
+/// [`RESOLVE_EXTENSIONS`].
+///
+/// `mjs` and `cjs` follow the same convention (`mts`, `cts`), but those
+/// extensions are not scanned yet, so there is nothing here for them to
+/// resolve to.
+const NODENEXT_SOURCES: &[(&str, &[&str])] = &[("js", &["ts", "tsx"]), ("jsx", &["tsx"])];
+
 struct TsJs {
     name: &'static str,
     extensions: &'static [&'static str],
@@ -79,6 +92,16 @@ impl Parser for TsJs {
     /// specifiers only, with extension inference and the index-file
     /// convention. Bare package names never resolve — packages are not part
     /// of the map.
+    ///
+    /// Candidates are tried in a fixed order, so a file set that admits
+    /// several always resolves to the same one:
+    ///
+    /// 1. the literal path, which is why a real `x.js` beside an `x.ts` is
+    ///    never shadowed by the rewrite below;
+    /// 2. the TypeScript source a NodeNext specifier stands for
+    ///    ([`NODENEXT_SOURCES`]);
+    /// 3. the path with each of [`RESOLVE_EXTENSIONS`] appended;
+    /// 4. the same again as `<path>/index.<ext>`.
     fn resolve_import(
         &self,
         importer: &str,
@@ -104,19 +127,28 @@ impl Parser for TsJs {
         if files.contains(&base) {
             return Some(base);
         }
-        for ext in RESOLVE_EXTENSIONS {
-            let candidate = format!("{base}.{ext}");
-            if files.contains(&candidate) {
-                return Some(candidate);
-            }
-        }
-        for ext in RESOLVE_EXTENSIONS {
-            let candidate = format!("{base}/index.{ext}");
-            if files.contains(&candidate) {
-                return Some(candidate);
-            }
-        }
-        None
+        let scanned = |candidate: &String| files.contains(candidate);
+        NODENEXT_SOURCES
+            .iter()
+            .find_map(|(emitted, sources)| {
+                let stem = base.strip_suffix(emitted)?.strip_suffix('.')?;
+                sources
+                    .iter()
+                    .map(|ext| format!("{stem}.{ext}"))
+                    .find(scanned)
+            })
+            .or_else(|| {
+                RESOLVE_EXTENSIONS
+                    .iter()
+                    .map(|ext| format!("{base}.{ext}"))
+                    .find(scanned)
+            })
+            .or_else(|| {
+                RESOLVE_EXTENSIONS
+                    .iter()
+                    .map(|ext| format!("{base}/index.{ext}"))
+                    .find(scanned)
+            })
     }
 }
 

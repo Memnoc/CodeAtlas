@@ -65,31 +65,72 @@ for directories that plainly do. The summaries were right; the map was wrong.
 
 **Blocked by:** none — 02 and 03 are done, this corrects them.
 
-**Status:** ready
+**Status:** done
 
-- [ ] A TypeScript file importing `./x.js` resolves to `x.ts` when that file
+- [x] A TypeScript file importing `./x.js` resolves to `x.ts` when that file
       is in the scanned set, and `./x.jsx` resolves to `x.tsx`
-- [ ] The literal path still wins: a genuine `x.js` sitting beside an `x.ts`
+- [x] The literal path still wins: a genuine `x.js` sitting beside an `x.ts`
       resolves to `x.js`, so JavaScript projects are unaffected
-- [ ] Candidate order is fixed and documented, so resolution stays
+- [x] Candidate order is fixed and documented, so resolution stays
       deterministic when several candidates exist
-- [ ] The `simple` fixture gains a NodeNext-style specifier — the convention
+- [x] The `simple` fixture gains a NodeNext-style specifier — the convention
       that was missing is now covered by the suite, not just by this fix
-- [ ] Existing resolution is unregressed: extensionless specifiers, index
+- [x] Existing resolution is unregressed: extensionless specifiers, index
       files, and bare package names (which must still resolve to nothing)
-- [ ] Referential integrity holds — no edge references a missing node
-- [ ] Scanning this repository produces import edges throughout
+- [x] Referential integrity holds — no edge references a missing node
+- [x] Scanning this repository produces import edges throughout
       `dashboard/src/`, asserted at a floor well above today's single edge
 
-**Worth deciding while in here, not necessarily doing:**
+**How it landed.** `resolve_import` gained one step between the literal path
+and extension inference: if the specifier ends in an extension TypeScript
+emits, try the source extensions it stands for (`NODENEXT_SOURCES` — `js` to
+`ts`/`tsx`, `jsx` to `tsx`). Placing it *after* the literal check is what
+keeps a genuine `x.js` beside an `x.ts` resolving to itself, and the whole
+four-step order is now documented on the function. Four files joined the
+`simple` fixture: `nodenext.ts` reaching all three cases, `widget.tsx`, and a
+`twin.js`/`twin.ts` decoy pair whose only job is to prove the rewrite never
+shadows a file that exists.
 
-- `.mts` and `.cts` are not scanned at all — the TypeScript parser claims
-  only `["ts"]` and the Tsx parser `["tsx"]` (`ts_js.rs:22,27`). So the
-  `./x.mjs → x.mts` half of the NodeNext convention has nothing to resolve
-  to. Widening the extension list is a separate, smaller slice.
-- `./x.js` may also legitimately resolve to `x.d.ts`. Declaration files are
-  scanned today (they end in `.ts`), so decide whether they should be import
-  targets or ignored as non-source.
-- The other parsers deserve the same question asked of them: each one's
-  `resolve_import` was verified against a fixture written by the same author
-  as the resolver, which is precisely the arrangement that produced this bug.
+Measured on this repository: import edges **88 → 129**, `dashboard/src/app`
+from 1 edge to 33, every one of the 14 files under `dashboard/src/` now
+carrying at least one, and the 12-step guided tour going from **zero**
+dashboard files to five.
+
+`/crosscheck` findings folded back in. The first version pinned
+`enrich.rs` to `fan-in 4` — an exact count on a fixture 35 tests share, so
+every future fixture file would have re-broken an enrichment test over
+arithmetic it does not care about. That assertion is now shape-only, and the
+arithmetic moved to where it belongs: `tests/scan.rs` parses each mechanical
+tour label and checks the fan-in and fan-out it cites against the edges
+actually emitted, which is a truer invariant than any constant and cannot
+rot as the fixture grows. The dashboard assertion was a bare count over
+`src/app` — a count is not "throughout", so it now asserts zero orphans
+across all of `dashboard/src/` plus the tour consequence. The resolver's
+three hand-rolled candidate loops collapsed into three iterator expressions
+reading straight off the documented order, and `NODENEXT_SOURCES` lost its
+dotted-versus-undotted mismatch with `RESOLVE_EXTENSIONS`.
+
+Declined: hoisting a shared `byId` in the dashboard test (one line, two
+independent tests) and trimming the fixture comments further — for the
+`twin.js`/`twin.ts` pair the reason they exist is unrecoverable from the code.
+
+**Decisions taken on the open questions:**
+
+- `.mts`/`.cts` — **not now.** Those extensions are not scanned at all
+  (`ts_js.rs` claims `["ts"]`, `["tsx"]`, `["js","jsx","mjs","cjs"]`), so a
+  `./x.mjs` rewrite would have nothing to resolve to. Recorded in the
+  `NODENEXT_SOURCES` doc comment; widening the extension list is its own
+  slice.
+- `./x.js` → `x.d.ts` — **no.** A declaration file describes an
+  implementation rather than being one, and wherever both exist the literal
+  path already wins. A repo holding only `x.d.ts` genuinely does not contain
+  the module being imported, so no edge is the honest answer.
+- **The other parsers do have the same gap, and it is now evidenced rather
+  than suspected.** `crates/codeatlas/tests/*.rs` write
+  `use codeatlas::map::MAP_CONTRACT_VERSION`, and this repository's map holds
+  **zero** import edges from `crates/codeatlas/tests/` to
+  `crates/codeatlas/src/`: the Rust parser does not resolve own-crate paths
+  to the files behind them. Same shape of defect, different parser, and it
+  needs its own decisions (own crate versus workspace siblings versus
+  external crates), so it wants its own ticket rather than a widening of
+  this one.
