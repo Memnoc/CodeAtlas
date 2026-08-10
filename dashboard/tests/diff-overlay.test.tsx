@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import type { KnowledgeGraph } from "../src/index.js";
 import { MapExplorer } from "../src/app/MapExplorer.js";
 import type { DiffOverlay } from "../src/app/overlay.js";
+import { openRegion } from "./drive.js";
 import smallMap from "./fixtures/small-map.json";
 import smallOverlay from "./fixtures/small-overlay.json";
 
@@ -34,30 +35,51 @@ describe("diff impact overlay", () => {
     expect(screen.queryByLabelText("Diff overlay")).not.toBeInTheDocument();
   });
 
-  it("renders a toggle when an overlay is present, off by default", () => {
+  it("renders a toggle when an overlay is present, off by default", async () => {
+    const user = userEvent.setup();
     render(<MapExplorer map={map} overlay={overlay} />);
 
     const toggle = screen.getByLabelText("Diff overlay");
     expect(toggle).not.toBeChecked();
     // Untoggled, the map renders exactly as without an overlay.
+    await openRegion(user, "Source code");
     expect(document.querySelector(".entity-changed")).toBeNull();
     expect(document.querySelector(".entity-affected")).toBeNull();
   });
 
-  it("highlights changed and affected nodes distinctly when toggled on", async () => {
+  it("highlights changed and affected files distinctly when toggled on", async () => {
     const user = userEvent.setup();
     render(<MapExplorer map={map} overlay={overlay} />);
 
     await user.click(screen.getByLabelText("Diff overlay"));
+    await openRegion(user, "Source code");
 
-    // Changed: the edited file node and its contained function.
     expect(highlightOf("file:src/main.ts")).toBe("changed");
-    expect(highlightOf("function:src/main.ts:main")).toBe("changed");
-    // Affected: the one-hop neighbor, styled distinctly from changed.
+    // The one-hop neighbour, styled distinctly from changed.
     expect(highlightOf("file:src/greeter.ts")).toBe("affected");
-    // Everything else: untouched.
-    expect(highlightOf("class:src/greeter.ts:Greeter")).toBe("none");
+
+    // A region the overlay never touches stays clean.
+    await openRegion(user, "docs");
     expect(highlightOf("file:docs/guide.md")).toBe("none");
+  });
+
+  it("rolls a changed symbol up to the file the canvas draws", async () => {
+    const user = userEvent.setup();
+    // The overlay marks symbols as well as files. The canvas draws files, so
+    // a symbol-only mark has to surface on its file — otherwise the reader
+    // is told nothing changed in a file that did.
+    const symbolOnly: DiffOverlay = {
+      ...overlay,
+      changed: ["function:src/main.ts:main"],
+      affected: [],
+    };
+    render(<MapExplorer map={map} overlay={symbolOnly} />);
+
+    await user.click(screen.getByLabelText("Diff overlay"));
+    await openRegion(user, "Source code");
+
+    expect(highlightOf("file:src/main.ts")).toBe("changed");
+    expect(highlightOf("file:src/greeter.ts")).toBe("none");
   });
 
   it("removes every highlight when toggled back off", async () => {
@@ -66,6 +88,7 @@ describe("diff impact overlay", () => {
 
     await user.click(screen.getByLabelText("Diff overlay"));
     await user.click(screen.getByLabelText("Diff overlay"));
+    await openRegion(user, "Source code");
 
     expect(document.querySelector(".entity-changed")).toBeNull();
     expect(document.querySelector(".entity-affected")).toBeNull();

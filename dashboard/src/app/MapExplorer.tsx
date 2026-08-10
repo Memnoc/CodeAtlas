@@ -1,23 +1,66 @@
 // The dashboard's seam component: give it a map conforming to the published
-// contract and it renders the whole explorer — canvas, search, detail panel.
-// It consumes only the generated contract types (ADR-0003) and never makes a
-// network request.
+// contract and it renders the whole explorer — header, search, canvas, right
+// panel. It consumes only the generated contract types (ADR-0003) and never
+// makes a network request.
+//
+// The canvas draws regions, not files. A repository has hundreds of files and
+// a handful of regions, and the overview's job is to be readable at a glance;
+// the files are one click away, inside the region that holds them.
 import {
+  Background,
+  Controls,
+  MarkerType,
+  MiniMap,
   ReactFlow,
   type Edge as FlowEdge,
   type ReactFlowInstance,
 } from "@xyflow/react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KnowledgeGraph, Node as MapNode } from "../index.js";
+import { FilesPanel } from "./FilesPanel.js";
 import { FlowsPanel } from "./FlowsPanel.js";
-import { type AppFlowNode, nodesById, searchNodes, toFlow } from "./graph.js";
+import {
+  fileFlow,
+  type AppFlowNode,
+  nodesById,
+  regionFlow,
+  regionNodeId,
+  searchNodes,
+} from "./graph.js";
+import { Header, type Mode } from "./Header.js";
+import { InfoPanel } from "./InfoPanel.js";
 import { nodeTypes } from "./nodes.js";
 import type { DiffOverlay } from "./overlay.js";
+import { PathFinder } from "./PathFinder.js";
 import { ProvenanceBadge } from "./ProvenanceBadge.js";
-import { ThemeToggle } from "./ThemeToggle.js";
+import {
+  fileOwners,
+  regionLinks,
+  regionsOf,
+  type RegionKind,
+} from "./regions.js";
+import { shortestPath } from "./paths.js";
 import { TourPanel } from "./TourPanel.js";
 import "@xyflow/react/dist/style.css";
 import "./styles.css";
+
+type Tab = "info" | "files";
+
+/** How long the viewport takes to travel, matching the canvas transitions in
+ * `styles.css`. One number, so the cards and the camera settle together. */
+const FIT_MS = 240;
+
+/** Zero when the reader has asked their system for less motion. Read at the
+ * moment of the move rather than cached, so changing the setting takes effect
+ * without a reload, and guarded because a test environment need not implement
+ * `matchMedia`. */
+function motionDuration(ms: number): number {
+  const reduced =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  return reduced ? 0 : ms;
+}
 
 export function MapExplorer({
   map,
@@ -27,93 +70,272 @@ export function MapExplorer({
   /** Diff impact overlay, when `codeatlas diff` produced one. */
   overlay?: DiffOverlay | null;
 }) {
-  const { nodes, edges } = useMemo(() => toFlow(map), [map]);
-  const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<Mode>("overview");
+  const [grouping, setGrouping] = useState<RegionKind>("structural");
+  const [openRegionId, setOpenRegionId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [tab, setTab] = useState<Tab>("info");
+  const [pathOpen, setPathOpen] = useState(false);
+  const [pathFrom, setPathFrom] = useState<MapNode | null>(null);
+  const [pathTo, setPathTo] = useState<MapNode | null>(null);
   const [showOverlay, setShowOverlay] = useState(false);
   const canvas = useRef<ReactFlowInstance<AppFlowNode, FlowEdge> | null>(null);
 
-  // Selecting from the sidebar — a search hit, an edge, a tour step, a flow
-  // step — also brings the node into view: on a canvas of hundreds of nodes
-  // a highlight nobody can see is not a selection. Clicking a node on the
-  // canvas goes through plain `setSelectedId` instead: it is already on
-  // screen, and moving the viewport under the pointer would be jarring.
-  const reveal = useCallback((id: string) => {
-    setSelectedId(id);
+  const byId = useMemo(() => nodesById(map), [map]);
+  const regions = useMemo(() => regionsOf(map, grouping), [map, grouping]);
+  const links = useMemo(() => regionLinks(map, regions), [map, regions]);
+  const openRegion = regions.find((r) => r.id === openRegionId) ?? null;
+
+  // Which region holds a given node. Symbol nodes have no region of their
+  // own; they are reached through the file that contains them, so the file's
+  // region is theirs. Same lookup the link counter uses, so the canvas and
+  // the counts can never disagree about where a file lives.
+  const regionOfPath = useMemo(() => fileOwners(regions), [regions]);
+
+  const fileIdOfPath = useMemo(() => {
+    const byPath = new Map<string, string>();
+    for (const node of map.nodes) {
+      if (node.kind === "file") {
+        byPath.set(node.path, node.id);
+      }
+    }
+    return byPath;
+  }, [map]);
+
+  // Selecting from anywhere but the canvas — a search hit, an edge, a tour
+  // step, a flow step, a ranking row — also brings the node into view. On a
+  // canvas of regions that means opening the region holding it first: a
+  // highlight nobody can see is not a selection.
+  //
+  // The move itself is left to the effect below rather than done here. The
+  // node being revealed may live in a region that is not open yet, and until
+  // React has rendered that region's files the canvas has never heard of it —
+  // asking it to move to that node from inside the click handler asks it to
+  // find something that does not exist. A fresh object every call, so
+  // requesting the same node twice still moves.
+  const [focus, setFocus] = useState<{ id: string } | null>(null);
+  const reveal = useCallback(
+    (id: string) => {
+      setSelectedId(id);
+      const node = byId.get(id);
+      if (node === undefined) {
+        return;
+      }
+      const region = regionOfPath.get(node.path);
+      if (region !== undefined) {
+        setOpenRegionId(region);
+      }
+      // The canvas draws files, so a symbol is shown by its file.
+      const target = node.kind === "file" ? node.id : fileIdOfPath.get(node.path);
+      if (target !== undefined) {
+        setFocus({ id: target });
+      }
+    },
+    [byId, regionOfPath, fileIdOfPath],
+  );
+
+  const pathIds = useMemo(() => {
+    if (pathFrom === null || pathTo === null) {
+      return new Set<string>();
+    }
+    const found = shortestPath(map, pathFrom.id, pathTo.id);
+    return new Set(found?.map((n) => n.id) ?? []);
+  }, [map, pathFrom, pathTo]);
+
+  const flow = useMemo(
+    () =>
+      openRegion === null
+        ? regionFlow(regions, links)
+        : fileFlow(map, openRegion),
+    [map, openRegion, regions, links],
+  );
+
+  // Drilling in and back out replaces every node on the canvas. React Flow's
+  // `fitView` prop only fires once, at init, so without this the viewport
+  // stayed wherever the overview left it and a wide region — this repository's
+  // own `crates` is eight thousand pixels across — opened showing its top-left
+  // corner. Easing rather than cutting, because the two drawings share no
+  // node and a cut between them gives nothing to follow.
+  //
+  // Declared before the focus effect so that a reveal into a not-yet-open
+  // region settles on its node: React runs effects in order, and the second
+  // move overrides the first.
+  useEffect(() => {
     void canvas.current?.fitView({
-      nodes: [{ id }],
-      duration: 0,
+      duration: motionDuration(FIT_MS),
       maxZoom: 1.2,
+      padding: 0.12,
+    });
+  }, [flow]);
+
+  useEffect(() => {
+    if (focus === null) {
+      return;
+    }
+    void canvas.current?.fitView({
+      nodes: [{ id: focus.id }],
+      duration: motionDuration(FIT_MS),
+      maxZoom: 1.2,
+      // Deliberately loose: a single node filling the viewport tells you
+      // where it is and nothing about what is around it.
       padding: 4,
     });
-  }, []);
-
-  // With the toggle on, entity nodes in the overlay's sets carry a
-  // highlight; everything else renders exactly as without an overlay. The
-  // selected node is marked on the canvas too, so the sidebar's selection —
-  // a search hit, an edge, a tour step, a flow step — is visible where the
-  // map is.
-  const shownNodes = useMemo(() => {
-    const changed = new Set(showOverlay && overlay ? overlay.changed : []);
-    const affected = new Set(showOverlay && overlay ? overlay.affected : []);
-    return nodes.map((node) => {
-      if (node.type !== "entity") {
-        return node;
-      }
-      const highlight = changed.has(node.id)
-        ? ("changed" as const)
-        : affected.has(node.id)
-          ? ("affected" as const)
-          : undefined;
-      const selected = node.id === selectedId;
-      if (highlight === undefined) {
-        return selected ? { ...node, selected } : node;
-      }
-      return { ...node, selected, data: { ...node.data, highlight } };
-    });
-  }, [nodes, overlay, selectedId, showOverlay]);
+  }, [focus]);
 
   const results = useMemo(() => searchNodes(map, query), [map, query]);
   const selected = useMemo(
-    () => map.nodes.find((n) => n.id === selectedId) ?? null,
-    [map, selectedId],
+    () => (selectedId === null ? null : (byId.get(selectedId) ?? null)),
+    [byId, selectedId],
   );
+
+  // The canvas draws files, so it marks the file that holds the selection —
+  // choosing a function in the detail panel lights up the file it lives in
+  // rather than nothing at all.
+  const selectedFileId =
+    selected === null
+      ? null
+      : selected.kind === "file"
+        ? selected.id
+        : (fileIdOfPath.get(selected.path) ?? null);
+
+  // What the selected file touches on this canvas. A drawing of forty files
+  // and eighty-five imports is dense however well it is laid out, so the
+  // canvas answers one question at a time: pick a file and its own
+  // relationships come forward while the rest of the drawing steps back.
+  // Nothing selected means nothing is hidden — the whole region is the
+  // answer to "what is in here".
+  const neighbours = useMemo(() => {
+    const found = new Set<string>();
+    if (selectedFileId === null) {
+      return found;
+    }
+    for (const edge of flow.edges) {
+      if (edge.source === selectedFileId) {
+        found.add(edge.target);
+      }
+      if (edge.target === selectedFileId) {
+        found.add(edge.source);
+      }
+    }
+    return found;
+  }, [flow.edges, selectedFileId]);
+
+  // Files the layout parked below the layers because nothing in the region
+  // imports them or is imported by them.
+  const standalone = useMemo(() => {
+    if (openRegion === null) {
+      return 0;
+    }
+    const touched = new Set(flow.edges.flatMap((e) => [e.source, e.target]));
+    return openRegion.files.filter((f) => !touched.has(f.id)).length;
+  }, [flow.edges, openRegion]);
+
+  const shownEdges = useMemo<FlowEdge[]>(() => {
+    if (selectedFileId === null) {
+      return flow.edges;
+    }
+    const [lit, rest]: [FlowEdge[], FlowEdge[]] = [[], []];
+    for (const edge of flow.edges) {
+      const touches =
+        edge.source === selectedFileId || edge.target === selectedFileId;
+      (touches ? lit : rest).push({
+        ...edge,
+        className: touches ? "edge-lit" : "edge-dim",
+        // Direction is worth ink only on the edges being read: an arrowhead
+        // on all eighty-five is more of exactly what makes this unreadable.
+        ...(touches
+          ? { markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 } }
+          : {}),
+      });
+    }
+    // Lit last, so the edges under the question are drawn over the rest.
+    return [...rest, ...lit];
+  }, [flow.edges, selectedFileId]);
+
+  const shownNodes = useMemo<AppFlowNode[]>(() => {
+    // Overlay membership rolled up to files: `codeatlas diff` marks symbols
+    // as well as files, and a symbol the canvas does not draw would
+    // otherwise take its highlight with it. A file is marked when it or
+    // anything it contains is.
+    const pathsOf = (ids: string[]) =>
+      new Set(
+        ids.flatMap((id) => {
+          const node = byId.get(id);
+          return node === undefined ? [] : [node.path];
+        }),
+      );
+    const changed = pathsOf(showOverlay && overlay ? overlay.changed : []);
+    const affected = pathsOf(showOverlay && overlay ? overlay.affected : []);
+    return flow.nodes.map((node) => {
+      if (node.type === "region") {
+        return node.id === regionNodeId(openRegionId ?? "")
+          ? { ...node, selected: true }
+          : node;
+      }
+      const path = node.data.node.path;
+      // Spread-in rather than assigned: under `exactOptionalPropertyTypes` an
+      // explicit `undefined` is not the same as an absent optional field.
+      const highlight = changed.has(path)
+        ? ("changed" as const)
+        : affected.has(path)
+          ? ("affected" as const)
+          : undefined;
+      const neighbour = neighbours.has(node.id);
+      return {
+        ...node,
+        selected: node.id === selectedFileId,
+        data: {
+          node: node.data.node,
+          ...(highlight === undefined ? {} : { highlight }),
+          ...(pathIds.has(node.id) ? { onPath: true } : {}),
+          ...(neighbour ? { neighbour: true } : {}),
+          ...(selectedFileId !== null && !neighbour && node.id !== selectedFileId
+            ? { dim: true }
+            : {}),
+        },
+      };
+    });
+  }, [
+    byId,
+    flow,
+    overlay,
+    selectedFileId,
+    showOverlay,
+    openRegionId,
+    pathIds,
+    neighbours,
+  ]);
 
   return (
     <div className="explorer">
-      <aside className="sidebar">
-        <header className="sidebar-header">
-          <div>
-            <h1>{map.project.name}</h1>
-            <p className="contract-version">map contract {map.version}</p>
-          </div>
-          <ThemeToggle />
-        </header>
+      <Header
+        map={map}
+        mode={mode}
+        onMode={setMode}
+        grouping={grouping}
+        onGrouping={(next) => {
+          setGrouping(next);
+          setOpenRegionId(null);
+        }}
+        pathOpen={pathOpen}
+        onTogglePath={() => setPathOpen(!pathOpen)}
+      />
+
+      <div className="searchrow">
+        <span className="search-glyph" aria-hidden="true">
+          ⌕
+        </span>
         <input
           type="search"
           aria-label="Search nodes"
-          placeholder="Search by name or path…"
+          placeholder="Search nodes by name, path, or summary…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        {overlay && (
-          <label className="overlay-toggle">
-            <input
-              type="checkbox"
-              aria-label="Diff overlay"
-              checked={showOverlay}
-              onChange={(e) => setShowOverlay(e.target.checked)}
-            />
-            Diff overlay
-            <span className="overlay-counts">
-              {overlay.changed.length} changed · {overlay.affected.length}{" "}
-              affected
-            </span>
-          </label>
-        )}
         {query.trim() !== "" && (
           <ul className="search-results" aria-label="Search results">
-            {results.map((n) => (
+            {results.slice(0, 40).map((n) => (
               <li key={n.id}>
                 <button type="button" onClick={() => reveal(n.id)}>
                   <span className="result-name">{n.name}</span>
@@ -124,33 +346,159 @@ export function MapExplorer({
             {results.length === 0 && <li className="no-matches">No matches</li>}
           </ul>
         )}
-        {/* Navigation above the thing being navigated to: the tour's
-            controls must not slide down the sidebar as the detail panel
-            below them grows and shrinks from step to step. */}
-        <TourPanel map={map} onSelect={reveal} />
-        <FlowsPanel map={map} onSelect={reveal} />
-        {selected && (
-          <DetailPanel map={map} node={selected} onSelect={reveal} />
-        )}
-      </aside>
-      <main className="canvas">
-        <ReactFlow
-          nodes={shownNodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          onInit={(instance) => {
-            canvas.current = instance;
-          }}
-          onNodeClick={(_event, node) => {
-            if (node.type === "entity") {
-              setSelectedId(node.id);
+      </div>
+
+      <div className="chiprow">
+        <span className="chiprow-total">
+          {regions.length} {regions.length === 1 ? "region" : "regions"}
+        </span>
+        {regions.map((region, i) => (
+          <button
+            key={region.id}
+            type="button"
+            className={`region-chip${openRegionId === region.id ? " region-chip-on" : ""}`}
+            data-accent={i % 6}
+            onClick={() =>
+              setOpenRegionId(openRegionId === region.id ? null : region.id)
             }
-          }}
-          fitView
-          minZoom={0.05}
-          nodesConnectable={false}
-        />
-      </main>
+          >
+            <span className="region-dot" aria-hidden="true" />
+            {region.name} <span className="chip-count">{region.files.length}</span>
+          </button>
+        ))}
+        {overlay && (
+          <label className="overlay-toggle">
+            <input
+              type="checkbox"
+              aria-label="Diff overlay"
+              checked={showOverlay}
+              onChange={(e) => setShowOverlay(e.target.checked)}
+            />
+            Diff overlay
+            <span
+              className="overlay-counts"
+              title="Counts are of nodes, symbols included. The canvas draws files, so it marks the file holding each."
+            >
+              {overlay.changed.length} changed · {overlay.affected.length}{" "}
+              affected nodes
+            </span>
+          </label>
+        )}
+      </div>
+
+      <div className="workspace">
+        <main className="canvas">
+          <nav className="breadcrumb" aria-label="Canvas scope">
+            <button
+              type="button"
+              className={openRegion === null ? "crumb crumb-on" : "crumb"}
+              onClick={() => setOpenRegionId(null)}
+            >
+              Project overview
+            </button>
+            {openRegion !== null && (
+              <>
+                <span className="crumb-sep" aria-hidden="true">
+                  ›
+                </span>
+                <span className="crumb crumb-on">{openRegion.name}</span>
+                {/* Says what the block of cards below the layers is, so it
+                    reads as a decision rather than as leftovers. Counted
+                    from the edges actually drawn, so it cannot disagree
+                    with the picture it is describing. */}
+                <span className="crumb-note">
+                  {openRegion.files.length} files
+                  {standalone > 0 &&
+                    `, ${standalone} importing nothing here`}
+                  {selectedFileId === null
+                    ? " · click one to trace it"
+                    : " · click the canvas to clear"}
+                </span>
+              </>
+            )}
+          </nav>
+          <ReactFlow
+            nodes={shownNodes}
+            edges={shownEdges}
+            nodeTypes={nodeTypes}
+            onInit={(instance) => {
+              canvas.current = instance;
+            }}
+            onNodeClick={(_event, node) => {
+              if (node.type === "region") {
+                setOpenRegionId(node.data.region.id);
+              } else {
+                setSelectedId(node.id);
+              }
+            }}
+            /* Clicking empty canvas puts the whole region back. Focus that
+               cannot be let go of is a trap, not a feature. */
+            onPaneClick={() => setSelectedId(null)}
+            fitView
+            minZoom={0.05}
+            nodesConnectable={false}
+          >
+            <Background gap={22} size={1} />
+            <Controls showInteractive={false} />
+            <MiniMap pannable zoomable ariaLabel="Canvas minimap" />
+          </ReactFlow>
+        </main>
+
+        <aside className="rightpanel">
+          <div className="tabs" role="tablist" aria-label="Detail">
+            {(["info", "files"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                aria-selected={tab === t}
+                className={`tab${tab === t ? " tab-on" : ""}`}
+                onClick={() => setTab(t)}
+              >
+                {t === "info" ? "Info" : "Files"}
+              </button>
+            ))}
+          </div>
+
+          {pathOpen && (
+            <PathFinder
+              map={map}
+              from={pathFrom}
+              to={pathTo}
+              onPick={(end, node) =>
+                end === "from" ? setPathFrom(node) : setPathTo(node)
+              }
+              onSelectNode={reveal}
+            />
+          )}
+
+          {selected && (
+            <DetailPanel map={map} node={selected} onSelect={reveal} />
+          )}
+
+          {/* The two header switches each do one job, and this is where that
+              shows: Overview | Learn chooses what the panel is *for* —
+              the facts, or the guided read through them — while
+              Domain | Structural only changes how the canvas groups files,
+              which the Info panel then describes either way. */}
+          {tab === "files" ? (
+            <FilesPanel map={map} regions={regions} onSelectNode={reveal} />
+          ) : mode === "learn" ? (
+            <>
+              <TourPanel map={map} onSelect={reveal} />
+              <FlowsPanel map={map} onSelect={reveal} />
+            </>
+          ) : (
+            <InfoPanel
+              map={map}
+              regions={regions}
+              links={links}
+              onSelectNode={reveal}
+              onOpenRegion={setOpenRegionId}
+            />
+          )}
+        </aside>
+      </div>
     </div>
   );
 }

@@ -36,7 +36,7 @@ export function ThemeToggle() {
       <span className="theme-toggle-glyph" aria-hidden="true">
         {GLYPH[theme]}
       </span>
-      {NAME[theme]}
+      Rosé Pine {NAME[theme]}
     </button>
   );
 }

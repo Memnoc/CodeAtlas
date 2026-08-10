@@ -8,6 +8,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { App } from "../src/app/App.js";
 import { SHARE_DATA_ID } from "../src/app/share.js";
+import { openLearn, openRegion } from "./drive.js";
 import smallMap from "./fixtures/small-map.json";
 
 // What `codeatlas share` emits for an enriched map: every LLM-provenance
@@ -62,9 +63,13 @@ afterEach(() => {
 });
 
 describe("share mode", () => {
-  it("renders the embedded map without fetch existing at all", () => {
+  it("renders the embedded map without fetch existing at all", async () => {
+    const user = userEvent.setup();
     render(<App />);
 
+    // The same overview the served dashboard draws, then the same drill-in.
+    expect(screen.getByTestId("region-src")).toBeInTheDocument();
+    await openRegion(user, "Source code");
     for (const name of ["main.ts", "greeter.ts"]) {
       expect(
         screen.getAllByText(name, { selector: ".react-flow__node *" }).length,
@@ -90,6 +95,7 @@ describe("share mode", () => {
     // Same renderer as the served dashboard (ticket 14), so the newcomer's
     // affordances are in the artifact too — showing the marker, not prose,
     // and badging the slot as enriched so the reader knows why.
+    await openLearn(user);
     const tour = within(screen.getByLabelText("Guided tour"));
     await user.click(tour.getByRole("button", { name: /start tour/i }));
     expect(tour.getByText("Step 1 of 1")).toBeInTheDocument();

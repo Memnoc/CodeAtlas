@@ -9,6 +9,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { KnowledgeGraph } from "../src/index.js";
 import { MapExplorer } from "../src/app/MapExplorer.js";
+import { openLearn, openRegion } from "./drive.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 let map: KnowledgeGraph;
@@ -28,22 +29,32 @@ describe("CodeAtlas's own self-scan map", () => {
     ) as KnowledgeGraph;
   }, 320_000);
 
-  it("renders every node and layer without errors", () => {
+  it("draws one card per layer, and a handful of them, not hundreds", () => {
     render(<MapExplorer map={map} />);
 
-    // Every node in the emitted map is on the canvas.
-    const rendered = document.querySelectorAll(
-      ".react-flow__node .entity",
-    ).length;
-    expect(rendered).toBe(map.nodes.length);
-    expect(map.nodes.length).toBeGreaterThan(0);
+    // Every emitted layer became a card, and *only* the layers: the whole
+    // point of the overview is that its size is set by the architecture
+    // rather than by the file count.
+    const cards = document.querySelectorAll(".react-flow__node .region-card");
+    expect(cards.length).toBe(map.layers?.length ?? 0);
+    expect(cards.length).toBeGreaterThan(0);
+    expect(cards.length).toBeLessThan(map.nodes.length / 10);
 
-    // Every emitted layer became a visible group.
-    const groups = document.querySelectorAll('[data-testid^="layer-group-"]');
-    expect(groups.length).toBe(map.layers?.length ?? 0);
-    expect(groups.length).toBeGreaterThan(0);
+    // Each card counts its own files, and the counts add up to the map's.
+    const counted = [...cards]
+      .map((card) => Number(/^(\d+) files?$/.exec(
+        card.querySelector(".region-count")?.textContent ?? "",
+      )?.[1] ?? -1))
+      .reduce((a, b) => a + b, 0);
+    expect(counted).toBe(map.nodes.filter((n) => n.kind === "file").length);
+  });
 
-    // A node this repo is guaranteed to contain.
+  it("reaches a real file by drilling into the layer that holds it", async () => {
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+
+    // main.rs lives under crates/, which is a layer of this repository.
+    await openRegion(user, "crates");
     expect(
       screen.getAllByText("main.rs", { selector: ".react-flow__node *" })
         .length,
@@ -108,7 +119,8 @@ describe("CodeAtlas's own self-scan map", () => {
     expect(paths).not.toContain("crates/codeatlas/tests/scan.rs");
     expect(paths).toContain("crates/codeatlas/src/lib.rs");
 
-    // And the walk is reachable: the newcomer starts it from the sidebar.
+    // And the walk is reachable: the newcomer switches to Learn and starts.
+    await openLearn(user);
     const panel = within(screen.getByLabelText("Guided tour"));
     await user.click(panel.getByRole("button", { name: /start tour/i }));
     expect(panel.getByText(`Step 1 of ${tour.length}`)).toBeInTheDocument();
@@ -189,8 +201,10 @@ describe("CodeAtlas's own self-scan map", () => {
     ).toEqual([]);
   });
 
-  it("groups the self-scan's domain flows by domain", () => {
+  it("groups the self-scan's domain flows by domain", async () => {
+    const user = userEvent.setup();
     render(<MapExplorer map={map} />);
+    await openLearn(user);
 
     const flows = map.domain_flows ?? [];
     expect(flows.length).toBeGreaterThan(0);
@@ -202,10 +216,15 @@ describe("CodeAtlas's own self-scan map", () => {
     }
   });
 
-  it("shows detail for a real node from the self-scan", () => {
+  it("shows detail for a real node from the self-scan", async () => {
+    const user = userEvent.setup();
     render(<MapExplorer map={map} />);
 
-    const anyNode = map.nodes[0];
+    // A file of the crates/ layer, reached the way a reader reaches it.
+    await openRegion(user, "crates");
+    const anyNode = map.nodes.find(
+      (n) => n.kind === "file" && (n.layer ?? "root") === "crates",
+    );
     expect(anyNode).toBeDefined();
     if (!anyNode) {
       return;

@@ -1,14 +1,52 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import type { EntityFlowNode, LayerFlowNode } from "./graph.js";
+import type { EntityFlowNode, RegionFlowNode } from "./graph.js";
 
-export function EntityNode({ data }: NodeProps<EntityFlowNode>) {
-  const { node, highlight } = data;
-  const highlightClass = highlight === undefined ? "" : ` entity-${highlight}`;
+/** One region card on the overview: coloured spine, the complexity word, the
+ * name, the mechanical description, and the file count. */
+export function RegionNode({ data, selected }: NodeProps<RegionFlowNode>) {
+  const { region, colorIndex } = data;
+  const fileCount = region.files.length;
   return (
     <div
-      className={`entity entity-${node.kind}${highlightClass}`}
-      title={node.path}
+      className={`region-card${selected === true ? " region-selected" : ""}`}
+      data-testid={`region-${region.id}`}
+      data-accent={colorIndex % 6}
     >
+      <Handle type="target" position={Position.Top} />
+      <div className="region-top">
+        <span className="region-eyebrow">Region</span>
+        <span
+          className="region-complexity"
+          title="Relationships per file: under one is simple, under three moderate, otherwise complex."
+        >
+          {region.complexity}
+        </span>
+      </div>
+      <span className="region-name">{region.name}</span>
+      <span className="region-description">{region.description}</span>
+      <span className="region-count">
+        {fileCount} {fileCount === 1 ? "file" : "files"}
+      </span>
+      <Handle type="source" position={Position.Bottom} />
+    </div>
+  );
+}
+
+/** One file inside a drilled-into region. */
+export function EntityNode({ data }: NodeProps<EntityFlowNode>) {
+  const { node, highlight, onPath, neighbour, dim } = data;
+  const classes = [
+    "entity",
+    `entity-${node.kind}`,
+    highlight === undefined ? "" : `entity-${highlight}`,
+    onPath === true ? "entity-on-path" : "",
+    neighbour === true ? "entity-neighbour" : "",
+    dim === true ? "entity-dim" : "",
+  ]
+    .filter((c) => c !== "")
+    .join(" ");
+  return (
+    <div className={classes} title={node.path}>
       <Handle type="target" position={Position.Top} />
       <span className="entity-kind">{node.kind}</span>
       <span className="entity-name">{node.name}</span>
@@ -17,18 +55,7 @@ export function EntityNode({ data }: NodeProps<EntityFlowNode>) {
   );
 }
 
-export function LayerGroupNode({ data }: NodeProps<LayerFlowNode>) {
-  return (
-    <div
-      className="layer-group"
-      data-testid={`layer-group-${data.layerId}`}
-    >
-      <div className="layer-label">{data.label}</div>
-    </div>
-  );
-}
-
 export const nodeTypes = {
   entity: EntityNode,
-  layerGroup: LayerGroupNode,
+  region: RegionNode,
 };

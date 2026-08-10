@@ -1,28 +1,26 @@
 // Seam 1 (map contract): feed a graph file in, drive the tour and the
 // domain-flow affordances as a newcomer would, assert what is rendered and
 // what the canvas selects. No component internals are touched.
+//
+// Both affordances now live behind the header's Learn switch: they are the
+// two guided reads of the same map, so they belong to the same mode. The
+// tests walk in the same way a reader would.
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import type { KnowledgeGraph } from "../src/index.js";
 import { MapExplorer } from "../src/app/MapExplorer.js";
+import { openDomainGrouping, openLearn, selectedOnCanvas } from "./drive.js";
 import tourMap from "./fixtures/tour-map.json";
 import oldMap from "../../crates/codeatlas/tests/fixtures/maps/known-good.json";
 
 const map = tourMap as KnowledgeGraph;
 
-/** The node the canvas currently has selected, as React Flow marks it —
- * and never more than one, whoever made the selection. */
-function selectedOnCanvas(): string | null {
-  const selected = document.querySelectorAll(".react-flow__node.selected");
-  expect(selected.length).toBeLessThanOrEqual(1);
-  return selected[0]?.getAttribute("data-id") ?? null;
-}
-
 describe("guided tour", () => {
   it("walks the tour step by step, moving the canvas selection", async () => {
     const user = userEvent.setup();
     render(<MapExplorer map={map} />);
+    await openLearn(user);
 
     const tour = within(screen.getByLabelText("Guided tour"));
     // Nothing is selected until the newcomer starts walking.
@@ -54,6 +52,7 @@ describe("guided tour", () => {
   it("stops at both ends of the walk", async () => {
     const user = userEvent.setup();
     render(<MapExplorer map={map} />);
+    await openLearn(user);
 
     const tour = within(screen.getByLabelText("Guided tour"));
     await user.click(tour.getByRole("button", { name: /start tour/i }));
@@ -68,6 +67,7 @@ describe("guided tour", () => {
   it("badges each label's provenance, mechanical and enriched alike", async () => {
     const user = userEvent.setup();
     render(<MapExplorer map={map} />);
+    await openLearn(user);
 
     const tour = within(screen.getByLabelText("Guided tour"));
     await user.click(tour.getByRole("button", { name: /start tour/i }));
@@ -84,6 +84,7 @@ describe("guided tour", () => {
   it("walks only steps it can point at on the canvas", async () => {
     const user = userEvent.setup();
     render(<MapExplorer map={map} />);
+    await openLearn(user);
 
     // The fixture's fourth step names a node this map does not contain.
     const tour = within(screen.getByLabelText("Guided tour"));
@@ -111,6 +112,7 @@ describe("domain flows", () => {
   it("opens as an index of domains, each expanding to its flows", async () => {
     const user = userEvent.setup();
     render(<MapExplorer map={map} />);
+    await openLearn(user);
 
     // Every domain in the map is listed, with how many flows it holds — a
     // real repo has a flow per entry point, far too many to list at once.
@@ -132,6 +134,7 @@ describe("domain flows", () => {
   it("badges each flow name's provenance", async () => {
     const user = userEvent.setup();
     render(<MapExplorer map={map} />);
+    await openLearn(user);
 
     const mechanical = (await openDomain(user, "cli")).getByRole("button", {
       name: /run → parseArgs/,
@@ -151,12 +154,14 @@ describe("domain flows", () => {
   it("opens a flow's ordered steps and selects each on the canvas", async () => {
     const user = userEvent.setup();
     render(<MapExplorer map={map} />);
+    await openLearn(user);
 
     const flows = await openDomain(user, "src");
     await user.click(flows.getByRole("button", { name: /Greeting delivery/ }));
 
-    // Opening a flow lands the newcomer on its entry point.
-    expect(selectedOnCanvas()).toBe("function:src/main.ts:main");
+    // Opening a flow lands the newcomer on its entry point. The canvas draws
+    // files, so the mark lands on the file holding the entry function.
+    expect(selectedOnCanvas()).toBe("file:src/main.ts");
 
     const steps = within(flows.getByLabelText("Steps of Greeting delivery"));
     const buttons = steps.getAllByRole("button");
@@ -173,7 +178,7 @@ describe("domain flows", () => {
     if (format) {
       await user.click(format);
     }
-    expect(selectedOnCanvas()).toBe("function:src/util.ts:format");
+    expect(selectedOnCanvas()).toBe("file:src/util.ts");
     expect(
       within(screen.getByLabelText("Node detail")).getByRole("heading", {
         name: "format",
@@ -184,6 +189,7 @@ describe("domain flows", () => {
   it("shows one flow's steps at a time", async () => {
     const user = userEvent.setup();
     render(<MapExplorer map={map} />);
+    await openLearn(user);
 
     let flows = await openDomain(user, "src");
     await user.click(flows.getByRole("button", { name: /Greeting delivery/ }));
@@ -209,32 +215,49 @@ describe("maps without a tour or domain flows", () => {
     return rest;
   })();
 
-  it("renders the explorer without either affordance and without errors", () => {
+  // Switching to the mode that *would* show each affordance is the whole
+  // point: absent in Overview proves nothing, since Overview never shows the
+  // tour anyway.
+  async function bothSwitchesTried(user: ReturnType<typeof userEvent.setup>) {
+    await openLearn(user);
+    expect(screen.queryByLabelText("Guided tour")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Domain flows")).not.toBeInTheDocument();
+    // The other switch changes the canvas grouping, never the panel.
+    await openDomainGrouping(user);
+    expect(screen.queryByLabelText("Domain flows")).not.toBeInTheDocument();
+  }
+
+  it("renders the explorer without either affordance and without errors", async () => {
+    const user = userEvent.setup();
     render(<MapExplorer map={bare} />);
 
-    expect(screen.queryByLabelText("Guided tour")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Domain flows")).not.toBeInTheDocument();
-    expect(
-      screen.getAllByText("main.ts", { selector: ".react-flow__node *" })
-        .length,
-    ).toBeGreaterThan(0);
+    await bothSwitchesTried(user);
+    // A map with no flows has no domains to group by, so the grouping falls
+    // back to showing nothing rather than crashing; the structural regions
+    // are still one switch away.
+    expect(screen.getByRole("radiogroup", { name: "Grouping" })).toBeVisible();
   });
 
-  it("renders empty collections the same way", () => {
+  it("renders empty collections the same way", async () => {
+    const user = userEvent.setup();
     render(<MapExplorer map={{ ...map, tour: [], domain_flows: [] }} />);
 
-    expect(screen.queryByLabelText("Guided tour")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Domain flows")).not.toBeInTheDocument();
+    await bothSwitchesTried(user);
   });
 
-  it("renders an older map that predates both fields", () => {
+  it("renders an older map that predates both fields", async () => {
+    const user = userEvent.setup();
     render(<MapExplorer map={oldMap as KnowledgeGraph} />);
 
-    expect(screen.queryByLabelText("Guided tour")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Domain flows")).not.toBeInTheDocument();
-    expect(
-      screen.getAllByText("Greeter", { selector: ".react-flow__node *" })
-        .length,
-    ).toBeGreaterThan(0);
+    await bothSwitchesTried(user);
+    // Back to the structural grouping, which every map has: a layerless map
+    // still gets its implicit root region rather than an empty canvas.
+    await user.click(
+      within(screen.getByRole("radiogroup", { name: "Grouping" })).getByRole(
+        "radio",
+        { name: "Structural" },
+      ),
+    );
+    expect(screen.getByTestId("region-root")).toBeInTheDocument();
   });
 });

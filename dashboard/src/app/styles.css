@@ -6,9 +6,22 @@
  * no rule further down names a colour directly, so a third variant would be
  * one more block and nothing else.
  *
- * The six accents are each spent once per theme, so nothing in the UI is
- * ambiguous: iris = enriched prose, love = changed, gold = affected,
- * rose = classes, and the two teals split interactive-vs-function.
+ * The six accents are each spent once per *meaning*: iris = enriched prose,
+ * love = changed, gold = affected, rose = classes, and the two teals split
+ * interactive-vs-function. Region colours reuse the same six, because Rosé
+ * Pine has exactly six accents and a palette cannot be invented without
+ * leaving the theme.
+ *
+ * What keeps that unambiguous is a surface rule, and it is worth stating
+ * precisely because a looser version of it is easy to believe and false.
+ * `--region` is used *only* on region chrome — the card, the chip, the dot,
+ * the bar, the panel row — and the semantic accents *only* on entity chrome
+ * and badges. No element takes both. The two never collide on screen either:
+ * the canvas draws region cards or it draws entity cards, never at once, so
+ * the ring on a selected region and the ring on a changed entity are never
+ * side by side even though the fifth region's accent happens to be `love`.
+ * Adding `--region` to an entity rule, or a semantic accent to a region rule,
+ * is what breaks this — not the shape the colour is drawn in.
  *
  * Which teal is which flips between the themes, on purpose. `--accent` is
  * link and control text, so it needs contrast against the background: that is
@@ -82,6 +95,27 @@
   --kind-class: #ea9a97;
 }
 
+/* Region identity: the six accents again, in a fixed rotation so a region
+ * keeps its colour between the chip row, the card and the panel row. */
+[data-accent="0"] {
+  --region: var(--accent);
+}
+[data-accent="1"] {
+  --region: var(--kind-function);
+}
+[data-accent="2"] {
+  --region: var(--llm);
+}
+[data-accent="3"] {
+  --region: var(--affected);
+}
+[data-accent="4"] {
+  --region: var(--changed);
+}
+[data-accent="5"] {
+  --region: var(--kind-class);
+}
+
 * {
   box-sizing: border-box;
 }
@@ -106,8 +140,11 @@ body {
   color: var(--text);
 }
 
+/* Four stacked bands — header, search, chips, workspace — with only the last
+ * one able to grow, so the canvas takes every pixel the chrome does not. */
 .explorer {
-  display: flex;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   height: 100%;
 }
 
@@ -134,27 +171,121 @@ body {
   line-height: 1.5;
 }
 
-.sidebar {
-  width: 320px;
-  flex-shrink: 0;
-  overflow-y: auto;
-  padding: 16px;
-  background: var(--panel);
-  border-right: 1px solid var(--border);
-}
+/* ── Header ───────────────────────────────────────────────────────────── */
 
-/* Title on the left, theme toggle on the right, baselines aligned. */
-.sidebar-header {
+.topbar {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
+  align-items: center;
+  gap: 20px;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
 }
 
-.sidebar-header h1 {
+.topbar-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.project-name {
   margin: 0;
-  font-size: 18px;
-  overflow-wrap: anywhere;
+  font-size: 17px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.provenance-tally {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.provenance-tally strong {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text);
+}
+
+.topbar-modes {
+  display: flex;
+  gap: 12px;
+  margin-inline: auto;
+}
+
+.segmented {
+  display: flex;
+  padding: 2px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+
+.segment {
+  padding: 4px 14px;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.segment:hover {
+  color: var(--text);
+}
+
+.segment-on {
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--text) 14%, transparent);
+}
+
+.segment:focus-visible,
+.tab:focus-visible,
+.topbar-button:focus-visible,
+.crumb:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.topbar-button {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.topbar-button:hover {
+  border-color: var(--accent);
+}
+
+.topbar-button-on {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
 }
 
 .theme-toggle {
@@ -162,15 +293,14 @@ body {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
-  padding: 4px 10px;
+  padding: 5px 12px;
   border: 1px solid var(--border);
   border-radius: 999px;
   background: var(--bg);
   color: var(--muted);
   cursor: pointer;
   font: inherit;
-  font-size: 11px;
-  line-height: 1.6;
+  font-size: 12px;
 }
 
 .theme-toggle:hover {
@@ -188,38 +318,65 @@ body {
   color: var(--accent);
 }
 
-.contract-version {
-  margin: 2px 0 12px;
-  font-size: 11px;
-  color: var(--muted);
+/* ── Search row ───────────────────────────────────────────────────────── */
+
+.searchrow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
 }
 
-.sidebar input[type="search"] {
-  width: 100%;
-  padding: 8px 10px;
+.search-glyph {
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.searchrow input[type="search"] {
+  flex: 1;
+  padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--bg);
   color: var(--text);
   font: inherit;
+  font-size: 13px;
 }
 
+.searchrow input[type="search"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Floating, so opening results never reflows the canvas below. */
 .search-results {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% - 4px);
+  left: 42px;
+  right: 16px;
   list-style: none;
-  margin: 8px 0;
-  padding: 0;
+  margin: 0;
+  padding: 4px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  max-height: 40vh;
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 20%, transparent);
+  max-height: 50vh;
   overflow-y: auto;
 }
 
-.search-results button {
+.search-results button,
+.path-suggestions button {
   display: flex;
   flex-direction: column;
   width: 100%;
   padding: 6px 10px;
   border: none;
+  border-radius: 6px;
   background: none;
   color: var(--text);
   text-align: left;
@@ -227,8 +384,13 @@ body {
   font: inherit;
 }
 
-.search-results button:hover {
+.search-results button:hover,
+.path-suggestions button:hover {
   background: var(--bg);
+}
+
+.result-name {
+  font-size: 13px;
 }
 
 .result-path,
@@ -240,6 +402,797 @@ body {
 .no-matches {
   padding: 6px 10px;
 }
+
+/* ── Region chip row ──────────────────────────────────────────────────── */
+
+.chiprow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chiprow-total {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-right: 6px;
+}
+
+.region-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.region-chip:hover {
+  border-color: var(--region);
+}
+
+.region-chip-on {
+  border-color: var(--region);
+  background: color-mix(in srgb, var(--region) 16%, var(--panel));
+}
+
+.region-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.region-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--region);
+  flex-shrink: 0;
+}
+
+.chip-count {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.overlay-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.overlay-counts {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ── Workspace ────────────────────────────────────────────────────────── */
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  min-height: 0;
+}
+
+.canvas {
+  position: relative;
+  min-width: 0;
+}
+
+.breadcrumb {
+  position: absolute;
+  z-index: 10;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+}
+
+.crumb {
+  padding: 2px 10px;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.crumb-on {
+  color: var(--text);
+  font-weight: 600;
+}
+
+button.crumb:hover {
+  color: var(--text);
+}
+
+.crumb-sep {
+  color: var(--muted);
+}
+
+/* What is in the open region, and what to do about it. Sentence case and
+ * unemphasised: it is a caption for the canvas, not another control. */
+.crumb-note {
+  padding-right: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* ── Canvas cards ─────────────────────────────────────────────────────── */
+
+.region-card {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--region);
+  border-radius: 10px;
+  background: var(--panel);
+  cursor: pointer;
+}
+
+.region-card:hover {
+  border-color: var(--region);
+  border-left-color: var(--region);
+}
+
+.region-selected {
+  box-shadow: 0 0 0 2px var(--region);
+}
+
+.region-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.region-eyebrow {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.region-complexity {
+  font-size: 10px;
+  color: var(--muted);
+  cursor: help;
+}
+
+.region-name {
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.region-description {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.region-count {
+  margin-top: auto;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.entity {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.entity-file {
+  border-left: 3px solid var(--accent);
+}
+
+.entity-function {
+  border-left: 3px solid var(--kind-function);
+}
+
+.entity-class {
+  border-left: 3px solid var(--kind-class);
+}
+
+/* Diff impact overlay: changed nodes and their one-hop blast radius are
+ * visually distinct from each other and from everything else. */
+.entity-changed {
+  border-color: var(--changed);
+  box-shadow: 0 0 0 2px var(--changed);
+}
+
+.entity-affected {
+  border-color: var(--affected);
+  box-shadow: 0 0 0 1px var(--affected);
+  border-style: dashed;
+}
+
+/* A node on the path the Path control found. Distinct from both overlay
+ * states: those are about a diff, this is about a question just asked. */
+.entity-on-path {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent);
+}
+
+.entity-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.entity-name {
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Wherever the selection is made — a search hit, an edge, a tour step, a
+ * flow step — the canvas says which node it is. */
+.react-flow__node.selected .entity {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* Motion, and the only motion there is. Focus changes what four dozen cards
+ * and eighty-five lines look like in one commit, and a change that large
+ * arriving in a single frame reads as a redraw rather than as a response to
+ * the click. Short enough not to be waited on; the viewport easing on
+ * drill-in is set to the same length in `MapExplorer`. */
+.entity,
+.region-card,
+.react-flow__edge-path {
+  transition:
+    opacity 140ms ease-out,
+    border-color 140ms ease-out,
+    box-shadow 140ms ease-out,
+    stroke 140ms ease-out,
+    stroke-width 140ms ease-out;
+}
+
+/* Asked not to animate, do not animate. The canvas still says everything it
+ * said before — the states are colour and weight, and the movement between
+ * them was never carrying any of the meaning. */
+@media (prefers-reduced-motion: reduce) {
+  .entity,
+  .region-card,
+  .react-flow__edge-path {
+    transition: none;
+  }
+}
+
+/* Focus, the other half of what makes a dense region readable. Selecting a
+ * file states an interest: it and the files it touches keep their weight,
+ * and the rest of the drawing goes quiet. Quiet, not gone — the region's
+ * file count is on screen beside the canvas, and a card that vanished when
+ * something else was clicked would make those two disagree. */
+.entity-neighbour {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+}
+
+.entity-dim {
+  opacity: 0.28;
+}
+
+/* Edges follow the cards. At rest every import is a hairline, because
+ * eighty-five lines at full strength are a texture rather than a drawing. */
+.react-flow__edge-path {
+  stroke-width: 1;
+  opacity: 0.5;
+}
+
+.react-flow__edge.edge-lit .react-flow__edge-path {
+  stroke: var(--accent);
+  stroke-width: 2;
+  opacity: 1;
+}
+
+.react-flow__edge.edge-lit .react-flow__arrowhead polyline,
+.react-flow__edge.edge-lit .react-flow__arrowhead path {
+  stroke: var(--accent);
+  fill: var(--accent);
+}
+
+.react-flow__edge.edge-dim .react-flow__edge-path {
+  opacity: 0.12;
+}
+
+/* ── Right panel ──────────────────────────────────────────────────────── */
+
+.rightpanel {
+  overflow-y: auto;
+  padding: 0 16px 24px;
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+}
+
+.tabs {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  gap: 4px;
+  padding: 10px 0;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.tab {
+  flex: 1;
+  padding: 6px 0;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.tab-on {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.info-project {
+  margin: 16px 0 4px;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.info-counts {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.language-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0;
+}
+
+.language-chip {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 11px;
+}
+
+.info-section {
+  margin-top: 20px;
+}
+
+.info-section h3 {
+  margin: 0 0 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.info-blurb,
+.info-empty {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.info-rows,
+.region-list,
+.connect-list,
+.file-list,
+.symbol-list,
+.path-steps,
+.path-suggestions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.info-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 3px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.info-row:hover {
+  border-color: var(--accent);
+}
+
+.row-symbol {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-path {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.region-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.region-row:hover {
+  border-color: var(--region);
+}
+
+.region-row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.region-row-name {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.region-row-count {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.region-bar {
+  display: block;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.region-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--region);
+}
+
+.region-row-description {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.connect-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 2px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.connect-arrow,
+.connect-count {
+  color: var(--muted);
+}
+
+.connect-count {
+  margin-left: auto;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.connect-from,
+.connect-to {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Files tab ────────────────────────────────────────────────────────── */
+
+.files-region h3 {
+  margin: 18px 0 6px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.files-region-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.file-name {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: none;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-name:hover {
+  color: var(--accent);
+}
+
+.file-expand {
+  flex-shrink: 0;
+  min-width: 24px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.file-expand:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.symbol-list {
+  margin: 0 0 4px 12px;
+  border-left: 1px solid var(--border);
+}
+
+.symbol-list button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 8px;
+  border: none;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.symbol-list button:hover {
+  color: var(--accent);
+}
+
+.symbol-kind {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.kind-function {
+  color: var(--kind-function);
+}
+
+.kind-class {
+  color: var(--kind-class);
+}
+
+/* ── Path finder ──────────────────────────────────────────────────────── */
+
+.pathfinder {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+}
+
+.path-end {
+  position: relative;
+  margin-bottom: 8px;
+}
+
+.path-end-label {
+  display: block;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.path-end input[type="search"] {
+  width: 100%;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+.path-end-picked {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.path-end-picked .path-end-label {
+  flex-shrink: 0;
+}
+
+.path-end-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.path-clear {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.path-clear:hover {
+  color: var(--changed);
+}
+
+.path-suggestions {
+  position: absolute;
+  z-index: 15;
+  left: 0;
+  right: 0;
+  margin-top: 2px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 20%, transparent);
+  max-height: 30vh;
+  overflow-y: auto;
+}
+
+.path-steps {
+  counter-reset: step;
+  margin-top: 8px;
+}
+
+.path-steps button {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.path-steps button:hover {
+  color: var(--accent);
+}
+
+.path-index {
+  flex-shrink: 0;
+  min-width: 18px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.path-path {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 45%;
+}
+
+/* ── Node detail, tour, flows ─────────────────────────────────────────── */
 
 .detail {
   margin-top: 16px;
@@ -309,6 +1262,8 @@ body {
   list-style: none;
   margin: 0;
   padding: 0;
+  max-height: 30vh;
+  overflow-y: auto;
 }
 
 .edge-list button {
@@ -327,9 +1282,6 @@ body {
   text-decoration: underline;
 }
 
-/* The guided tour and the domain flows: the newcomer's half of the sidebar
- * (spec story 6). Both sit above the detail panel, separated from what
- * precedes them the same way the detail panel is. */
 .tour,
 .flows {
   margin-top: 16px;
@@ -436,101 +1388,6 @@ body {
   text-decoration: underline;
 }
 
-.canvas {
-  flex: 1;
-  min-width: 0;
-}
-
-/* Wherever the selection is made — a search hit, an edge, a tour step, a
- * flow step — the canvas says which node it is. */
-.react-flow__node.selected .entity {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent);
-}
-
-.layer-group {
-  width: 100%;
-  height: 100%;
-  border: 1px dashed var(--border);
-  border-radius: 10px;
-  /* Tinted with the foreground, so it lifts off the canvas in Moon and
-   * settles into it in Dawn — a fixed white wash only works in one. */
-  background: color-mix(in srgb, var(--text) 4%, transparent);
-}
-
-.layer-label {
-  padding: 8px 12px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--muted);
-}
-
-.entity {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-  padding: 6px 10px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
-}
-
-.entity-file {
-  border-left: 3px solid var(--accent);
-}
-
-.entity-function {
-  border-left: 3px solid var(--kind-function);
-}
-
-.entity-class {
-  border-left: 3px solid var(--kind-class);
-}
-
-/* Diff impact overlay: changed nodes and their one-hop blast radius are
- * visually distinct from each other and from everything else. */
-.entity-changed {
-  border-color: var(--changed);
-  box-shadow: 0 0 0 2px var(--changed);
-}
-
-.entity-affected {
-  border-color: var(--affected);
-  box-shadow: 0 0 0 1px var(--affected);
-  border-style: dashed;
-}
-
-.overlay-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.overlay-counts {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.entity-kind {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--muted);
-}
-
-.entity-name {
-  font-size: 13px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .loading,
 .load-error {
   display: flex;
@@ -542,11 +1399,13 @@ body {
   text-align: center;
 }
 
-/* React Flow's own chrome. Its stylesheet ships light-mode defaults through
- * `--xy-*-default` variables, which is the sanctioned place to retheme it —
- * left alone, the edges and the attribution stay pale grey and the canvas
- * white, which reads as broken in Moon. Redefining the variables keeps every
- * colour flowing from the same two palettes above. */
+/* ── React Flow's own chrome ──────────────────────────────────────────── */
+
+/* Its stylesheet ships light-mode defaults through `--xy-*-default`
+ * variables, which is the sanctioned place to retheme it — left alone, the
+ * edges and the attribution stay pale grey and the canvas white, which reads
+ * as broken in Moon. Redefining the variables keeps every colour flowing from
+ * the same two palettes above. */
 .react-flow {
   --xy-background-color-default: var(--bg);
   --xy-edge-stroke-default: var(--border);
@@ -565,8 +1424,38 @@ body {
     transparent
   );
   --xy-selection-border-default: 1px dotted var(--accent);
+
+  --xy-controls-button-background-color-default: var(--panel);
+  --xy-controls-button-background-color-hover-default: var(--bg);
+  --xy-controls-button-color-default: var(--text);
+  --xy-controls-button-color-hover-default: var(--accent);
+  --xy-controls-button-border-color-default: var(--border);
+
+  --xy-minimap-background-color-default: var(--panel);
+  --xy-minimap-mask-background-color-default: color-mix(
+    in srgb,
+    var(--bg) 70%,
+    transparent
+  );
+  --xy-minimap-node-background-color-default: var(--border);
+  --xy-minimap-node-stroke-color-default: var(--muted);
+
+  --xy-edge-label-background-color-default: var(--panel);
+  --xy-edge-label-color-default: var(--muted);
 }
 
 .react-flow__attribution a {
   color: var(--muted);
+}
+
+.react-flow__edge-text {
+  font-size: 10px;
+}
+
+.react-flow__controls,
+.react-flow__minimap {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: none;
 }
