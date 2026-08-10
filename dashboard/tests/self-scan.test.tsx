@@ -4,7 +4,8 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { KnowledgeGraph } from "../src/index.js";
 import { MapExplorer } from "../src/app/MapExplorer.js";
@@ -47,6 +48,88 @@ describe("CodeAtlas's own self-scan map", () => {
       screen.getAllByText("main.rs", { selector: ".react-flow__node *" })
         .length,
     ).toBeGreaterThan(0);
+  });
+
+  it("walks a bounded, curated tour of the architecture, not an inventory", async () => {
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+
+    const byId = new Map(map.nodes.map((n) => [n.id, n]));
+    const files = map.nodes.filter((n) => n.kind === "file");
+    const tour = map.tour ?? [];
+    expect(tour.length).toBeGreaterThan(0);
+    // One step per file is an enumeration, not a guided tour: this repo has
+    // ~150 files (including every lockfile and test fixture) and the walk
+    // stays a newcomer's sitting. The exact bound is `TOUR_MAX_STEPS`,
+    // pinned on the Rust side (crates/codeatlas/tests/scan.rs); 20 is the
+    // ceiling past which no bound could still be called newcomer-sized.
+    expect(files.length).toBeGreaterThan(50);
+    expect(tour.length).toBeLessThanOrEqual(20);
+
+    // Every stop is wired into the architecture: something imports it, it
+    // imports something, or a call chain starts in it.
+    const degree = new Map<string, number>();
+    for (const edge of map.edges) {
+      if (edge.kind === "imports") {
+        degree.set(edge.source, (degree.get(edge.source) ?? 0) + 1);
+        degree.set(edge.target, (degree.get(edge.target) ?? 0) + 1);
+      }
+    }
+    const callers = new Set(
+      map.edges.filter((e) => e.kind === "calls").map((e) => e.source),
+    );
+    const called = new Set(
+      map.edges.filter((e) => e.kind === "calls").map((e) => e.target),
+    );
+    const entryPointPaths = new Set(
+      map.nodes
+        .filter(
+          (n) =>
+            n.kind === "function" && callers.has(n.id) && !called.has(n.id),
+        )
+        .map((n) => n.path),
+    );
+    for (const step of tour) {
+      const node = byId.get(step.node);
+      expect(node, `dangling tour step ${step.node}`).toBeDefined();
+      if (!node) {
+        continue;
+      }
+      const significance =
+        (degree.get(node.id) ?? 0) + (entryPointPaths.has(node.path) ? 1 : 0);
+      expect(significance, `isolated file on the tour: ${node.path}`).
+        toBeGreaterThan(0);
+    }
+
+    // The regression ticket 16 exists for: an integration-test file with
+    // fan-in 0 and fan-out 0 used to open the walk, with the crate root
+    // nine steps behind it.
+    const paths = tour.map((step) => byId.get(step.node)?.path);
+    expect(paths).not.toContain("crates/codeatlas/tests/scan.rs");
+    expect(paths).toContain("crates/codeatlas/src/lib.rs");
+
+    // And the walk is reachable: the newcomer starts it from the sidebar.
+    const panel = within(screen.getByLabelText("Guided tour"));
+    await user.click(panel.getByRole("button", { name: /start tour/i }));
+    expect(panel.getByText(`Step 1 of ${tour.length}`)).toBeInTheDocument();
+    const first = paths[0];
+    expect(first).toBeDefined();
+    expect(screen.getByLabelText("Node detail")).toHaveTextContent(
+      first ?? "",
+    );
+  });
+
+  it("groups the self-scan's domain flows by domain", () => {
+    render(<MapExplorer map={map} />);
+
+    const flows = map.domain_flows ?? [];
+    expect(flows.length).toBeGreaterThan(0);
+    const panel = within(screen.getByLabelText("Domain flows"));
+    for (const domain of new Set(flows.map((f) => f.domain))) {
+      expect(
+        panel.getByRole("heading", { name: new RegExp(`^${domain}`) }),
+      ).toBeInTheDocument();
+    }
   });
 
   it("shows detail for a real node from the self-scan", () => {

@@ -604,6 +604,77 @@ fn tour_steps_are_topology_ordered_with_mechanical_labels() {
     };
     assert!(position("file:src/app.ts") < position("file:src/util.ts"));
     assert!(position("file:src/main.ts") < position("file:src/util.ts"));
+
+    // Curated, not an inventory: a file nothing imports, that imports
+    // nothing, and that starts no call chain teaches a newcomer nothing
+    // about how the pieces connect, so it is off the walk entirely.
+    for id in [
+        "file:README.md",
+        "file:src/pair.ts",
+        "file:src/greeter.ts",
+        "file:src/broken.ts",
+    ] {
+        assert!(
+            node_ids.contains(id),
+            "{id} must still be a node — only the tour skips it"
+        );
+        assert!(
+            !steps.contains(&id),
+            "file with no place in the architecture is on the tour: {id}"
+        );
+    }
+}
+
+#[test]
+fn the_tour_stays_newcomer_sized_however_many_files_the_repo_holds() {
+    let repo = materialize("simple");
+    // Far more connected files than a tour may hold — plus files nothing
+    // imports, that import nothing, and that start no call chain.
+    for i in 0..30 {
+        fs::write(
+            repo.path().join(format!("src/chain{i}.ts")),
+            format!(
+                "import {{ greet }} from \"./util\";\n\n\
+                 export function chain{i}(): string {{\n  return greet(\"{i}\");\n}}\n"
+            ),
+        )
+        .unwrap();
+    }
+    for i in 0..5 {
+        fs::write(
+            repo.path().join(format!("src/lonely{i}.ts")),
+            format!("export const lonely{i} = {i};\n"),
+        )
+        .unwrap();
+    }
+    scan(repo.path());
+    let map = read_map(repo.path());
+
+    let tour = map["tour"].as_array().expect("map must carry a tour");
+    let files = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["kind"] == "file")
+        .count();
+    assert!(
+        files > 40,
+        "the fixture must outgrow the tour bound to prove anything"
+    );
+    assert_eq!(
+        tour.len(),
+        codeatlas::semantics::TOUR_MAX_STEPS,
+        "a {files}-file repo must still produce a newcomer-sized tour"
+    );
+
+    let steps: Vec<&str> = tour.iter().map(|s| s["node"].as_str().unwrap()).collect();
+    for i in 0..5 {
+        let lonely = format!("file:src/lonely{i}.ts");
+        assert!(
+            !steps.contains(&lonely.as_str()),
+            "isolated file on the tour: {lonely} ({steps:?})"
+        );
+    }
 }
 
 #[test]

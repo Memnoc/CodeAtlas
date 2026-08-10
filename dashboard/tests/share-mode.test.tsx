@@ -3,25 +3,41 @@
 // server — and displays the redaction disclosure. This is the seam the
 // share artifact exercises when a colleague double-clicks it from file://,
 // where fetch is unusable.
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { App } from "../src/app/App.js";
 import { SHARE_DATA_ID } from "../src/app/share.js";
 import smallMap from "./fixtures/small-map.json";
 
+// What `codeatlas share` emits for an enriched map: every LLM-provenance
+// prose slot — node summaries, layer names, flow names, tour narrations —
+// replaced with the marker, provenance itself left intact.
 const payload = {
   map: {
     ...smallMap,
     nodes: smallMap.nodes.map((node) =>
       node.provenance === "llm" ? { ...node, summary: "[redacted]" } : node,
     ),
+    domain_flows: smallMap.domain_flows.map((flow) => ({
+      ...flow,
+      name: "[redacted]",
+      provenance: "llm",
+    })),
+    tour: smallMap.tour.map((step) => ({
+      ...step,
+      label: "[redacted]",
+      provenance: "llm",
+    })),
   },
   redaction: {
     marker: "[redacted]",
     policy: ["DomainFlow.name", "Layer.name", "Node.summary", "TourStep.label"],
     redacted: [
+      { field: "DomainFlow.name", count: 1 },
       { field: "Layer.name", count: 1 },
       { field: "Node.summary", count: 2 },
+      { field: "TourStep.label", count: 1 },
     ],
   },
 };
@@ -65,6 +81,29 @@ describe("share mode", () => {
     expect(banner).toHaveTextContent("Layer.name (1)");
     expect(banner).toHaveTextContent("Node.summary (2)");
     expect(banner).toHaveTextContent(/diff overlay/i);
+  });
+
+  it("walks the guided tour and the domain flows, redacted labels intact", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    // Same renderer as the served dashboard (ticket 14), so the newcomer's
+    // affordances are in the artifact too — showing the marker, not prose,
+    // and badging the slot as enriched so the reader knows why.
+    const tour = within(screen.getByLabelText("Guided tour"));
+    await user.click(tour.getByRole("button", { name: /start tour/i }));
+    expect(tour.getByText("Step 1 of 1")).toBeInTheDocument();
+    expect(tour.getByText(/\[redacted\]/)).toBeVisible();
+    expect(tour.getByTestId("provenance-badge")).toHaveTextContent("llm");
+
+    const flows = within(screen.getByLabelText("Domain flows"));
+    await user.click(
+      within(flows.getByRole("heading", { name: /^src/ })).getByRole("button"),
+    );
+    await user.click(flows.getByRole("button", { name: /\[redacted\]/ }));
+    expect(
+      within(flows.getByLabelText("Steps of [redacted]")).getByText("main"),
+    ).toBeInTheDocument();
   });
 
   it("offers no diff overlay toggle in share mode", () => {

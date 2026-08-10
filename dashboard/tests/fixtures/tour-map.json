@@ -1,0 +1,227 @@
+{
+  "version": "0.3.1",
+  "project": {
+    "name": "tour-fixture"
+  },
+  "nodes": [
+    {
+      "id": "file:cli/run.ts",
+      "kind": "file",
+      "name": "run.ts",
+      "path": "cli/run.ts",
+      "summary": "TypeScript file, 20 lines: 2 functions",
+      "layer": "cli",
+      "provenance": "structural"
+    },
+    {
+      "id": "function:cli/run.ts:run",
+      "kind": "function",
+      "name": "run",
+      "path": "cli/run.ts",
+      "summary": "Function run, lines 5-12",
+      "range": {
+        "start_line": 5,
+        "end_line": 12
+      },
+      "provenance": "structural"
+    },
+    {
+      "id": "function:cli/run.ts:parseArgs",
+      "kind": "function",
+      "name": "parseArgs",
+      "path": "cli/run.ts",
+      "summary": "Function parseArgs, lines 14-20",
+      "range": {
+        "start_line": 14,
+        "end_line": 20
+      },
+      "provenance": "structural"
+    },
+    {
+      "id": "file:src/main.ts",
+      "kind": "file",
+      "name": "main.ts",
+      "path": "src/main.ts",
+      "summary": "TypeScript file, 12 lines: 1 function",
+      "layer": "src",
+      "provenance": "structural"
+    },
+    {
+      "id": "function:src/main.ts:main",
+      "kind": "function",
+      "name": "main",
+      "path": "src/main.ts",
+      "summary": "Entry point that greets the user.",
+      "range": {
+        "start_line": 3,
+        "end_line": 9
+      },
+      "provenance": "llm"
+    },
+    {
+      "id": "file:src/greeter.ts",
+      "kind": "file",
+      "name": "greeter.ts",
+      "path": "src/greeter.ts",
+      "summary": "TypeScript file, 14 lines: 1 function",
+      "layer": "src",
+      "provenance": "structural"
+    },
+    {
+      "id": "function:src/greeter.ts:greet",
+      "kind": "function",
+      "name": "greet",
+      "path": "src/greeter.ts",
+      "summary": "Function greet, lines 1-6",
+      "range": {
+        "start_line": 1,
+        "end_line": 6
+      },
+      "provenance": "structural"
+    },
+    {
+      "id": "file:src/util.ts",
+      "kind": "file",
+      "name": "util.ts",
+      "path": "src/util.ts",
+      "summary": "TypeScript file, 8 lines: 1 function",
+      "layer": "src",
+      "provenance": "structural"
+    },
+    {
+      "id": "function:src/util.ts:format",
+      "kind": "function",
+      "name": "format",
+      "path": "src/util.ts",
+      "summary": "Function format, lines 1-5",
+      "range": {
+        "start_line": 1,
+        "end_line": 5
+      },
+      "provenance": "structural"
+    }
+  ],
+  "edges": [
+    {
+      "source": "file:cli/run.ts",
+      "target": "function:cli/run.ts:run",
+      "kind": "contains",
+      "weight": 1.0
+    },
+    {
+      "source": "file:cli/run.ts",
+      "target": "function:cli/run.ts:parseArgs",
+      "kind": "contains",
+      "weight": 1.0
+    },
+    {
+      "source": "file:src/main.ts",
+      "target": "function:src/main.ts:main",
+      "kind": "contains",
+      "weight": 1.0
+    },
+    {
+      "source": "file:src/greeter.ts",
+      "target": "function:src/greeter.ts:greet",
+      "kind": "contains",
+      "weight": 1.0
+    },
+    {
+      "source": "file:src/util.ts",
+      "target": "function:src/util.ts:format",
+      "kind": "contains",
+      "weight": 1.0
+    },
+    {
+      "source": "file:cli/run.ts",
+      "target": "file:src/main.ts",
+      "kind": "imports",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/main.ts",
+      "target": "file:src/greeter.ts",
+      "kind": "imports",
+      "weight": 0.7
+    },
+    {
+      "source": "file:src/greeter.ts",
+      "target": "file:src/util.ts",
+      "kind": "imports",
+      "weight": 0.7
+    },
+    {
+      "source": "function:cli/run.ts:run",
+      "target": "function:cli/run.ts:parseArgs",
+      "kind": "calls",
+      "weight": 0.9
+    },
+    {
+      "source": "function:src/main.ts:main",
+      "target": "function:src/greeter.ts:greet",
+      "kind": "calls",
+      "weight": 0.9
+    },
+    {
+      "source": "function:src/greeter.ts:greet",
+      "target": "function:src/util.ts:format",
+      "kind": "calls",
+      "weight": 0.9
+    }
+  ],
+  "layers": [
+    {
+      "id": "cli",
+      "name": "cli",
+      "provenance": "structural"
+    },
+    {
+      "id": "src",
+      "name": "Source code",
+      "provenance": "llm"
+    }
+  ],
+  "domain_flows": [
+    {
+      "id": "flow:function:cli/run.ts:run",
+      "domain": "cli",
+      "name": "run → parseArgs",
+      "provenance": "structural",
+      "steps": ["function:cli/run.ts:run", "function:cli/run.ts:parseArgs"]
+    },
+    {
+      "id": "flow:function:src/main.ts:main",
+      "domain": "src",
+      "name": "Greeting delivery",
+      "provenance": "llm",
+      "steps": [
+        "function:src/main.ts:main",
+        "function:src/greeter.ts:greet",
+        "function:src/util.ts:format",
+        "function:src/util.ts:vanished"
+      ]
+    }
+  ],
+  "tour": [
+    {
+      "node": "file:cli/run.ts",
+      "label": "Start here: the CLI entry point.",
+      "provenance": "llm"
+    },
+    {
+      "node": "file:src/main.ts",
+      "label": "Entry point: src/main.ts — fan-in 1, fan-out 1",
+      "provenance": "structural"
+    },
+    {
+      "node": "file:src/util.ts",
+      "label": "src/util.ts — fan-in 1, fan-out 0",
+      "provenance": "structural"
+    },
+    {
+      "node": "file:src/deleted.ts",
+      "label": "A step whose node is not in this map",
+      "provenance": "structural"
+    }
+  ]
+}

@@ -30,8 +30,15 @@ export interface KnowledgeGraph {
   nodes: Node[];
   project: Project;
   /**
-   * The guided tour: an ordered walk over the file nodes. Optional in the
-   * contract (older maps omit it); always emitted by the CLI.
+   * The guided tour: a bounded, ordered walk over the file nodes that
+   * carry the architecture — a newcomer-sized reading order, not one
+   * step per file, so its length does not grow with the repository. The
+   * contract sets no length limit; each producer picks its own (this
+   * CLI's selection and ordering rules are documented on
+   * `semantics::build_tour`). Optional in the contract (older maps omit
+   * it); always emitted by the CLI, though a repository whose files
+   * neither import nor call one another has nothing to walk and gets an
+   * empty tour.
    */
   tour?: TourStep[];
   /**

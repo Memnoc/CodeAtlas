@@ -2,12 +2,19 @@
 // contract and it renders the whole explorer — canvas, search, detail panel.
 // It consumes only the generated contract types (ADR-0003) and never makes a
 // network request.
-import { ReactFlow } from "@xyflow/react";
-import { useMemo, useState } from "react";
+import {
+  ReactFlow,
+  type Edge as FlowEdge,
+  type ReactFlowInstance,
+} from "@xyflow/react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { KnowledgeGraph, Node as MapNode } from "../index.js";
-import { searchNodes, toFlow } from "./graph.js";
+import { FlowsPanel } from "./FlowsPanel.js";
+import { type AppFlowNode, nodesById, searchNodes, toFlow } from "./graph.js";
 import { nodeTypes } from "./nodes.js";
 import type { DiffOverlay } from "./overlay.js";
+import { ProvenanceBadge } from "./ProvenanceBadge.js";
+import { TourPanel } from "./TourPanel.js";
 import "@xyflow/react/dist/style.css";
 import "./styles.css";
 
@@ -23,15 +30,31 @@ export function MapExplorer({
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showOverlay, setShowOverlay] = useState(false);
+  const canvas = useRef<ReactFlowInstance<AppFlowNode, FlowEdge> | null>(null);
+
+  // Selecting from the sidebar — a search hit, an edge, a tour step, a flow
+  // step — also brings the node into view: on a canvas of hundreds of nodes
+  // a highlight nobody can see is not a selection. Clicking a node on the
+  // canvas goes through plain `setSelectedId` instead: it is already on
+  // screen, and moving the viewport under the pointer would be jarring.
+  const reveal = useCallback((id: string) => {
+    setSelectedId(id);
+    void canvas.current?.fitView({
+      nodes: [{ id }],
+      duration: 0,
+      maxZoom: 1.2,
+      padding: 4,
+    });
+  }, []);
 
   // With the toggle on, entity nodes in the overlay's sets carry a
-  // highlight; everything else renders exactly as without an overlay.
+  // highlight; everything else renders exactly as without an overlay. The
+  // selected node is marked on the canvas too, so the sidebar's selection —
+  // a search hit, an edge, a tour step, a flow step — is visible where the
+  // map is.
   const shownNodes = useMemo(() => {
-    if (!showOverlay || !overlay) {
-      return nodes;
-    }
-    const changed = new Set(overlay.changed);
-    const affected = new Set(overlay.affected);
+    const changed = new Set(showOverlay && overlay ? overlay.changed : []);
+    const affected = new Set(showOverlay && overlay ? overlay.affected : []);
     return nodes.map((node) => {
       if (node.type !== "entity") {
         return node;
@@ -41,11 +64,13 @@ export function MapExplorer({
         : affected.has(node.id)
           ? ("affected" as const)
           : undefined;
-      return highlight === undefined
-        ? node
-        : { ...node, data: { ...node.data, highlight } };
+      const selected = node.id === selectedId;
+      if (highlight === undefined) {
+        return selected ? { ...node, selected } : node;
+      }
+      return { ...node, selected, data: { ...node.data, highlight } };
     });
-  }, [nodes, overlay, showOverlay]);
+  }, [nodes, overlay, selectedId, showOverlay]);
 
   const results = useMemo(() => searchNodes(map, query), [map, query]);
   const selected = useMemo(
@@ -86,7 +111,7 @@ export function MapExplorer({
           <ul className="search-results" aria-label="Search results">
             {results.map((n) => (
               <li key={n.id}>
-                <button type="button" onClick={() => setSelectedId(n.id)}>
+                <button type="button" onClick={() => reveal(n.id)}>
                   <span className="result-name">{n.name}</span>
                   <span className="result-path">{n.path}</span>
                 </button>
@@ -95,8 +120,13 @@ export function MapExplorer({
             {results.length === 0 && <li className="no-matches">No matches</li>}
           </ul>
         )}
+        {/* Navigation above the thing being navigated to: the tour's
+            controls must not slide down the sidebar as the detail panel
+            below them grows and shrinks from step to step. */}
+        <TourPanel map={map} onSelect={reveal} />
+        <FlowsPanel map={map} onSelect={reveal} />
         {selected && (
-          <DetailPanel map={map} node={selected} onSelect={setSelectedId} />
+          <DetailPanel map={map} node={selected} onSelect={reveal} />
         )}
       </aside>
       <main className="canvas">
@@ -104,6 +134,9 @@ export function MapExplorer({
           nodes={shownNodes}
           edges={edges}
           nodeTypes={nodeTypes}
+          onInit={(instance) => {
+            canvas.current = instance;
+          }}
           onNodeClick={(_event, node) => {
             if (node.type === "entity") {
               setSelectedId(node.id);
@@ -127,10 +160,7 @@ function DetailPanel({
   node: MapNode;
   onSelect: (id: string) => void;
 }) {
-  const byId = useMemo(
-    () => new Map(map.nodes.map((n) => [n.id, n])),
-    [map],
-  );
+  const byId = useMemo(() => nodesById(map), [map]);
   const touching = map.edges.filter(
     (e) => e.source === node.id || e.target === node.id,
   );
@@ -140,12 +170,7 @@ function DetailPanel({
       <h2>{node.name}</h2>
       <p className="detail-meta">
         <span className="detail-kind">{node.kind}</span>
-        <span
-          className={`badge badge-${node.provenance}`}
-          data-testid="provenance-badge"
-        >
-          {node.provenance}
-        </span>
+        <ProvenanceBadge provenance={node.provenance} />
       </p>
       <p className="detail-path">{node.path}</p>
       {node.range && (

@@ -21,24 +21,54 @@ story either. Both halves belong to this ticket.
 
 **Blocked by:** none — 06, 08, and 13 are done.
 
-**Status:** ready
+**Status:** done
 
-- [ ] The dashboard surfaces the guided tour: an ordered, navigable walk that
+- [x] The dashboard surfaces the guided tour: an ordered, navigable walk that
       moves the canvas selection step by step, showing each step's label
-- [ ] The dashboard surfaces domain flows, grouped by domain, with each
+- [x] The dashboard surfaces domain flows, grouped by domain, with each
       flow's name and its ordered steps selectable on the canvas
-- [ ] Both degrade honestly: a map with no `tour`/`domain_flows` (both are
+- [x] Both degrade honestly: a map with no `tour`/`domain_flows` (both are
       optional in the contract) renders without the affordances and without
       errors
-- [ ] Mechanical and enriched labels both display, with the provenance badge
+- [x] Mechanical and enriched labels both display, with the provenance badge
       already used for node detail
-- [ ] The tour is bounded and curated rather than one step per file — a
+- [x] The tour is bounded and curated rather than one step per file — a
       newcomer-sized walk over architecturally significant nodes, with the
       selection rule documented and deterministic
-- [ ] Tour ordering no longer ranks isolated files first: on CodeAtlas's own
+- [x] Tour ordering no longer ranks isolated files first: on CodeAtlas's own
       map the current step 1 is `tests/scan.rs` with fan-in 0 and fan-out 0,
       ahead of `lib.rs` at step 9
-- [ ] The share artifact renders the same affordances (same renderer, per
+- [x] The share artifact renders the same affordances (same renderer, per
       ticket 14) with redacted labels intact
-- [ ] Dashboard tests drive the tour and flow affordances from the map-contract
+- [x] Dashboard tests drive the tour and flow affordances from the map-contract
       seam, per the spec's Testing Decisions
+
+**How it landed.** The tour's selection rule is two deterministic passes in
+`semantics::build_tour`: files score `import fan-in + fan-out + 1 for hosting
+an entry point` (one point for the file, not one per function, so a test
+module full of test functions cannot out-rank a hub), zero-scoring files are
+off the walk, the top `TOUR_MAX_STEPS` (12) survive, and the survivors are
+then ordered `fan-out − fan-in + the entry-point bonus` so composition roots
+open and foundation modules close. On CodeAtlas's own map that is 12 steps
+of 154 files, led by the spec doc and `lib.rs`, with `map.rs` last and
+`tests/scan.rs` gone. The contract's `tour` description was corrected to say
+the walk is bounded (patch bump 0.3.0 → 0.3.1; schema and TS types
+regenerated). The dashboard gained `TourPanel`, `FlowsPanel`, and a shared
+`ProvenanceBadge`, and the canvas now marks whatever the sidebar selected.
+
+`/crosscheck` findings folded back in: the flows panel opens as a collapsed
+index of domains (CodeAtlas's own map has 141 flows, 137 of them under
+`crates`, which as a flat list would reproduce the very defect this ticket
+fixes on the tour side); sidebar selections now bring the node into view, so
+a highlight on a 600-node canvas is not off-screen; `README.md`'s contract
+version, a stale CSS comment, and a vestigial entry-point counter were
+corrected.
+
+Not covered: no browser could be driven here (Firefox headless fails to map
+a framebuffer), so layout and paint remain unwatched — the same gap harden
+recorded for stories 3 and 8. Two things this ticket deliberately did not
+change: test-fixture files can still earn a tour slot (CodeAtlas's own repo
+contains eight miniature repos, and their files genuinely participate in an
+import graph — excluding them would need a path heuristic the contract
+cannot justify), and the flow list itself is still unbounded, which is a V2
+question rather than a criterion here.

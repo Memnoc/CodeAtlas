@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 /// versioned `$id`. Tightening is breaking for producers that emitted
 /// ill-formed values, which standard 0.x semver permits on a minor bump;
 /// the only known producer (this binary) already conformed.
-pub const MAP_CONTRACT_VERSION: &str = "0.3.0";
+/// 0.3.1: documentation only — `tour` now states that it is a bounded,
+/// curated walk rather than one step per file. No shape change; maps and
+/// producers valid under 0.3.0 stay valid.
+pub const MAP_CONTRACT_VERSION: &str = "0.3.1";
 
 /// The published contract schema: the schemars-derived schema for
 /// [`KnowledgeGraph`] plus a stable, versioned `$id`. This is the single
@@ -45,8 +48,15 @@ pub struct KnowledgeGraph {
     /// maps omit it); always emitted by the CLI.
     #[serde(default)]
     pub domain_flows: Vec<DomainFlow>,
-    /// The guided tour: an ordered walk over the file nodes. Optional in the
-    /// contract (older maps omit it); always emitted by the CLI.
+    /// The guided tour: a bounded, ordered walk over the file nodes that
+    /// carry the architecture — a newcomer-sized reading order, not one
+    /// step per file, so its length does not grow with the repository. The
+    /// contract sets no length limit; each producer picks its own (this
+    /// CLI's selection and ordering rules are documented on
+    /// `semantics::build_tour`). Optional in the contract (older maps omit
+    /// it); always emitted by the CLI, though a repository whose files
+    /// neither import nor call one another has nothing to walk and gets an
+    /// empty tour.
     #[serde(default)]
     pub tour: Vec<TourStep>,
 }

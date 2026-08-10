@@ -140,6 +140,13 @@ export function toFlow(map: KnowledgeGraph): {
   return { nodes, edges };
 }
 
+/** The map's nodes by ID — the lookup every panel needs to turn a node
+ * reference (an edge's other end, a tour stop, a flow step) into something
+ * it can name or point at. */
+export function nodesById(map: KnowledgeGraph): Map<string, MapNode> {
+  return new Map(map.nodes.map((node) => [node.id, node]));
+}
+
 /** Case-insensitive substring search over node names and paths. */
 export function searchNodes(map: KnowledgeGraph, query: string): MapNode[] {
   const q = query.trim().toLowerCase();

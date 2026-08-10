@@ -217,7 +217,7 @@
       "type": "object"
     }
   },
-  "$id": "urn:codeatlas:map-contract:0.3.0",
+  "$id": "urn:codeatlas:map-contract:0.3.1",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "domain_flows": {
@@ -253,7 +253,7 @@
     },
     "tour": {
       "default": [],
-      "description": "The guided tour: an ordered walk over the file nodes. Optional in the\ncontract (older maps omit it); always emitted by the CLI.",
+      "description": "The guided tour: a bounded, ordered walk over the file nodes that\ncarry the architecture — a newcomer-sized reading order, not one\nstep per file, so its length does not grow with the repository. The\ncontract sets no length limit; each producer picks its own (this\nCLI's selection and ordering rules are documented on\n`semantics::build_tour`). Optional in the contract (older maps omit\nit); always emitted by the CLI, though a repository whose files\nneither import nor call one another has nothing to walk and gets an\nempty tour.",
       "items": {
         "$ref": "#/$defs/TourStep"
       },

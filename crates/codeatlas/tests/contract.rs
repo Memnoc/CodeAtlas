@@ -37,7 +37,7 @@ fn committed_schema_carries_a_versioned_id() {
     let schema = committed_schema();
     let id = schema["$id"].as_str().expect("schema has no $id");
     assert_eq!(
-        id, "urn:codeatlas:map-contract:0.3.0",
+        id, "urn:codeatlas:map-contract:0.3.1",
         "$id must be the stable contract URI carrying the current version"
     );
 }

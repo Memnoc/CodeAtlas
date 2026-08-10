@@ -211,9 +211,125 @@ body {
   text-decoration: underline;
 }
 
+/* The guided tour and the domain flows: the newcomer's half of the sidebar
+ * (spec story 6). Both sit above the detail panel, separated from what
+ * precedes them the same way the detail panel is. */
+.tour,
+.flows {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.tour h2,
+.flows h2 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.tour-progress {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tour-label {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.tour-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.tour button {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.tour button:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.flow-domain h3 {
+  margin: 12px 0 4px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+}
+
+.flow-count {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.flow-list,
+.flow-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.flow-list > li > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.flow-list > li > button:hover {
+  background: var(--bg);
+}
+
+.flow-steps {
+  margin: 2px 0 6px 10px;
+  border-left: 1px solid var(--border);
+}
+
+.flow-steps button {
+  width: 100%;
+  padding: 3px 8px;
+  border: none;
+  background: none;
+  color: var(--accent);
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.flow-steps button:hover {
+  text-decoration: underline;
+}
+
 .canvas {
   flex: 1;
   min-width: 0;
+}
+
+/* Wherever the selection is made — a search hit, an edge, a tour step, a
+ * flow step — the canvas says which node it is. */
+.react-flow__node.selected .entity {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
 }
 
 .layer-group {
