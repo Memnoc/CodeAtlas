@@ -200,6 +200,10 @@ fn extract_file(
 /// Resolves each file's import specifiers against the scanned file set and
 /// emits `imports` edges between file nodes. Unresolvable imports (bare
 /// packages, files outside the map) are dropped, never emitted dangling.
+///
+/// One statement may reach more than one file: in Python a bound name can be
+/// a module in its own right, so `from pkg import util, api` lands on
+/// `pkg/util.py` and `pkg/__init__.py` at once.
 fn resolve_imports(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>, root: &Path) {
     let files: HashSet<String> = paths.iter().cloned().collect();
     let mut seen: HashSet<(NodeId, NodeId)> = HashSet::new();
@@ -208,16 +212,47 @@ fn resolve_imports(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>,
             continue;
         };
         for import in &file.imports {
-            let Some(target) = parser.resolve_import(&file.path, &import.specifier, &files, root)
-            else {
-                continue;
-            };
-            let edge = (NodeId::file(&file.path), NodeId::file(&target));
-            if seen.insert(edge.clone()) {
-                edges.push(Edge::new(edge.0, edge.1, EdgeKind::Imports));
+            for target in import_targets(parser, &file.path, import, &files, root) {
+                let edge = (NodeId::file(&file.path), NodeId::file(&target));
+                if seen.insert(edge.clone()) {
+                    edges.push(Edge::new(edge.0, edge.1, EdgeKind::Imports));
+                }
             }
         }
     }
+}
+
+/// Every file one import statement reaches: the module each bound name is
+/// in its own right, plus the specifier's own target for every name that is
+/// not a module — and for a statement binding no names at all (`import x`,
+/// `#include`, a wildcard), which the specifier answers alone.
+fn import_targets(
+    parser: &dyn parsers::Parser,
+    importer: &str,
+    import: &parsers::Import,
+    files: &HashSet<String>,
+    root: &Path,
+) -> Vec<String> {
+    let mut targets = Vec::new();
+    let mut needs_specifier = import.names.is_empty();
+    for name in &import.names {
+        match parser.resolve_name_as_module(
+            importer,
+            &import.specifier,
+            &name.imported,
+            files,
+            root,
+        ) {
+            Some(module) => targets.push(module),
+            None => needs_specifier = true,
+        }
+    }
+    if needs_specifier
+        && let Some(target) = parser.resolve_import(importer, &import.specifier, files, root)
+    {
+        targets.push(target);
+    }
+    targets
 }
 
 /// Connects invocations to function nodes and emits `calls` edges. A callee
@@ -275,13 +310,34 @@ fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>, r
         // earlier one, matching source semantics).
         let mut bindings: HashMap<&str, Vec<(String, &str)>> = HashMap::new();
         for import in &file.imports {
-            if let Some(target) = parser.resolve_import(&file.path, &import.specifier, &files, root)
-            {
-                for name in &import.names {
+            // Where the specifier lands; resolved at most once per statement.
+            let mut specifier_target = None;
+            for name in &import.names {
+                let module = parser.resolve_name_as_module(
+                    &file.path,
+                    &import.specifier,
+                    &name.imported,
+                    &files,
+                    root,
+                );
+                let specifier = specifier_target
+                    .get_or_insert_with(|| {
+                        parser.resolve_import(&file.path, &import.specifier, &files, root)
+                    })
+                    .clone();
+                // Both candidates where the name is a module, because
+                // `from pkg import shadow` can bind the module *and* a
+                // symbol of that name in the package initialiser — and only
+                // the symbol can be the target of a bare `shadow()`. The
+                // specifier is pushed last so the last-first trial below
+                // prefers it, which is the opposite of what the import edge
+                // wants; an edge points at the module a reader would open,
+                // a call points at the function that actually runs.
+                for target in module.into_iter().chain(specifier) {
                     bindings
                         .entry(name.local.as_str())
                         .or_default()
-                        .push((target.clone(), &name.imported));
+                        .push((target, &name.imported));
                 }
             }
         }

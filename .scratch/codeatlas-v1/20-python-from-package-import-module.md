@@ -52,26 +52,126 @@ per-language import-convention probes. The first round (walk three) tested
 
 **Blocked by:** none — 04 is done, this corrects it.
 
-**Status:** ready
+**Status:** done
 
-- [ ] `from pkg import util` resolves to `pkg/util.py` when that module is in
+- [x] `from pkg import util` resolves to `pkg/util.py` when that module is in
       the scanned set, both with and without `pkg/__init__.py`
-- [ ] The existing behaviour is preserved where it is right: when the imported
+- [x] The existing behaviour is preserved where it is right: when the imported
       name is a symbol re-exported from `pkg/__init__.py` and no `pkg/util.py`
       exists, the edge still lands on `pkg/__init__.py`
       (`tests/scan.rs:1046` must keep passing unchanged)
-- [ ] `from . import util` likewise reaches `util.py` rather than stopping at
+- [x] `from . import util` likewise reaches `util.py` rather than stopping at
       the package initialiser
-- [ ] Candidate order is fixed and documented — module before package, or
+- [x] Candidate order is fixed and documented — module before package, or
       whichever way round, but stated, so a name that could be both resolves
       the same way every run
-- [ ] A name that is neither a module nor a resolvable package still produces
+- [x] A name that is neither a module nor a resolvable package still produces
       no edge; external and stdlib imports are unaffected
-- [ ] The fixtures gain a `from package import module` case and a namespace
+- [x] The fixtures gain a `from package import module` case and a namespace
       package (a directory of modules with no `__init__.py`)
-- [ ] Existing resolution is unregressed: relative imports, dotted absolute
+- [x] Existing resolution is unregressed: relative imports, dotted absolute
       imports, aliased imports, script-style siblings
-- [ ] Referential integrity holds — no edge references a missing node
+- [x] Referential integrity holds — no edge references a missing node
+
+**How it landed.** Resolution had no way to see a bound name — the parser
+trait maps one specifier to one file, and the specifier is exactly the part
+of `from pkg import util` that does *not* say where the edge goes. The trait
+gained `resolve_name_as_module`, which resolves a bound name as a module in
+its own right and returns `None` when it is not one. `None` is also the
+default, and it means the same thing either way: the name lands wherever the
+specifier does. Python is the only parser that overrides it.
+
+`scan.rs` now asks per name and falls back to the specifier only for the
+names that are not modules, which is what makes a mixed statement land in two
+files while a pure module import stays out of the package initialiser.
+
+Verified against a new `pypkgs/` fixture with one exact-set assertion over
+every `imports` edge, so the absences are pinned as hard as the presences —
+`uses_module.py` reaching `pkg/util.py` proves the fix, and its *not*
+reaching `pkg/__init__.py` proves the module-alone rule. Two mutations were
+run to prove the test can fail: drop the relative-import special case in
+`submodule_of` and both `from . import` edges break; always emit the
+specifier target and four spurious initialiser edges appear.
+
+**Decisions taken on the open questions:**
+
+- **One edge or two — one, the module alone**, as the ticket leaned. The
+  deciding argument was consistency rather than sparseness: this resolver
+  already answers `from pkg.util import helper` with `pkg/util.py` alone and
+  never records the package chain it walked through. Two edges here would
+  make the same dependency look different depending on which of two
+  equivalent import forms the author happened to type.
+- **`from pkg import a, b, c` — the extractor already yields one
+  `ImportedName` per bound name**, so nothing had to change there; it was
+  resolution that collapsed them. `uses_both.py` (`from pkg import api, util`)
+  is the fixture, and it lands on `pkg/__init__.py` *and* `pkg/util.py`.
+- **Ambiguity — the module wins**, pinned by `pkg/shadow.py` existing
+  alongside a `shadow` symbol in `pkg/__init__.py`. This is the one case
+  where the two candidate orders disagree, so it is the fixture that gives
+  the documented order teeth.
+- **The other parsers — confirmed, not assumed, and Python-only stands.**
+  Rust is the only other language with the form (`use a::b` where `b` may be
+  a module or an item), so it got a probe rather than a reading: `use
+  crate::a::b`, `use crate::a::deep::leaf` and `use self::a::b::helper` all
+  land on the right file. For the rest the form does not exist in the
+  grammar — Go and C/C++ specifiers name the package or file outright with no
+  separate bound name, and TypeScript's braced names are always symbols
+  inside the module the specifier already named.
+
+**A first attempt was measured and thrown away.** The obvious shape — a
+`resolve_imported_name` that defaults to resolving the specifier, called once
+per bound name — is correct but costs the C family badly, because
+`bind_includes` offers every unresolved callee to every include as a bound
+name. On a synthetic 200-file C repo (8 includes × 80 callees each) it took
+the scan from 77ms to 108ms for byte-identical output: 640 full resolutions
+per file where 8 would do. Inverting it so the default does *nothing* and the
+specifier is resolved at most once per statement puts it back at 78ms. On a
+synthetic 300-file Python repo the fix is free (22ms either way) and finds
+2400 import edges that were previously invisible; the self-scan is unchanged
+at 78ms.
+
+**What `/crosscheck` found, and what changed because of it.** Both axes
+landed on the same defect independently, and it was a real one.
+
+- **The module-first rule was dropping a `calls` edge, and the fixture was
+  written so it could not notice.** `from pkg import shadow`, where
+  `pkg/__init__.py` defines a `shadow` symbol beside `pkg/shadow.py`, bound
+  the name to the module and nothing else — so a bare `shadow()` resolved to
+  nothing, where before the change it reached
+  `function:pkg/__init__.py:shadow`. Reproduced against both binaries before
+  believing it. The two rules genuinely pull opposite ways: an *edge* should
+  point at the module a reader would open, a *call* at the function that
+  actually runs, and a module can never answer a bare call. `bindings` was
+  already an ordered candidate list with a first-that-works trial — built for
+  C-family includes — so the fix is to push both, specifier last, because
+  candidates are tried last-first. Import edges are unaffected; they are
+  computed separately. `uses_shadow.py` now calls `shadow()` instead of
+  merely naming it, and the assertion was mutation-tested: bind only the
+  module and the test fails.
+- **A dead intra-doc link** in the module header, left pointing at the
+  discarded first attempt's name. Fixed, and `cargo doc
+  --document-private-items` now reports zero unresolved links — which also
+  turned up the same defect one module over in `rust.rs:13` from ticket 18,
+  fixed in passing rather than left as a known-broken twin.
+- **AC7 had no script-style case through the new path.** Added
+  `scripts/tool.py` importing `from local import render`, which resolves only
+  by trying the name as a module beside the importer — there is no root-level
+  anchor and no `__init__.py`.
+- **The Rust confirmation rested on a probe that was thrown away.** Made
+  durable instead: the `rustroot` fixture gained `src/deep/leaf.rs` and a
+  `use crate::deep::leaf`, so the claim that Rust already handles
+  name-as-module is now a standing test rather than a paragraph.
+- **Declined: sharing one helper between `import_targets` and the binding
+  loop.** The reviewer was right that the two read alike and that the bug
+  lived in their divergence — but the divergence is the point, and it is now
+  the thing the code has to say out loud. Imports treat the specifier as a
+  *fallback*; calls treat it as an *additional candidate*. A shared helper
+  would have to be parameterised by which, and the parameter would carry all
+  the meaning. Both sites say why in a comment instead.
+
+**Noticed in passing, out of scope:** `lib.rs:100` prints `mapped {} files`
+with `graph.nodes.len()`, which counts symbol nodes too — the 208-file C
+probe reports "mapped 408 files". Cosmetic and user-facing; not this ticket.
 
 **Worth deciding while in here:**
 

@@ -404,6 +404,15 @@ fn a_rust_crate_at_the_repository_root_still_knows_its_own_name() {
         has_edge(&map, "imports", "file:tests/it.rs", "file:src/util.rs"),
         "`use root_lib::util` did not resolve at the repository root: {edges:?}"
     );
+
+    // The last segment of a `use` path may be a module rather than an item —
+    // the same shape that `from pkg import util` has in Python, where it
+    // needed a rule of its own (ticket 20). Rust resolves it already; this
+    // is what keeps that answer from going stale.
+    assert!(
+        has_edge(&map, "imports", "file:src/lib.rs", "file:src/deep/leaf.rs"),
+        "`use crate::deep::leaf` stopped at the module above the leaf: {edges:?}"
+    );
 }
 
 #[test]
@@ -1085,6 +1094,117 @@ fn python_files_yield_symbols_imports_and_calls() {
         ),
         "edges: {edges:?}"
     );
+}
+
+#[test]
+fn python_from_package_import_module_reaches_the_module() {
+    // `from pkg import util` binds either a module file or a symbol defined
+    // in the package, and the statement itself does not say which. Resolving
+    // the specifier alone answers "the package initialiser" every time,
+    // which is the wrong answer whenever the name is a module — and no
+    // answer at all when the package is a PEP 420 namespace package with no
+    // `__init__.py`.
+    let repo = materialize("pypkgs");
+    scan(repo.path());
+    let map = read_map(repo.path());
+
+    // The whole set, so this pins the absences as tightly as the presences:
+    // a module import must *not* also drag in the package initialiser, and
+    // nothing unresolvable may invent an edge.
+    let mut found: Vec<(String, String)> = map["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "imports")
+        .map(|e| {
+            (
+                e["source"].as_str().unwrap().to_string(),
+                e["target"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    found.sort();
+    let expected: Vec<(String, String)> = [
+        // `from . import util` inside a package with an initialiser.
+        ("file:pkg/inside.py", "file:pkg/util.py"),
+        // The same relative form inside a namespace package, where the
+        // initialiser that used to absorb the edge does not exist.
+        ("file:ns/emit.py", "file:ns/parse.py"),
+        // A module name and a symbol name in one statement resolve apart.
+        ("file:uses_both.py", "file:pkg/__init__.py"),
+        ("file:uses_both.py", "file:pkg/util.py"),
+        // The bound name may be aliased; the module is named by `imported`,
+        // never by the local alias.
+        ("file:uses_alias.py", "file:pkg/util.py"),
+        ("file:uses_dotted.py", "file:pkg/util.py"),
+        ("file:uses_module.py", "file:pkg/util.py"),
+        ("file:uses_ns.py", "file:ns/parse.py"),
+        // Both candidates exist: `pkg/shadow.py` and a `shadow` symbol in
+        // `pkg/__init__.py`. The module wins, and this is the one case where
+        // the two candidate orders disagree.
+        ("file:uses_shadow.py", "file:pkg/shadow.py"),
+        // Script style: neither `local` nor a root-level anchor exists, so
+        // this resolves only by trying the name as a module beside the
+        // importer.
+        ("file:scripts/tool.py", "file:scripts/local/render.py"),
+        // Preserved: a symbol the package defines still lands on the
+        // initialiser, and so does a wildcard, which binds no name to try.
+        ("file:uses_star.py", "file:pkg/__init__.py"),
+        ("file:uses_symbol.py", "file:pkg/__init__.py"),
+        // A name that is neither module nor symbol is indistinguishable from
+        // a symbol without reading the initialiser, so it falls back the
+        // same way. The statement does execute the initialiser.
+        ("file:uses_unknown.py", "file:pkg/__init__.py"),
+    ]
+    .iter()
+    .map(|(s, t)| (s.to_string(), t.to_string()))
+    .collect();
+    let mut expected_sorted = expected;
+    expected_sorted.sort();
+    assert_eq!(
+        found, expected_sorted,
+        "the import edges of the pypkgs fixture are not what the resolution rules say"
+    );
+
+    // Calls still cross into the initialiser when the bound name really is a
+    // symbol there — including from the statement that also binds a module.
+    for caller in ["uses_symbol.py:boot", "uses_both.py:both"] {
+        assert!(
+            has_edge(
+                &map,
+                "calls",
+                &format!("function:{caller}"),
+                "function:pkg/__init__.py:api"
+            ),
+            "a symbol bound by a from-import lost its call edge: {caller}"
+        );
+    }
+
+    // The two rules pull opposite ways on the same statement, and both have
+    // to hold at once. `from pkg import shadow` points its *edge* at
+    // `pkg/shadow.py`, asserted above — but `shadow()` is a bare call, which
+    // a module can never answer, so the *call* must still find the symbol in
+    // the package initialiser. Resolving the name to one file and stopping
+    // there silently drops this edge.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:uses_shadow.py:ambiguous",
+            "function:pkg/__init__.py:shadow"
+        ),
+        "a call to a symbol shadowed by a module of the same name was dropped"
+    );
+
+    // Referential integrity over the whole fixture: resolving names as
+    // modules must not name a file that is not in the map.
+    let ids: std::collections::HashSet<String> = node_ids(&map).into_iter().collect();
+    for edge in map["edges"].as_array().unwrap() {
+        for end in ["source", "target"] {
+            let id = edge[end].as_str().unwrap();
+            assert!(ids.contains(id), "dangling edge {end} {id}: {edge:?}");
+        }
+    }
 }
 
 #[test]

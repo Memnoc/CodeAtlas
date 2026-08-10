@@ -3,8 +3,11 @@
 //! Import resolution covers relative imports (`from .x import y`) and
 //! absolute module paths that land on files inside the map — resolved from
 //! the repository root first, then as siblings of the importer (script
-//! style). `__init__.py` is the package's index-file analog. External and
-//! stdlib modules never resolve.
+//! style). `__init__.py` is the package's index-file analog, and a package
+//! that has none is a namespace package (PEP 420), which resolves through
+//! its modules alone. In `from pkg import util` the bound name may itself be
+//! a module rather than a symbol; see [`Python::resolve_name_as_module`] for
+//! the candidate order. External and stdlib modules never resolve.
 
 use std::collections::HashSet;
 
@@ -85,6 +88,46 @@ impl Parser for Python {
             return None; // root-relative already tried
         }
         resolve_module(dir, &rest, files)
+    }
+
+    /// `from pkg import util` binds either the module `pkg/util.py` or a
+    /// symbol defined in `pkg`, and the statement does not say which. The
+    /// candidate order is **module before package**: the name is tried as a
+    /// submodule of the specifier, and only a miss falls back to the
+    /// specifier alone. Both candidates keep the anchor order
+    /// [`Python::resolve_import`] already uses — repository root, then
+    /// script-style beside the importer.
+    ///
+    /// Module first, for two reasons. It is the only order that produces an
+    /// edge at all for a PEP 420 namespace package, where there is no
+    /// `__init__.py` to fall back to. And where both exist it is the answer
+    /// a reader wants: tracing who uses `pkg/util.py` is the question the
+    /// map is for, while the package initialiser is a waypoint.
+    ///
+    /// One edge, not two, even though the statement really does execute
+    /// `pkg/__init__.py` as well. That matches what this resolver already
+    /// does for `from pkg.util import helper`, which reaches `pkg/util.py`
+    /// alone and never records the package chain it walked through.
+    fn resolve_name_as_module(
+        &self,
+        importer: &str,
+        specifier: &str,
+        name: &str,
+        files: &HashSet<String>,
+        root: &std::path::Path,
+    ) -> Option<String> {
+        self.resolve_import(importer, &submodule_of(specifier, name), files, root)
+    }
+}
+
+/// The specifier naming `name` as a submodule: `pkg` + `util` is `pkg.util`.
+/// A relative specifier already ends in the separator — `from . import util`
+/// is `.util`, and adding a dot would read as one package further up.
+fn submodule_of(specifier: &str, name: &str) -> String {
+    if specifier.ends_with('.') {
+        format!("{specifier}{name}")
+    } else {
+        format!("{specifier}.{name}")
     }
 }
 

@@ -10,7 +10,7 @@
 //! resolves against the crate roots in the scanned tree. That one form falls
 //! back to the named crate's root module when no submodule matches, because
 //! what follows a crate name is as often a re-exported item as a module; see
-//! [`resolve_import`] for the full candidate order.
+//! [`Rust::resolve_import`] for the full candidate order.
 //!
 //! Everything else — external crates, `std`, paths that land on no scanned
 //! file — is dropped, never dangling.

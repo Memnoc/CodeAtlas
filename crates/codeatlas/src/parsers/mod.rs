@@ -104,6 +104,23 @@ pub trait Parser: Send + Sync {
         files: &HashSet<String>,
         root: &Path,
     ) -> Option<String>;
+    /// Resolves a *bound name* — `name` as written in the module it comes
+    /// from, never the local alias — as a module file in its own right.
+    /// `None` means the name is not a module, and so lands wherever the
+    /// specifier does; that is the answer for every language whose specifier
+    /// always names the module, hence the default. Python overrides it: in
+    /// `from pkg import util` the name may be `pkg/util.py`, so one
+    /// statement can reach several files.
+    fn resolve_name_as_module(
+        &self,
+        _importer: &str,
+        _specifier: &str,
+        _name: &str,
+        _files: &HashSet<String>,
+        _root: &Path,
+    ) -> Option<String> {
+        None
+    }
     /// Whether all files in one directory share a single namespace (Go
     /// packages): a plain-identifier call may then resolve to a function
     /// defined in a sibling file without any import.
