@@ -215,39 +215,79 @@ boundaries; no test reaches into pipeline internals.
 
 ## Verification
 
-`/harden` has walked all 17 user stories against the assembled system twice.
-The first walk (**2026-08-09**, baseline `0a523da`) found one failure, story
-6, and filed it as ticket 16. The second walk (**2026-08-10**, baseline
+`/harden` has walked all 17 user stories against the assembled system three
+times. The first walk (**2026-08-09**, baseline `0a523da`) found one failure,
+story 6, and filed it as ticket 16. The second walk (**2026-08-10**, baseline
 `be320b1`, after ticket 16 landed) re-walked every story, not just the failed
 one, because ticket 16 changed the tour projection, the map contract version,
-and the dashboard.
+and the dashboard. The third walk (**2026-08-10**, baseline `d8b535c`, after
+ticket 17 landed) again re-walked every story, because ticket 17 changed
+import resolution and edges are the substrate under the tour, the flows, the
+layer projection and the diff blast radius. It found one failure, story 2,
+and filed it as ticket 18.
 
 Stories were driven through the real binaries — a default release build, a
 sealed `--no-default-features` build, and a `test-provider` build for the
 enrichment seam — against real repositories, not by reading code, except
 where noted.
 
-| # | Story | 2026-08-09 | 2026-08-10 |
-|---|-------|-----------|-----------|
-| 1 | Complete structural map in seconds, no LLM | pass | pass |
-| 2 | Relationships: imports, calls, containment, exports | pass | pass |
-| 3 | Interactive local dashboard | pass¹ | pass¹ |
-| 4 | Opt-in enrichment fills prose slots | pass | pass |
-| 5 | Re-runs re-purchase only changed content | pass | pass |
-| 6 | Domain flows and an ordered guided tour | **fail** | **pass¹** |
-| 7 | Diff's changed nodes and one-hop blast radius | pass | pass |
-| 8 | Single self-contained redacted HTML export | pass¹ | pass¹ |
-| 9 | Sealed build with no networking code, plus egress suite | pass | pass |
-| 10 | Shared artifact discloses what was redacted | pass | pass |
-| 11 | Structural graph rebuilt from scratch every run | pass | pass |
-| 12 | Annotations re-attach only on unchanged content hash | pass | pass |
-| 13 | Schema-guaranteed structured output, no repair machinery | pass² | pass² |
-| 14 | Enrichment failure leaves a valid structural map | pass | pass |
-| 15 | Unparseable files still appear as nodes | pass | pass |
-| 16 | Published, semver-versioned map schema | pass | pass |
-| 17 | Dashboard consumes only local files, zero external requests | pass | pass |
+| # | Story | 08-09 `0a523da` | 08-10 `be320b1` | 08-10 `d8b535c` |
+|---|-------|-----------|-----------|-----------|
+| 1 | Complete structural map in seconds, no LLM | pass | pass | pass |
+| 2 | Relationships: imports, calls, containment, exports | pass³ | pass³ | **fail** |
+| 3 | Interactive local dashboard | pass¹ | pass¹ | pass¹ |
+| 4 | Opt-in enrichment fills prose slots | pass | pass | pass |
+| 5 | Re-runs re-purchase only changed content | pass | pass | pass |
+| 6 | Domain flows and an ordered guided tour | **fail** | **pass¹** | pass¹ |
+| 7 | Diff's changed nodes and one-hop blast radius | pass | pass | pass |
+| 8 | Single self-contained redacted HTML export | pass¹ | pass¹ | pass¹ |
+| 9 | Sealed build with no networking code, plus egress suite | pass | pass | pass |
+| 10 | Shared artifact discloses what was redacted | pass | pass | pass |
+| 11 | Structural graph rebuilt from scratch every run | pass | pass | pass |
+| 12 | Annotations re-attach only on unchanged content hash | pass | pass | pass |
+| 13 | Schema-guaranteed structured output, no repair machinery | pass² | pass² | pass² |
+| 14 | Enrichment failure leaves a valid structural map | pass | pass | pass |
+| 15 | Unparseable files still appear as nodes | pass | pass | pass |
+| 16 | Published, semver-versioned map schema | pass | pass | pass |
+| 17 | Dashboard consumes only local files, zero external requests | pass | pass | pass |
 
-### The failure, and its repair
+### The third walk's failure: story 2, and the two passes it corrects
+
+**Story 2** fails on 2026-08-10. The Rust parser drops every path that names a
+crate in the scanned tree — `use codeatlas::map::…`, or across a workspace
+`use atlas_engine::engine::run`. `parsers/rust.rs` resolves `crate::`,
+`self::`, `super::` and `mod foo;`, and declines everything else as external,
+at which point a crate that is *in the tree* is indistinguishable from
+`serde`. Filed as **ticket 18**.
+
+On CodeAtlas itself the cost is two dropped statements, both in
+`tests/share.rs`. On a two-crate workspace — the ordinary shape of a Rust
+project — it is total: zero inter-crate edges, every crate an island. This
+repository being a single-crate workspace is exactly why the defect looked
+cheap for two walks.
+
+The ³ against story 2's earlier passes marks them as overclaims, in two
+different ways, and both are worth naming rather than quietly restating:
+
+- The **2026-08-09** pass was wrong for TypeScript. Under `NodeNext` the
+  compiler obliges source to write `./x.js` for a file that is `x.ts`, and
+  every such specifier was dropped — 38 of the dashboard's 46, islanding the
+  whole subtree and leaving a Rust-plus-TypeScript project with a silently
+  all-Rust tour. Ticket 17 fixed it; this walk confirms the repair (below).
+- The **2026-08-10** (`be320b1`) pass repeated that error, and also missed the
+  Rust gap now filed as ticket 18.
+
+Both walks checked that the four edge kinds existed and were populated, which
+they were, and never asked whether each language's *real* import conventions
+resolved. That is the check this walk added: a probe repository per V1
+language, written the way projects in that language are actually written.
+TypeScript (NodeNext, `index` files), Python (absolute intra-project,
+`from .x import`, `from . import x`, `import pkg.mod`), Go (module-path) and
+C/C++ (quoted resolving, angled correctly declining) all passed. Rust was the
+only failure. The lesson generalises past this spec: "the edge kind exists" is
+not evidence that the edges exist.
+
+### The first walk's failure, and its repair
 
 **Story 6** failed on 2026-08-09: domain flows and the tour were produced
 correctly and landed in the map file, but no consumer rendered either one, and
@@ -293,6 +333,42 @@ owned:
   yield a 12-step tour and zero flows, because a flow needs a root nothing
   calls.
 
+The 2026-08-10 (`d8b535c`) walk re-ran all of the above and added the seams
+ticket 17 created:
+
+- **Per-language import conventions**, described above — the check that found
+  ticket 18, and the one whose absence let story 2 pass twice.
+- **Ticket 17's repair, confirmed at the seam it broke.** Import edges 88 →
+  129; `dashboard/src/app` 1 → 33; all 14 files under `dashboard/src/`
+  connected; the tour from zero dashboard files to five, so a walk of a
+  Rust-plus-TypeScript project is no longer silently all-Rust.
+- **The blast radius that the missing edges had hidden** — editing
+  `dashboard/src/app/graph.ts` now reports 5 changed nodes and a 5-file
+  one-hop radius. Before ticket 17 the whole dashboard held one edge, so a
+  reviewer asking the map for the risk of a dashboard change was shown
+  nothing. This is story 7 depending on story 2, and it is the strongest
+  argument that a dropped-specifier defect is never local to its parser.
+- **Carry-over when topology changes but content does not** — the seam ticket
+  17 opens, since it changes edges without changing any node ID or content
+  hash. Adding one connected file cost exactly 2 slots; the file whose fan-in
+  changed kept its prose (content-keyed, correctly) and an unanswered slot on
+  the newcomer kept its mechanical label. Cost stays proportional to the
+  delta.
+- **Referential integrity of externally-produced maps** — a dangling edge is
+  schema-legal, so neither the schema nor `share` rejects it. The dashboard is
+  resilient rather than lucky: a map whose edge references a missing node, and
+  one whose tour step does, both render without throwing. Recorded as a
+  limitation below, not a failure — no CodeAtlas-produced map has ever carried
+  one (zero dangling edges across all six maps validated this walk).
+- **An annotation store written before ticket 17, read after it** — attempted
+  and *not* completed: the pre-fix worktree cannot build, because the build
+  script compiles the dashboard and a fresh worktree has no
+  `dashboard/node_modules` (the trap already recorded in `0a523da`). The seam
+  was reached the other way instead, through the content-versus-topology test
+  above, which is the property that actually matters: ticket 17 changed no
+  node ID and no content hash, so no stored annotation could be invalidated
+  by it.
+
 ### Notes on the passes
 
 1. **Stories 3, 6 and 8** — no browser can be driven in this environment
@@ -312,7 +388,17 @@ owned:
    schema, parsed exactly once, with a refusal or truncation an error rather
    than a repair attempt) was confirmed by reading `enrich/claude.rs`; it was
    not exercised against the live API, which would require credentials and
-   spend.
+   spend. Re-confirmed on 2026-08-10 (`d8b535c`): of six answers offered to
+   the provider — one correctly addressed, one for a nonexistent node, one
+   unprefixed, one for a nonexistent layer, one blank, one for a nonexistent
+   tour node — exactly the correctly addressed one landed, no phantom nodes
+   were created, and the map stayed referentially intact.
+3. **Story 2's pass on the first two walks was an overclaim**, in the ways set
+   out above. It is recorded here rather than rewritten, because the point of
+   this section is the audit trail: both walks confirmed the four edge kinds
+   were populated without asking whether each language's real conventions
+   resolved, and a verdict table that quietly changed its own history would
+   hide the only lesson worth keeping.
 
 ### Other evidence recorded
 
@@ -325,13 +411,26 @@ and restoring its content re-attached the stored prose with no provider call
 (stories 5 and 12). Enrichment failure, an unconfigured provider, and absent
 credentials each leave a complete structural map behind and say so (story
 14). All five network-namespace egress tests genuinely ran rather than
-skipping, and both CI feature configurations are green (97 and 90 tests, plus
-36 dashboard tests). The sealed binary's undefined network symbols are
-`bind`, `listen`, and `socket` — std's `TcpListener`, which `serve` needs for
-loopback — and notably **not** `connect` or `getaddrinfo`, which the default
-build does link: the sealed build cannot open an outbound connection or
-resolve a name, and its dependency tree contains no networking crates at all.
-Regenerating the schema and the dashboard's TS types produces no drift.
+skipping (0 ignored), and both CI feature configurations are green — as of
+`d8b535c`, **98** tests on the default build and **91** sealed, plus **37**
+dashboard tests. The sealed binary's undefined network symbols are `bind`,
+`listen`, `socket` and `socketpair` — std's `TcpListener`, which `serve` needs
+for loopback — and notably **not** `connect` or `getaddrinfo`, which the
+default build does link: the sealed build cannot open an outbound connection
+or resolve a name, and its dependency tree contains no networking crates at
+all (0, against 11 in the default build). `__tls_get_addr` also appears in
+both and is thread-local storage, not TLS — a false friend worth naming so a
+future auditor does not read it as a crypto stack. Regenerating the schema and
+the dashboard's TS types produces no drift.
+
+Story 17 was additionally audited at the artifact rather than the source: in
+the production bundle served by the binary, the only `fetch` targets are
+`/api/map`, `/api/diff` and Vite's modulepreload polyfill over local
+`/assets`, all same-origin, with no `XMLHttpRequest`, `WebSocket`,
+`EventSource` or `sendBeacon` anywhere. The absolute URLs it does contain are
+inert strings: `w3.org` SVG/MathML namespaces passed to `createElementNS`, and
+`react.dev`/`reactflow.dev` in library error text and the React Flow
+attribution.
 
 ### Known limitations confirmed, not blocking
 
@@ -342,23 +441,40 @@ Regenerating the schema and the dashboard's TS types produces no drift.
   its file share a content hash — so touching one line in a large file
   re-purchases every node in it. Conservative and never stale, but coarser
   than "only the code that changed".
-- The "mapped N files" message reports node count, not file count (615 vs.
-  154 on CodeAtlas itself; 17 vs. 9 on a nine-file fixture).
+- The "mapped N files" message reports node count, not file count (626 vs.
+  159 on CodeAtlas itself; 6000 vs. 3000 on the synthetic repo). Unchanged
+  across three walks.
+- **Referential integrity is not part of the contract.** A dangling edge —
+  one whose `source` or `target` names no node — validates against the
+  published schema and is accepted by `share`. It matters only for
+  externally-produced maps (story 16), since CodeAtlas's own scans have never
+  emitted one, and the dashboard renders such a map without throwing. Worth a
+  decision in V2: either the schema cannot express it and the check belongs in
+  `share`, or the contract README should say plainly that producers own it.
+- **The dashboard renders React Flow's attribution link** to
+  `reactflow.dev?utm_source=attribution`, in the served page and in the share
+  artifact. It is an `<a>`, not a request, so stories 8 and 17 hold — nothing
+  is fetched and the artifact opens fully offline. But it is an off-origin
+  link inside an artifact designed to be handed to third parties, and
+  `proOptions.hideAttribution` is not set. A deliberate call either way, not
+  an accident to leave undocumented.
 - A partial-batch enrichment failure discarding earlier successful batches
   could not be reproduced through the CLI seam: both offline test providers
   are all-or-nothing, so this remains a code-review finding only.
-- The tour is bounded but the **flow list is not**: CodeAtlas's own map
-  carries 141 flows, 137 of them in a single domain. The dashboard mitigates
+- The tour is bounded but the **flow list is not**: CodeAtlas's own map now
+  carries 144 flows, 139 of them in a single domain. The dashboard mitigates
   this by opening as a collapsed index of domains, but bounding or ranking
   flows themselves is a V2 question.
 - Test-fixture files can earn tour slots. This repository contains eight
   miniature fixture repositories whose files genuinely participate in an
-  import graph, so step 5 of CodeAtlas's own tour is
-  `tests/fixtures/cppproj/main.cpp`. Excluding them would need a path
-  heuristic the map contract cannot justify.
+  import graph. As of `d8b535c` none of them holds a tour slot — the
+  dashboard files that ticket 17 reconnected outrank them — but nothing
+  prevents it, and excluding them would need a path heuristic the map contract
+  cannot justify.
 
-**Shipped status:** all 17 stories pass as of **2026-08-10**. Two passes rest
-on evidence short of watching the real thing — the browser-unwatched
-rendering behind stories 3, 6 and 8, and the unexecuted live-API half of
-story 13 — and both await explicit acceptance by name before this is called
-shipped.
+**Shipped status:** **not shipped.** 16 of 17 stories pass as of
+**2026-08-10** (`d8b535c`); story 2 fails and is filed as ticket 18. Shipping
+needs that ticket built, a re-walk of story 2, and then explicit acceptance of
+the two passes that rest on evidence short of watching the real thing — the
+browser-unwatched rendering behind stories 3, 6 and 8, and the unexecuted
+live-API half of story 13.
