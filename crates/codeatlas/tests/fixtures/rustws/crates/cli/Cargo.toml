@@ -1,0 +1,9 @@
+[package]
+name = "atlas-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+atlas-engine = { path = "../atlas-engine" }
+atlas-tools = { path = "../toolbox" }
+log = { path = "../log" }

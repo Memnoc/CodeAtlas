@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/atlas-engine", "crates/cli", "crates/log", "crates/toolbox"]
+resolver = "2"

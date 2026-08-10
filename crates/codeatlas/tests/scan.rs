@@ -281,6 +281,132 @@ fn import_statements_resolve_to_imports_edges_between_file_nodes() {
 }
 
 #[test]
+fn rust_crate_name_paths_resolve_across_a_workspace() {
+    let repo = materialize("rustws");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let edges = map["edges"].as_array().unwrap();
+
+    // A crate naming itself. Integration tests have no other way to reach
+    // their own library — `crate::` does not span the tests/ boundary — so
+    // dropping this form orphans every tests/ file in every Rust project.
+    // The package is `atlas-engine` and the path is `atlas_engine`: Cargo's
+    // own normalisation, which the resolver has to share.
+    assert!(
+        has_edge(
+            &map,
+            "imports",
+            "file:crates/atlas-engine/tests/it.rs",
+            "file:crates/atlas-engine/src/engine.rs"
+        ),
+        "a crate naming itself did not resolve: {edges:?}"
+    );
+
+    // Workspace siblings. Multi-crate is the ordinary shape of a Rust
+    // project, and without this every crate in one is an island.
+    assert!(
+        has_edge(
+            &map,
+            "imports",
+            "file:crates/cli/src/main.rs",
+            "file:crates/atlas-engine/src/engine.rs"
+        ),
+        "a workspace sibling did not resolve: {edges:?}"
+    );
+
+    // Package `atlas-tools` lives in `toolbox/`. Nothing in the path says
+    // so, so this edge exists only if the manifest is what decides a crate's
+    // name — a directory-name guess cannot find it.
+    assert!(
+        has_edge(
+            &map,
+            "imports",
+            "file:crates/cli/src/main.rs",
+            "file:crates/toolbox/src/lib.rs"
+        ),
+        "a package named differently from its directory did not resolve: {edges:?}"
+    );
+
+    // `log` is a crate in this tree and also one of the best-known names on
+    // crates.io. The one in the tree wins, deliberately: the alternative is a
+    // denylist of every published name, and an edge to a file the reader can
+    // open beats no edge.
+    //
+    // It is also duplicated at vendor/log, so this pins which of two equally
+    // valid candidates is chosen — the nearer one. Without a rule the answer
+    // would depend on hash iteration order and differ between runs; with the
+    // wrong rule a workspace reaches into its own vendor directory.
+    assert!(
+        has_edge(
+            &map,
+            "imports",
+            "file:crates/cli/src/main.rs",
+            "file:crates/log/src/lib.rs"
+        ),
+        "a scanned crate lost to its crates.io namesake: {edges:?}"
+    );
+    assert!(
+        !has_edge(
+            &map,
+            "imports",
+            "file:crates/cli/src/main.rs",
+            "file:vendor/log/src/lib.rs"
+        ),
+        "the workspace reached past its own crate into a vendored namesake: {edges:?}"
+    );
+
+    // The same rule read from the other side. Sorted by path, `crates/log`
+    // comes first, so an importer inside `vendor/` is what proves the choice
+    // is nearness rather than merely a stable order.
+    assert!(
+        has_edge(
+            &map,
+            "imports",
+            "file:vendor/app/src/main.rs",
+            "file:vendor/log/src/lib.rs"
+        ),
+        "a vendored crate resolved against the workspace instead of its own tree: {edges:?}"
+    );
+
+    // `use serde::Serialize` names a crate that is *not* in the scanned tree,
+    // and inventing an edge for it would be worse than dropping one. Asserted
+    // as the exact edge set rather than "no target called serde": a wrongly
+    // resolved external path does not point at something named after the
+    // crate, it points at some real file, so only the whole set catches it.
+    let mut from_main: Vec<&str> = edges
+        .iter()
+        .filter(|e| e["kind"] == "imports" && e["source"] == "file:crates/cli/src/main.rs")
+        .filter_map(|e| e["target"].as_str())
+        .collect();
+    from_main.sort_unstable();
+    assert_eq!(
+        from_main,
+        [
+            "file:crates/atlas-engine/src/engine.rs",
+            "file:crates/log/src/lib.rs",
+            "file:crates/toolbox/src/lib.rs"
+        ],
+        "main.rs names four crates and exactly three of them are in the tree"
+    );
+}
+
+#[test]
+fn a_rust_crate_at_the_repository_root_still_knows_its_own_name() {
+    // The commonest Rust layout there is: one crate, `src/` at the top. Its
+    // directory name appears in no scanned path, so the manifest is the only
+    // place its name exists.
+    let repo = materialize("rustroot");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let edges = map["edges"].as_array().unwrap();
+
+    assert!(
+        has_edge(&map, "imports", "file:tests/it.rs", "file:src/util.rs"),
+        "`use root_lib::util` did not resolve at the repository root: {edges:?}"
+    );
+}
+
+#[test]
 fn typescript_nodenext_specifiers_resolve_to_their_source_files() {
     let repo = materialize("simple");
     scan(repo.path());

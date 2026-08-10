@@ -154,6 +154,41 @@ describe("CodeAtlas's own self-scan map", () => {
     ).not.toHaveLength(0);
   });
 
+  it("resolves the crate-name paths this repository's Rust is written with", () => {
+    const byId = new Map(map.nodes.map((n) => [n.id, n]));
+    const imports = map.edges
+      .filter((e) => e.kind === "imports")
+      .map(
+        (e) => [byId.get(e.source)?.path, byId.get(e.target)?.path] as const,
+      );
+
+    // An integration test cannot say `crate::` — that path does not span the
+    // tests/ boundary — so it names its own crate, and the map has to follow
+    // it or every tests/ file in every Rust project is an orphan. Asserted by
+    // name: a count would pass on any two edges.
+    expect(imports).toContainEqual([
+      "crates/codeatlas/tests/share.rs",
+      "crates/codeatlas/src/share.rs",
+    ]);
+    expect(imports).toContainEqual([
+      "crates/codeatlas/tests/share.rs",
+      "crates/codeatlas/src/map.rs",
+    ]);
+
+    // And the other half of the guarantee: a crate that is not in the scanned
+    // tree must still resolve to nothing. lib.rs imports std, anyhow, serde
+    // and clap alongside its own modules, and a wrongly resolved external
+    // path would land on some real file rather than on one named after the
+    // crate — so the check is where the edges point, not what they are called.
+    const fromLib = imports
+      .filter(([source]) => source === "crates/codeatlas/src/lib.rs")
+      .map(([, target]) => target ?? "");
+    expect(fromLib.length).toBeGreaterThan(0);
+    expect(
+      fromLib.filter((t) => !t.startsWith("crates/codeatlas/src/")),
+    ).toEqual([]);
+  });
+
   it("groups the self-scan's domain flows by domain", () => {
     render(<MapExplorer map={map} />);
 
