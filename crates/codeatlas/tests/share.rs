@@ -4,6 +4,8 @@
 //! exhaustiveness test that forbids any contract field from shipping
 //! unclassified.
 
+mod common;
+
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
@@ -362,19 +364,7 @@ fn share_artifact_references_no_external_host() {
     // Byte-scan for anything fetchable, mirroring the dashboard's
     // zero-egress test: http(s), websockets, and protocol-relative
     // references in markup contexts.
-    let mut offenders = Vec::new();
-    for scheme in ["http://", "https://"] {
-        for (pos, _) in html.match_indices(scheme) {
-            let url: String = html[pos..]
-                .chars()
-                .take_while(|c| !c.is_whitespace() && !"\"'`\\)<>".contains(*c))
-                .collect();
-            if !is_inert(&url) {
-                offenders.push(url);
-            }
-        }
-    }
-    assert_eq!(offenders, Vec::<String>::new());
+    assert_eq!(common::external_urls(&html), Vec::<String>::new());
 
     assert!(!html.contains("ws://"), "artifact references a websocket");
     assert!(!html.contains("wss://"), "artifact references a websocket");
@@ -382,19 +372,6 @@ fn share_artifact_references_no_external_host() {
         !html.contains("src=\"//") && !html.contains("href=\"//"),
         "artifact contains a protocol-relative reference"
     );
-}
-
-/// URLs that are string literals by construction, never requests — the same
-/// allowlist the dashboard's zero-egress test documents: XML namespace
-/// identifiers, React's minified-error text, and React Flow's doc links
-/// including its attribution `<a href>` (kept deliberately: a plain anchor
-/// performs no request until the reader chooses to click it).
-fn is_inert(url: &str) -> bool {
-    url.starts_with("http://www.w3.org/")
-        || url.starts_with("https://www.w3.org/")
-        || url.starts_with("https://react.dev/errors/")
-        || url.starts_with("https://reactflow.dev")
-        || (url.starts_with("https://${") && url.contains("flow.dev"))
 }
 
 #[test]

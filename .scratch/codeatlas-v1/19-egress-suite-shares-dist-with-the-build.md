@@ -63,41 +63,76 @@ The theming did not cause it — any dashboard edit does.
 
 **Blocked by:** none.
 
-**Status:** ready
+**Status:** done
 
-- [ ] The egress suite no longer shares a directory with the build script:
+- [x] The egress suite no longer shares a directory with the build script:
       either it builds somewhere of its own, or the two are prevented from
       running concurrently
-- [ ] Every egress assertion that iterates a file set first asserts the set is
+- [x] Every egress assertion that iterates a file set first asserts the set is
       non-empty, so an empty or partial `dist` fails loudly instead of passing
       quietly — this holds even if the race is fixed some other way
-- [ ] The websocket / protocol-relative check and the web-font check both fail
+- [x] The websocket / protocol-relative check and the web-font check both fail
       when handed an empty directory, asserted by a test that hands them one
-- [ ] `npx vitest run` is green on the first attempt with `dashboard/src`
+- [x] `npx vitest run` is green on the first attempt with `dashboard/src`
       freshly edited — the condition that reproduces the race 3 times in 3
-- [ ] Whatever directory the egress build uses is gitignored and cleaned up,
+- [x] Whatever directory the egress build uses is gitignored and cleaned up,
       and does not become a second thing `build.rs` must know about
 
-**Worth deciding while in here:**
+**How it landed.** The egress suite builds into `dist-egress/` of its own, so
+`dashboard/dist` now has exactly one writer and one reader, both `build.rs`.
+`filesUnder` became `nonEmptyFilesUnder` and refuses to return an empty list,
+which covers every guarantee at one seam instead of three remembered guards.
+The three checks were parameterised by directory so the tests and the vacuity
+guard run the same code rather than a copy — a guard against a duplicate of a
+check would prove nothing about the check — and a fourth check was split out,
+because "assets are local" and "no web-font host" were two guarantees sharing
+one name.
 
-- **How to unshare the directory.** Giving the egress test its own
-  `--outDir` (say `dist-egress/`) removes the sharing outright and keeps both
-  test files parallel, which is why it looks better than the alternative.
-  Serialising with `fileParallelism: false` slows the whole suite to fix two
-  files and — the real objection — leaves the vacuous pass in place, since an
-  empty `dist` can arise any other way too. Recommend the separate outDir,
-  and treat the non-emptiness assertions as the load-bearing half.
-- **Whether `filesUnder` should refuse to return nothing.** Making the helper
-  itself throw on an empty result would fix every present and future caller in
-  one line, rather than relying on each test to remember. Cheaper than three
-  separate guards and harder to regress.
-- **Does the race also run the other way?** Both processes *write* `dist`, so
-  in principle `vite build` could empty it while `build.rs` is walking it to
-  generate `include_bytes!` entries, embedding a partial asset set into the
-  binary. Not observed, and not investigated — worth ten minutes before
-  closing, because a binary that serves half a dashboard would be a far
-  quieter failure than a red test.
-- **Is anything else vacuous?** This ticket found one guarantee that asserts
-  nothing when its input is empty. The same question is worth asking once of
-  the Rust egress suite and the redaction-exhaustiveness test, both of which
-  are also loops over a discovered set.
+The guard test hands every check an empty directory, a partial one (files but
+no `index.html`), and an `index.html` that references nothing, and requires a
+failure from each. Both new refusals were mutation-tested: delete the throw in
+`nonEmptyFilesUnder`, or the reference-count assertion, and the guard fails.
+The race itself was re-run under the conditions that reproduced it 3 times in
+3 — `dashboard/src` touched immediately beforehand — and is green 3 for 3.
+
+**The fix opened a hole, and closing it is the more valuable half.** Scanning
+a build of its own means the dashboard suite no longer scans the bytes that
+ship: `build.rs` embeds `dashboard/dist`, and when `node_modules` is missing
+it embeds a *stale* dist with only a `cargo:warning`. A green dashboard suite
+was about to become a statement about a fresh build rather than about the
+binary. `crates/codeatlas/tests/embedded.rs` now asserts the guarantee over
+`serve::ASSETS` — the bytes actually compiled in, which is what `serve` hands
+a browser and what the share artifact inlines — including its own
+`ASSETS.is_empty()` guard, since it is loops all the way down. That check runs
+in both feature configurations.
+
+The allowlist of inert URLs now lives once, in `tests/common/mod.rs`, shared
+by the share-artifact test that already had a copy and by the new one. It is
+security policy; two copies drifting apart is how a check quietly stops
+agreeing with the one beside it. The TypeScript side keeps its own copy by
+necessity and says so.
+
+**Decisions taken on the open questions:**
+
+- **How to unshare — the separate `outDir`, as recommended.** `dist-egress/`
+  is gitignored, removed in `afterAll`, and outside everything `build.rs`
+  watches, so it costs the build script nothing.
+- **`filesUnder` refusing to return nothing — yes**, and it turned out to be
+  the load-bearing half exactly as predicted. The separate directory prevents
+  this particular race; the refusal prevents the class.
+- **Does the race run the other way? No longer possible, rather than merely
+  unobserved.** The concern was `vite build` emptying `dist` while `build.rs`
+  walked it for `include_bytes!`. With the egress suite moved, `dist` has a
+  single writer — `build.rs` itself, via `npm run build` — so there is no
+  second process to race. Verified by grep: nothing else in the test suites or
+  `package.json` writes it.
+- **Is anything else vacuous? Checked, and the Rust side was already
+  careful.** `tests/share.rs` guards its schema walker with a companion test
+  (`the_walker_itself_sees_the_contract`) written for this exact reason, and
+  `tests/sealed.rs` asserts `!crates.is_empty()` plus a control test. The one
+  remaining case is deliberate and different in kind: `tests/egress.rs` skips
+  when `unshare -r -n` is unavailable, passing without asserting — but it
+  prints a loud `SKIPPED:` to stderr, documents CI as the enforcing run, and
+  says so in the module comment. Left as designed; confirmed it did not fire
+  here (`unshare -r -n` works on this machine, and no run printed the skip),
+  so the harden record's claim that all five genuinely asserted stands.

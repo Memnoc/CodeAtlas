@@ -2,3 +2,4 @@
 .codeatlas/
 node_modules/
 dashboard/dist/
+dashboard/dist-egress/
