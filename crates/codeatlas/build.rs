@@ -106,8 +106,17 @@ fn ensure_dist(dashboard: &Path, dist: &Path) {
              (this build script never fetches anything itself)."
         );
     }
+    // `NODE_ENV=production`, explicitly, because this script's whole claim is
+    // that it embeds the *production* build and the ambient value decides
+    // which React the bundle gets. The dashboard's own test run sets
+    // `NODE_ENV=test` and shells out to `cargo run` (tests/self-scan.test.tsx),
+    // so without this the suite leaves a development bundle in `dist/` — half
+    // as fast again in size, and carrying the ~50 `react.dev` warning URLs
+    // that ADR-0006 says must not be in the binary. The next `cargo build`
+    // sees a dist newer than its sources and embeds it.
     let status = Command::new("npm")
         .args(["run", "build"])
+        .env("NODE_ENV", "production")
         .current_dir(dashboard)
         .status()
         .expect("failed to invoke npm — is Node installed?");
