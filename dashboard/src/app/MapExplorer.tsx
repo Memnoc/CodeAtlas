@@ -14,6 +14,7 @@ import { type AppFlowNode, nodesById, searchNodes, toFlow } from "./graph.js";
 import { nodeTypes } from "./nodes.js";
 import type { DiffOverlay } from "./overlay.js";
 import { ProvenanceBadge } from "./ProvenanceBadge.js";
+import { ThemeToggle } from "./ThemeToggle.js";
 import { TourPanel } from "./TourPanel.js";
 import "@xyflow/react/dist/style.css";
 import "./styles.css";
@@ -82,8 +83,11 @@ export function MapExplorer({
     <div className="explorer">
       <aside className="sidebar">
         <header className="sidebar-header">
-          <h1>{map.project.name}</h1>
-          <p className="contract-version">map contract {map.version}</p>
+          <div>
+            <h1>{map.project.name}</h1>
+            <p className="contract-version">map contract {map.version}</p>
+          </div>
+          <ThemeToggle />
         </header>
         <input
           type="search"

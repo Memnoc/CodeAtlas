@@ -1,16 +1,85 @@
-/* All styling is local. Fonts are the system stack — nothing is ever
- * fetched (ADR-0006). */
+/* All styling is local. Fonts are the system stack, colours are literals —
+ * nothing is ever fetched (ADR-0006).
+ *
+ * Two themes, Rosé Pine Dawn (light) and Rosé Pine Moon (dark). Every colour
+ * in this file comes from one of those two palettes through the tokens below;
+ * no rule further down names a colour directly, so a third variant would be
+ * one more block and nothing else.
+ *
+ * The six accents are each spent once per theme, so nothing in the UI is
+ * ambiguous: iris = enriched prose, love = changed, gold = affected,
+ * rose = classes, and the two teals split interactive-vs-function.
+ *
+ * Which teal is which flips between the themes, on purpose. `--accent` is
+ * link and control text, so it needs contrast against the background: that is
+ * foam in Moon (8.4:1) and pine in Dawn (5.9:1) — foam on Dawn's paper would
+ * be 3.3:1, too faint to read. The other teal takes `--kind-function`, which
+ * is only ever a 3px border and needs to be seen, not read.
+ *
+ * Theme selection is the usual three states. Bare `:root` is Dawn, so a
+ * reader who has never chosen gets Dawn on a light OS and — through the media
+ * query — Moon on a dark one, before any JavaScript runs. `data-theme`, set
+ * by the header toggle, overrides both. The media block is guarded with
+ * `:not([data-theme="dawn"])` so an explicit Dawn choice survives a dark OS. */
 :root {
-  --bg: #16161e;
-  --panel: #1f1f2b;
-  --border: #34344a;
-  --text: #e6e6f0;
-  --muted: #9c9cb4;
-  --accent: #7aa2f7;
-  --structural: #4d5a86;
-  --llm: #8459c8;
-  --changed: #f7768e;
-  --affected: #e0af68;
+  color-scheme: light;
+
+  /* Rosé Pine Dawn: base, surface, highlightMed, text, subtle */
+  --bg: #faf4ed;
+  --panel: #fffaf3;
+  --border: #dfdad9;
+  --text: #575279;
+  --muted: #797593;
+
+  /* pine, muted, iris, love, gold, foam, rose */
+  --accent: #286983;
+  --structural: #9893a5;
+  --llm: #907aa9;
+  --changed: #b4637a;
+  --affected: #ea9d34;
+  --kind-function: #56949f;
+  --kind-class: #d7827e;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="dawn"]) {
+    color-scheme: dark;
+
+    /* Rosé Pine Moon */
+    --bg: #232136;
+    --panel: #2a273f;
+    --border: #44415a;
+    --text: #e0def4;
+    --muted: #908caa;
+
+    --accent: #9ccfd8;
+    --structural: #6e6a86;
+    --llm: #c4a7e7;
+    --changed: #eb6f92;
+    --affected: #f6c177;
+    --kind-function: #3e8fb0;
+    --kind-class: #ea9a97;
+  }
+}
+
+/* After the media block, so an explicit Moon choice wins on a light OS at
+ * equal specificity. */
+:root[data-theme="moon"] {
+  color-scheme: dark;
+
+  --bg: #232136;
+  --panel: #2a273f;
+  --border: #44415a;
+  --text: #e0def4;
+  --muted: #908caa;
+
+  --accent: #9ccfd8;
+  --structural: #6e6a86;
+  --llm: #c4a7e7;
+  --changed: #eb6f92;
+  --affected: #f6c177;
+  --kind-function: #3e8fb0;
+  --kind-class: #ea9a97;
 }
 
 * {
@@ -58,7 +127,7 @@ body {
 
 .share-banner {
   padding: 8px 16px;
-  background: #2b2438;
+  background: color-mix(in srgb, var(--llm) 12%, var(--panel));
   border-bottom: 1px solid var(--llm);
   color: var(--text);
   font-size: 13px;
@@ -74,9 +143,49 @@ body {
   border-right: 1px solid var(--border);
 }
 
+/* Title on the left, theme toggle on the right, baselines aligned. */
+.sidebar-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .sidebar-header h1 {
   margin: 0;
   font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.theme-toggle:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.theme-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.theme-toggle-glyph {
+  font-size: 12px;
+  color: var(--accent);
 }
 
 .contract-version {
@@ -161,19 +270,26 @@ body {
   color: var(--muted);
 }
 
+/* Tinted rather than solid: the accents are light in Moon and mid-toned in
+ * Dawn, so no single foreground reads well on both. Keeping the text at
+ * `--text` over a mostly-panel background stays legible in either theme,
+ * and the accent still identifies the badge through tint and border. */
 .badge {
   font-size: 11px;
   padding: 1px 8px;
+  border: 1px solid transparent;
   border-radius: 999px;
-  color: #fff;
+  color: var(--text);
 }
 
 .badge-structural {
-  background: var(--structural);
+  background: color-mix(in srgb, var(--structural) 20%, var(--panel));
+  border-color: color-mix(in srgb, var(--structural) 45%, var(--panel));
 }
 
 .badge-llm {
-  background: var(--llm);
+  background: color-mix(in srgb, var(--llm) 20%, var(--panel));
+  border-color: color-mix(in srgb, var(--llm) 50%, var(--panel));
 }
 
 .detail-path,
@@ -337,7 +453,9 @@ body {
   height: 100%;
   border: 1px dashed var(--border);
   border-radius: 10px;
-  background: rgb(255 255 255 / 3%);
+  /* Tinted with the foreground, so it lifts off the canvas in Moon and
+   * settles into it in Dawn — a fixed white wash only works in one. */
+  background: color-mix(in srgb, var(--text) 4%, transparent);
 }
 
 .layer-label {
@@ -365,11 +483,11 @@ body {
 }
 
 .entity-function {
-  border-left: 3px solid #9ece6a;
+  border-left: 3px solid var(--kind-function);
 }
 
 .entity-class {
-  border-left: 3px solid #e0af68;
+  border-left: 3px solid var(--kind-class);
 }
 
 /* Diff impact overlay: changed nodes and their one-hop blast radius are
@@ -422,4 +540,33 @@ body {
   color: var(--muted);
   padding: 24px;
   text-align: center;
+}
+
+/* React Flow's own chrome. Its stylesheet ships light-mode defaults through
+ * `--xy-*-default` variables, which is the sanctioned place to retheme it —
+ * left alone, the edges and the attribution stay pale grey and the canvas
+ * white, which reads as broken in Moon. Redefining the variables keeps every
+ * colour flowing from the same two palettes above. */
+.react-flow {
+  --xy-background-color-default: var(--bg);
+  --xy-edge-stroke-default: var(--border);
+  --xy-edge-stroke-selected-default: var(--accent);
+  --xy-connectionline-stroke-default: var(--accent);
+  --xy-handle-background-color-default: var(--muted);
+  --xy-handle-border-color-default: var(--panel);
+  --xy-attribution-background-color-default: color-mix(
+    in srgb,
+    var(--panel) 80%,
+    transparent
+  );
+  --xy-selection-background-color-default: color-mix(
+    in srgb,
+    var(--accent) 12%,
+    transparent
+  );
+  --xy-selection-border-default: 1px dotted var(--accent);
+}
+
+.react-flow__attribution a {
+  color: var(--muted);
 }
