@@ -215,7 +215,7 @@ boundaries; no test reaches into pipeline internals.
 
 ## Verification
 
-`/harden` has walked all 17 user stories against the assembled system three
+`/harden` has walked all 17 user stories against the assembled system four
 times. The first walk (**2026-08-09**, baseline `0a523da`) found one failure,
 story 6, and filed it as ticket 16. The second walk (**2026-08-10**, baseline
 `be320b1`, after ticket 16 landed) re-walked every story, not just the failed
@@ -224,32 +224,68 @@ and the dashboard. The third walk (**2026-08-10**, baseline `d8b535c`, after
 ticket 17 landed) again re-walked every story, because ticket 17 changed
 import resolution and edges are the substrate under the tour, the flows, the
 layer projection and the diff blast radius. It found one failure, story 2,
-and filed it as ticket 18.
+and filed it as ticket 18. The fourth walk (**2026-08-10**, baseline
+`1614a6a`, after tickets 18 and 19 landed) re-walked every story for the same
+reason — ticket 18 changed import resolution again — and found story 2 failing
+once more, on a third language. Filed as ticket 20.
 
 Stories were driven through the real binaries — a default release build, a
 sealed `--no-default-features` build, and a `test-provider` build for the
 enrichment seam — against real repositories, not by reading code, except
 where noted.
 
-| # | Story | 08-09 `0a523da` | 08-10 `be320b1` | 08-10 `d8b535c` |
-|---|-------|-----------|-----------|-----------|
-| 1 | Complete structural map in seconds, no LLM | pass | pass | pass |
-| 2 | Relationships: imports, calls, containment, exports | pass³ | pass³ | **fail** |
-| 3 | Interactive local dashboard | pass¹ | pass¹ | pass¹ |
-| 4 | Opt-in enrichment fills prose slots | pass | pass | pass |
-| 5 | Re-runs re-purchase only changed content | pass | pass | pass |
-| 6 | Domain flows and an ordered guided tour | **fail** | **pass¹** | pass¹ |
-| 7 | Diff's changed nodes and one-hop blast radius | pass | pass | pass |
-| 8 | Single self-contained redacted HTML export | pass¹ | pass¹ | pass¹ |
-| 9 | Sealed build with no networking code, plus egress suite | pass | pass | pass |
-| 10 | Shared artifact discloses what was redacted | pass | pass | pass |
-| 11 | Structural graph rebuilt from scratch every run | pass | pass | pass |
-| 12 | Annotations re-attach only on unchanged content hash | pass | pass | pass |
-| 13 | Schema-guaranteed structured output, no repair machinery | pass² | pass² | pass² |
-| 14 | Enrichment failure leaves a valid structural map | pass | pass | pass |
-| 15 | Unparseable files still appear as nodes | pass | pass | pass |
-| 16 | Published, semver-versioned map schema | pass | pass | pass |
-| 17 | Dashboard consumes only local files, zero external requests | pass | pass | pass |
+| # | Story | 08-09 `0a523da` | 08-10 `be320b1` | 08-10 `d8b535c` | 08-10 `1614a6a` |
+|---|-------|-----------|-----------|-----------|-----------|
+| 1 | Complete structural map in seconds, no LLM | pass | pass | pass | pass |
+| 2 | Relationships: imports, calls, containment, exports | pass³ | pass³ | **fail** | **fail** |
+| 3 | Interactive local dashboard | pass¹ | pass¹ | pass¹ | pass¹ |
+| 4 | Opt-in enrichment fills prose slots | pass | pass | pass | pass |
+| 5 | Re-runs re-purchase only changed content | pass | pass | pass | pass |
+| 6 | Domain flows and an ordered guided tour | **fail** | **pass¹** | pass¹ | pass¹ |
+| 7 | Diff's changed nodes and one-hop blast radius | pass | pass | pass | pass |
+| 8 | Single self-contained redacted HTML export | pass¹ | pass¹ | pass¹ | pass¹ |
+| 9 | Sealed build with no networking code, plus egress suite | pass | pass | pass | pass |
+| 10 | Shared artifact discloses what was redacted | pass | pass | pass | pass |
+| 11 | Structural graph rebuilt from scratch every run | pass | pass | pass | pass |
+| 12 | Annotations re-attach only on unchanged content hash | pass | pass | pass | pass |
+| 13 | Schema-guaranteed structured output, no repair machinery | pass² | pass² | pass² | pass² |
+| 14 | Enrichment failure leaves a valid structural map | pass | pass | pass | pass |
+| 15 | Unparseable files still appear as nodes | pass | pass | pass | pass |
+| 16 | Published, semver-versioned map schema | pass | pass | pass | pass |
+| 17 | Dashboard consumes only local files, zero external requests | pass | pass | pass | pass |
+
+### The fourth walk: ticket 18 confirmed, and story 2 fails on a third language
+
+**Ticket 18's repair holds.** Both Rust cases that failed on the third walk
+now resolve: a crate naming itself from an integration test at the scan root,
+and a workspace sibling under Cargo's `-`-to-`_` normalisation. On this
+repository `crates/codeatlas/tests/share.rs` and the new `tests/embedded.rs`
+reach `crates/codeatlas/src/`, and no probe lost an edge it previously had.
+
+**Story 2 fails again, on Python.** `from pkg import util`, where `util` is a
+module file, never reaches `pkg/util.py`: the resolver resolves the specifier
+`pkg` and treats the imported name as a symbol only. With `pkg/__init__.py`
+present the edge lands on the package initialiser — not false, since that file
+really is executed, but the dependency on the module is invisible. Without it,
+in a PEP 420 namespace package, there is no edge at all and the importer is an
+orphan. Measured on two trees identical but for the presence of
+`__init__.py`. Filed as **ticket 20**.
+
+The fixture *looks* like it covers the form — `tests/fixtures/pyproj/` has
+`from pkg import api` and `tests/scan.rs:1046` asserts the resulting edge —
+but `api` there is a function re-exported from `pkg/__init__.py`, so the
+package initialiser is the right answer in that case. The case where the
+imported name is a **module** is untested, and no fixture has a namespace
+package. That is a subtler version of the blind spot behind tickets 17 and 18:
+not a missing form, but a form whose one tested instance happens to be the
+instance that works.
+
+Three walks have now found the same story failing on three languages, each
+time through a wider probe rather than a change in standard. The pattern is
+worth naming rather than repeating: **a language's import conventions are a
+checklist, and the fixture that exercises one of them is not evidence for the
+rest.** Ticket 20's probe list is the fourth iteration of that checklist and
+should be carried into any future language.
 
 ### The third walk's failure: story 2, and the two passes it corrects
 
@@ -360,6 +396,28 @@ ticket 17 created:
   one whose tour step does, both render without throwing. Recorded as a
   limitation below, not a failure — no CodeAtlas-produced map has ever carried
   one (zero dangling edges across all six maps validated this walk).
+The 2026-08-10 (`1614a6a`) walk re-ran all of the above and added the seam
+tickets 18 and 19 created:
+
+- **A second round of import conventions**, the check that found ticket 20.
+  Passing: TypeScript type-only imports, `export *` barrels, deep relative
+  paths; Python aliased dotted imports; Rust aliased crate imports and
+  `pub use` re-export chains; Go internal packages; C++ includes from a
+  separate include directory. Failing: `from package import module`.
+- **Ticket 19's split, tested by tampering.** Moving the egress build out of
+  `dashboard/dist` meant the dashboard suite no longer scans the bytes that
+  ship, and `crates/codeatlas/tests/embedded.rs` was added to cover them. That
+  claim was verified rather than assumed: an external URL was appended to a
+  built asset in `dist`, the binary rebuilt, and `embedded.rs` failed with
+  `assets/index-…js: https://evil.example.com/collect` at the same moment the
+  dashboard's own suite was green over its own fresh build. The gap ticket 19
+  opened is genuinely closed, and the dashboard suite alone would not have
+  caught it.
+- **The egress suite's own vacuity guard.** `nonEmptyFilesUnder` refuses an
+  empty build, and the guard test hands every check an empty directory, a
+  partial one, and an `index.html` referencing nothing. All five netns egress
+  tests genuinely asserted here rather than taking their documented skip —
+  `unshare -r -n` works on this machine and no run printed `SKIPPED`.
 - **An annotation store written before ticket 17, read after it** — attempted
   and *not* completed: the pre-fix worktree cannot build, because the build
   script compiles the dashboard and a fresh worktree has no
@@ -412,7 +470,7 @@ and restoring its content re-attached the stored prose with no provider call
 credentials each leave a complete structural map behind and say so (story
 14). All five network-namespace egress tests genuinely ran rather than
 skipping (0 ignored), and both CI feature configurations are green — as of
-`d8b535c`, **98** tests on the default build and **91** sealed, plus **37**
+`1614a6a`, **103** tests on the default build and **96** sealed, plus **45**
 dashboard tests. The sealed binary's undefined network symbols are `bind`,
 `listen`, `socket` and `socketpair` — std's `TcpListener`, which `serve` needs
 for loopback — and notably **not** `connect` or `getaddrinfo`, which the
@@ -441,9 +499,9 @@ attribution.
   its file share a content hash — so touching one line in a large file
   re-purchases every node in it. Conservative and never stale, but coarser
   than "only the code that changed".
-- The "mapped N files" message reports node count, not file count (626 vs.
-  159 on CodeAtlas itself; 6000 vs. 3000 on the synthetic repo). Unchanged
-  across three walks.
+- The "mapped N files" message reports node count, not file count (693 vs.
+  187 on CodeAtlas itself; 6000 vs. 3000 on the synthetic repo). Unchanged
+  across four walks.
 - **Referential integrity is not part of the contract.** A dangling edge —
   one whose `source` or `target` names no node — validates against the
   published schema and is accepted by `share`. It matters only for
@@ -470,7 +528,7 @@ attribution.
   could not be reproduced through the CLI seam: both offline test providers
   are all-or-nothing, so this remains a code-review finding only.
 - The tour is bounded but the **flow list is not**: CodeAtlas's own map now
-  carries 144 flows, 139 of them in a single domain. The dashboard mitigates
+  carries 154 flows, 143 of them in a single domain. The dashboard mitigates
   this by opening as a collapsed index of domains, but bounding or ranking
   flows themselves is a V2 question.
 - Test-fixture files can earn tour slots. This repository contains eight
@@ -481,8 +539,22 @@ attribution.
   cannot justify.
 
 **Shipped status:** **not shipped.** 16 of 17 stories pass as of
-**2026-08-10** (`d8b535c`); story 2 fails and is filed as ticket 18. Shipping
-needs that ticket built, a re-walk of story 2, and then explicit acceptance of
-the two passes that rest on evidence short of watching the real thing — the
-browser-unwatched rendering behind stories 3, 6 and 8, and the unexecuted
-live-API half of story 13.
+**2026-08-10** (`1614a6a`); story 2 fails and is filed as ticket 20. Every
+other story has now passed on four consecutive walks, and the failures have
+been the same story each time — a different language's import conventions,
+found by widening the probe rather than by lowering the bar.
+
+Shipping needs ticket 20 built, a re-walk of story 2, and then explicit
+acceptance of the two passes that rest on evidence short of watching the real
+thing — the browser-unwatched rendering behind stories 3, 6 and 8, and the
+unexecuted live-API half of story 13.
+
+One judgement worth recording for whoever runs the next walk: story 2 is the
+only story whose subject matter is open-ended. The other sixteen have a
+bounded definition of done, and four walks have found nothing new in them.
+Story 2's scope is "every import convention in six languages", so a fifth walk
+that probes a seventh convention may well fail it a fourth time. That is the
+story behaving as written, not the system regressing — but if the intent is
+"the common conventions in each V1 language resolve", the story should be
+rewritten to say so and given an explicit checklist, so that passing it means
+something finite. Deciding that is a spec change, not a harden verdict.
