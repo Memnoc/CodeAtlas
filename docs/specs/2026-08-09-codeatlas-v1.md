@@ -215,80 +215,123 @@ boundaries; no test reaches into pipeline internals.
 
 ## Verification
 
-`/harden` walked all 17 user stories against the assembled system on
-**2026-08-09**, after all 15 build tickets read `done` (baseline `0a523da`;
-a concurrent session landed the README commit `2aff081` partway through,
-which touches no code).
-Stories were driven through the real binaries — a default build, a sealed
-`--no-default-features` build, and a `test-provider` build for the enrichment
-seam — against real repositories, not by reading code, except where noted.
+`/harden` has walked all 17 user stories against the assembled system twice.
+The first walk (**2026-08-09**, baseline `0a523da`) found one failure, story
+6, and filed it as ticket 16. The second walk (**2026-08-10**, baseline
+`be320b1`, after ticket 16 landed) re-walked every story, not just the failed
+one, because ticket 16 changed the tour projection, the map contract version,
+and the dashboard.
 
-| # | Story | Verdict |
-|---|-------|---------|
-| 1 | Complete structural map in seconds, no LLM | pass |
-| 2 | Relationships: imports, calls, containment, exports | pass |
-| 3 | Interactive local dashboard | pass¹ |
-| 4 | Opt-in enrichment fills prose slots | pass |
-| 5 | Re-runs re-purchase only changed content | pass |
-| 6 | Domain flows and an ordered guided tour | **fail** |
-| 7 | Diff's changed nodes and one-hop blast radius | pass |
-| 8 | Single self-contained redacted HTML export | pass¹ |
-| 9 | Sealed build with no networking code, plus egress suite | pass |
-| 10 | Shared artifact discloses what was redacted | pass |
-| 11 | Structural graph rebuilt from scratch every run | pass |
-| 12 | Annotations re-attach only on unchanged content hash | pass |
-| 13 | Schema-guaranteed structured output, no repair machinery | pass² |
-| 14 | Enrichment failure leaves a valid structural map | pass |
-| 15 | Unparseable files still appear as nodes | pass |
-| 16 | Published, semver-versioned map schema | pass |
-| 17 | Dashboard consumes only local files, zero external requests | pass |
+Stories were driven through the real binaries — a default release build, a
+sealed `--no-default-features` build, and a `test-provider` build for the
+enrichment seam — against real repositories, not by reading code, except
+where noted.
 
-### The failure
+| # | Story | 2026-08-09 | 2026-08-10 |
+|---|-------|-----------|-----------|
+| 1 | Complete structural map in seconds, no LLM | pass | pass |
+| 2 | Relationships: imports, calls, containment, exports | pass | pass |
+| 3 | Interactive local dashboard | pass¹ | pass¹ |
+| 4 | Opt-in enrichment fills prose slots | pass | pass |
+| 5 | Re-runs re-purchase only changed content | pass | pass |
+| 6 | Domain flows and an ordered guided tour | **fail** | **pass¹** |
+| 7 | Diff's changed nodes and one-hop blast radius | pass | pass |
+| 8 | Single self-contained redacted HTML export | pass¹ | pass¹ |
+| 9 | Sealed build with no networking code, plus egress suite | pass | pass |
+| 10 | Shared artifact discloses what was redacted | pass | pass |
+| 11 | Structural graph rebuilt from scratch every run | pass | pass |
+| 12 | Annotations re-attach only on unchanged content hash | pass | pass |
+| 13 | Schema-guaranteed structured output, no repair machinery | pass² | pass² |
+| 14 | Enrichment failure leaves a valid structural map | pass | pass |
+| 15 | Unparseable files still appear as nodes | pass | pass |
+| 16 | Published, semver-versioned map schema | pass | pass |
+| 17 | Dashboard consumes only local files, zero external requests | pass | pass |
 
-**Story 6 — domain flows and an ordered guided tour.** Both artifacts are
-produced correctly and land in the map file, but **no consumer renders
-either one**: `tour` and `domain_flows` appear in `dashboard/src/` only in
-the generated types and the `index.ts` re-export. A newcomer can reach the
-tour only by reading raw JSON — precisely what story 3 says the dashboard
-exists to prevent. The tour is also unbounded: exactly one step per file
-node (148 on CodeAtlas itself, 3000 on a 3000-file repo, including
-`Cargo.lock` and every fixture), and its top-ranked step on CodeAtlas's own
-map is an isolated file with fan-in 0 and fan-out 0, ahead of `lib.rs` at
-step 9.
+### The failure, and its repair
 
-This is a between-the-slices gap, not a ticket defect: ticket 06 projects
-flows and orders the tour, ticket 13 enriches their labels, and ticket 08's
-scope stops at "nodes and edges grouped by layer". Each passed its own
-criteria; nobody owned surfacing the result. Filed as
-`.scratch/codeatlas-v1/16-surface-flows-and-tour.md` (`Status: ready`),
-covering both the missing affordances and the tour's boundedness.
+**Story 6** failed on 2026-08-09: domain flows and the tour were produced
+correctly and landed in the map file, but no consumer rendered either one, and
+the tour was unbounded — one step per file node (148 on CodeAtlas itself,
+3000 on a 3000-file repo), led by an integration-test file with fan-in 0 and
+fan-out 0, with `lib.rs` nine steps behind it. This was a between-the-slices
+gap: ticket 06 projected the flows, ticket 13 enriched their labels, ticket
+08's scope stopped at "nodes and edges grouped by layer", and nobody owned
+surfacing the result.
+
+Ticket 16 closed both halves and the 2026-08-10 walk confirms it. On
+CodeAtlas's own map the tour is now 12 steps over 154 files, opening at the
+spec document and `lib.rs` and closing at `map.rs`, with `tests/scan.rs` gone
+from the walk entirely; on the 3000-file synthetic repo it is also 12. The
+dashboard surfaces a navigable walk that moves the canvas selection step by
+step, and an index of domains expanding to flows and then to selectable call
+chains; both carry the same provenance badge as node detail, and both
+disappear cleanly when the map omits the field. The share artifact carries
+the identical affordances with redacted labels intact.
+
+### Between-the-slices checks
+
+Beyond the story list, the 2026-08-10 walk probed the seams no single ticket
+owned:
+
+- **The whole pipeline in sequence on one repo** — `scan --enrich` → edit →
+  `diff` → `share` → `serve`. The served dashboard delivered the enriched map
+  (17/17 nodes, 7/7 tour steps narrated) and the overlay together; all four
+  artifacts coexist under `.codeatlas/`.
+- **The bounded tour meeting enrichment carry-over** — the new seam ticket 16
+  created. On a 21-file repo with 75 purchased slots, adding one connected
+  file cost 5 re-purchases: its own two nodes, the new flow it roots, the
+  layer whose membership changed, and the one tour step whose cited fan-in
+  changed. Tour membership itself stayed stable. Cost remains proportional to
+  the delta, and the reason for every re-purchase is nameable.
+- **Older maps through newer tooling** — a 0.1.0 map with no `layers`,
+  `domain_flows`, or `tour` is served unchanged, shares successfully, and
+  renders with the new panels simply absent.
+- **A map that does not conform** — `share` refuses it by name rather than
+  emitting a broken artifact.
+- **Repositories with nothing to walk** — three unconnected files yield an
+  empty tour, no error, and a complete map; 3000 files in one import cycle
+  yield a 12-step tour and zero flows, because a flow needs a root nothing
+  calls.
 
 ### Notes on the passes
 
-1. **Stories 3 and 8** — no browser was available in the harden session, so
-   neither the dashboard nor the share artifact was watched rendering in a
-   real browser. Both were driven through their real React components with
-   real user events (22 dashboard tests: canvas nodes and edges, layer
-   groups, search narrowing, node detail with provenance badge, edge
-   navigation, and share mode rendering with `globalThis.fetch` deleted
-   outright), and the served dashboard was exercised over HTTP from the
-   binary. Layout and paint remain unwatched.
-2. **Story 13** — verified at the provider seam: canned typed answers land in
-   the right slots, and three deliberately malformed keys (nonexistent node,
-   wrong prefix, no prefix) were silently ignored rather than repaired. The
-   Claude-facing half (`output_config.format` with a JSON schema, parsed
-   exactly once, no repair or retry-on-parse path) was confirmed by reading
-   `enrich/claude.rs`; it was not exercised against the live API, which would
-   require credentials and spend.
+1. **Stories 3, 6 and 8** — no browser can be driven in this environment
+   (headless Firefox fails to map a framebuffer), so neither the dashboard nor
+   the share artifact has been watched painting. All three were driven through
+   their real React components with real user events — 36 dashboard tests,
+   including walking the tour and opening flow chains on CodeAtlas's own
+   self-scan map, and share mode rendering with `globalThis.fetch` deleted
+   outright — and the served dashboard was exercised over HTTP from the binary
+   (`/` 200 html, `/api/map` 200 json, `/api/diff` 200, unknown paths 404,
+   bound to 127.0.0.1 only), with the story-6 affordances confirmed present in
+   the served production bundle. Layout and paint remain unwatched.
+2. **Story 13** — verified at the provider seam: correctly addressed answers
+   land, while an answer for a nonexistent node, an unprefixed key, a
+   nonexistent layer, and a blank answer are all silently ignored rather than
+   repaired. The Claude-facing half (`output_config.format` carrying a JSON
+   schema, parsed exactly once, with a refusal or truncation an error rather
+   than a repair attempt) was confirmed by reading `enrich/claude.rs`; it was
+   not exercised against the live API, which would require credentials and
+   spend.
 
-Other evidence worth recording: scans are byte-identical across repeated runs
-and identical cold vs. warm (story 11); 3000 files map in 0.56s (story 1);
-editing one file dropped re-purchase from 14 slots to 4 (story 5); restoring
-a file's original content re-attached its stored prose with no provider call
-(story 12); all five network-namespace egress tests genuinely ran here rather
-than skipping, and both CI feature configurations are green (59 and 60 tests);
-the sealed build links no networking crates at all and every command works in
-it; and regenerating the schema and the dashboard's TS types produced no drift.
+### Other evidence recorded
+
+Scans are byte-identical across repeated runs and identical cold vs. warm;
+deleting a file removes its node and leaves no dangling edges, and restoring
+it reproduces the exact map (story 11). CodeAtlas itself maps in 0.06s and
+3000 files in 0.09s (story 1). Editing one file dropped re-purchase from 30
+slots to 2; a plain rescan reverted exactly that file's prose to structural
+and restoring its content re-attached the stored prose with no provider call
+(stories 5 and 12). Enrichment failure, an unconfigured provider, and absent
+credentials each leave a complete structural map behind and say so (story
+14). All five network-namespace egress tests genuinely ran rather than
+skipping, and both CI feature configurations are green (97 and 90 tests, plus
+36 dashboard tests). The sealed binary's undefined network symbols are
+`bind`, `listen`, and `socket` — std's `TcpListener`, which `serve` needs for
+loopback — and notably **not** `connect` or `getaddrinfo`, which the default
+build does link: the sealed build cannot open an outbound connection or
+resolve a name, and its dependency tree contains no networking crates at all.
+Regenerating the schema and the dashboard's TS types produces no drift.
 
 ### Known limitations confirmed, not blocking
 
@@ -299,13 +342,23 @@ it; and regenerating the schema and the dashboard's TS types produced no drift.
   its file share a content hash — so touching one line in a large file
   re-purchases every node in it. Conservative and never stale, but coarser
   than "only the code that changed".
-- The "mapped N files" message reports node count, not file count (599 vs.
-  148 on CodeAtlas itself).
+- The "mapped N files" message reports node count, not file count (615 vs.
+  154 on CodeAtlas itself; 17 vs. 9 on a nine-file fixture).
 - A partial-batch enrichment failure discarding earlier successful batches
   could not be reproduced through the CLI seam: both offline test providers
   are all-or-nothing, so this remains a code-review finding only.
+- The tour is bounded but the **flow list is not**: CodeAtlas's own map
+  carries 141 flows, 137 of them in a single domain. The dashboard mitigates
+  this by opening as a collapsed index of domains, but bounding or ranking
+  flows themselves is a V2 question.
+- Test-fixture files can earn tour slots. This repository contains eight
+  miniature fixture repositories whose files genuinely participate in an
+  import graph, so step 5 of CodeAtlas's own tour is
+  `tests/fixtures/cppproj/main.cpp`. Excluding them would need a path
+  heuristic the map contract cannot justify.
 
-**Shipped status:** 16 of 17 stories pass. Story 6 is open on ticket 16;
-this section should be updated after that ticket lands and harden re-walks it.
-The two browser-dependent passes and the live-API half of story 13 are
-recorded above as unwatched and await explicit acceptance.
+**Shipped status:** all 17 stories pass as of **2026-08-10**. Two passes rest
+on evidence short of watching the real thing — the browser-unwatched
+rendering behind stories 3, 6 and 8, and the unexecuted live-API half of
+story 13 — and both await explicit acceptance by name before this is called
+shipped.
