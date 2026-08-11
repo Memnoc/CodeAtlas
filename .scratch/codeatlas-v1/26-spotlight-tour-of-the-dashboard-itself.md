@@ -1,10 +1,11 @@
 # Ticket 26 — a spotlight tour of the dashboard itself
 
 **Status:** ready
-**Spec:** docs/specs/2026-08-09-codeatlas-v1.md — **needs a new story first**
-**Story:** none yet. See Notes.
+**Spec:** docs/specs/2026-08-09-codeatlas-v1.md
+**Story:** 20 — a walkthrough that highlights each control in the live
+interface and says what it does
 **Blocks:** none
-**Blocked by:** a spec story covering it
+**Blocked by:** none — story 20 was added 2026-08-11
 **Scope:** V1 — decided 2026-08-11, against a recommendation to defer it
 
 ## Problem
@@ -43,13 +44,16 @@ part of the work.
 
 ## Notes
 
-**This needs a spec story before it is built.** Nothing in stories 1–17
-covers explaining the application to its own user; story 3 covers the
-dashboard existing, and story 6 covers touring the *codebase*. `/harden`
-walks the numbered story list, so a feature with no story never gets
-verified. Raise it in the same `/to-spec` pass as the enrichment-credential
-stories.
+**Resolved 2026-08-11: this is story 20.** Nothing in stories 1–17 covered
+explaining the application to its own user — story 3 covers the dashboard
+existing, story 6 covers touring the *codebase* — and `/harden` walks the
+numbered story list, so a feature with no story never gets verified. The
+story was added in the same `/to-spec` pass as the enrichment-credential
+stories. The spec also records the naming requirement: story 20's feature and
+story 6's are named distinctly in the UI, and starting one must not leave the
+other half-running.
 
 Worth deciding early whether the step list is hand-written or derived from
 the components present, since a hand-written list silently goes stale the
-next time the header changes.
+next time the header changes. Carried into the spec's Further Notes as an
+open question rather than settled here.

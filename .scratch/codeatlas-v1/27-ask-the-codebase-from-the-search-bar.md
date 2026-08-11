@@ -1,10 +1,11 @@
 # Ticket 27 — ask the codebase a question from the search bar
 
-**Status:** blocked
-**Spec:** docs/specs/2026-08-09-codeatlas-v1.md — **needs an ADR and a story first**
-**Story:** none yet. See Notes.
+**Status:** ready
+**Spec:** docs/specs/2026-08-09-codeatlas-v1.md
+**Story:** 21 — ask the map a question in my own words and be shown which
+nodes answer it
 **Blocks:** none
-**Blocked by:** an ADR, then a spec story
+**Blocked by:** none — ADR-0009 and story 21 both landed 2026-08-11
 **Scope:** V1 — decided 2026-08-11, against a recommendation to defer it
 
 ## Problem
@@ -18,7 +19,35 @@ enriched, the prose. A reader who does not know the codebase does not know
 what to search *for*, which is precisely when a name-matching search is least
 useful.
 
-## Why this is blocked rather than ready
+## How it was unblocked
+
+**All five questions below were settled on 2026-08-11 by
+[ADR-0009](../../docs/adr/0009-codebase-questions-are-answered-by-the-serving-binary.md),
+and story 21 now exists for `/harden` to walk.** The answers, in the order the
+questions are asked:
+
+- **The serving binary calls the model**, over a new `POST /api/ask` route
+  behind an explicit `serve --ask` — so egress stays where ADR-0006's
+  machinery already lives.
+- **Story 17 needed no rewrite at all.** The dashboard's request is
+  same-origin to 127.0.0.1, the same category as the `/api/map` request it
+  already makes; "zero external requests" has always meant off-origin.
+- **The sealed build refuses**, as it refuses every provider; without `--ask`
+  plain `serve` stays provably egress-free, so the existing netns test keeps a
+  real subject.
+- **The share artifact does not have the feature.** It has no server, and
+  giving a double-clickable `file://` page a network path would change what
+  "share" means more than the feature is worth.
+- **The model sees a bounded slice of the map alone** — never file contents —
+  selected mechanically, with the bound stated; answers cite node IDs so a
+  reader can check them.
+
+Questions travel through the same provider trait as enrichment, so both
+credential paths (API key, and the `cli:claude` provider of ADR-0008) work
+here without a second integration. The section below is kept as the record of
+why this was filed blocked.
+
+## Why this was blocked rather than ready
 
 It is not a dashboard feature with an LLM bolted on; it changes what the
 product *is*, in three ways that the existing ADRs answer differently:

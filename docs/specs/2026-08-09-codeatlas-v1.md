@@ -5,6 +5,15 @@
 > [the baseline study](../research/2026-08-07-baseline-repoatlas-understand-anything.md);
 > the original pitch in
 > [the intake digest](../intake/2026-08-07-codeatlas-pitch-and-adr-agenda.md).
+>
+> **Amended 2026-08-11** from a second `/adr` interview
+> ([ADR-0007](../adr/0007-the-annotation-store-is-a-committed-repository-artifact.md),
+> [ADR-0008](../adr/0008-enrichment-through-an-authenticated-claude-cli-behind-its-own-feature.md),
+> [ADR-0009](../adr/0009-codebase-questions-are-answered-by-the-serving-binary.md)),
+> which added stories 18–21, rewrote story 2, and amended stories 4 and 9.
+> Amended passages carry their date. The spec is amended rather than
+> superseded because `/harden` walks one numbered story list per release, and
+> all four new stories are V1 scope.
 
 ## Problem Statement
 
@@ -21,6 +30,17 @@ pipeline's egress is a property of prompts, not of code, so nobody can prove
 where the source goes. The people who would benefit most — teams with large
 private codebases — are exactly the people who can't use it.
 
+**Added 2026-08-11.** There is a second barrier, and it stops the same people
+for a different reason. Everything that makes the map *explain itself* — the
+prose summaries, the named layers, the narrated tour — is gated behind an
+Anthropic API key, and in many organisations only administrators can obtain
+one. A developer who cannot get a key gets a structurally complete map with
+nothing but mechanical labels on it, and there is no way for a colleague who
+*did* get one to hand over the explanations. Meanwhile the reader who most
+needs those explanations — someone new to the codebase — is also the reader
+least able to guess what to search for, because searching by name presumes you
+already know the names.
+
 ## Solution
 
 A developer runs one command in any repo and gets a precise structural map —
@@ -36,19 +56,43 @@ single HTML file that opens on double-click and states exactly what was
 redacted from it. A security auditor approves the tool by reading code, not
 promises: one build variant contains no networking code at all.
 
+**Added 2026-08-11.** Enrichment stops being a per-developer purchase. One
+person on a team enriches once and commits the result, so everyone who clones
+the repository gets the explanations offline and without a credential of their
+own — and that one person no longer needs an API key either, because
+enrichment can run through a Claude CLI they are already logged into. Once a
+map is open, a reader can ask it a question in their own words instead of
+guessing at names, and be shown where in the code the answer lives.
+
 ## User Stories
 
 1. As a developer, I want a complete structural map of a codebase in seconds
    with no LLM involved, so that mapping a repo is something I do casually
 2. As a developer, I want the map to capture relationships — imports, calls,
    containment, exports — not just a file tree, so that I can trace how
-   components actually connect
+   components actually connect. **Rewritten 2026-08-11**: satisfied when every
+   convention in the checklist below resolves, in each of the six V1
+   languages where the convention exists. Adding a convention to the
+   checklist is a spec change; the story is not a standing invitation to find
+   a seventh.
+   - *Imports*: a plain module import; a named/member import; an aliased
+     import; a namespace or whole-module import; a relative import; a
+     package-or-directory import resolving through an initialiser or index
+     file; a header/source pairing (C/C++ only)
+   - *Calls*: an unqualified call to an imported name; a qualified call
+     through an imported module; a qualified call through an aliased module;
+     a qualified call through a nested module path
+   - *Non-edges, which matter as much*: a call whose receiver is a value
+     rather than a module; a call into a package outside the repository; an
+     import that resolves to no file in the repository
 3. As a developer, I want an interactive local dashboard (graph canvas,
    search, layer grouping, node detail), so that I navigate the map instead of
    reading JSON
 4. As a developer, I want to opt into LLM enrichment that fills prose slots —
    node summaries, layer names, domain-flow names, tour narration — so that
-   the map explains itself to someone who doesn't know the code
+   the map explains itself to someone who doesn't know the code.
+   **Amended 2026-08-11**: through whichever enrichment provider is selected,
+   which is no longer presumed to be the Claude API — see story 19
 5. As a developer, I want re-runs to re-purchase enrichment only for code
    whose content changed, so that cost is proportional to my delta, not my
    repo
@@ -60,7 +104,14 @@ promises: one build variant contains no networking code at all.
    file, so that I can share the map with someone who has nothing installed
 9. As a security auditor, I want a sealed build that contains no networking
    code, plus an egress test suite over the default build, so that approving
-   CodeAtlas is a code review rather than a trust exercise
+   CodeAtlas is a code review rather than a trust exercise.
+   **Amended 2026-08-11**, to the sentence every document must now hold to:
+   *CodeAtlas has exactly two ways to reach a model — an HTTPS POST to
+   `api.anthropic.com`, and spawning the already-authenticated `claude` CLI.
+   Each sits behind its own Cargo feature; each is reachable only from
+   `scan --enrich` and `serve --ask`. The sealed build has neither.* Three
+   build configurations are therefore auditable, not two: both features,
+   neither, and the CLI without the HTTP client
 10. As a recipient of a shared map, I want the artifact to disclose what was
     redacted from it, so that I know what I am and am not seeing
 11. As the CLI, I want to rebuild the structural graph from scratch on every
@@ -73,7 +124,10 @@ promises: one build variant contains no networking code at all.
     output-repair machinery exists
 14. As the CLI, I want an enrichment failure (network down, no credentials,
     API error) to leave a valid structural map behind, so that the LLM layer
-    degrades and never breaks the product
+    degrades and never breaks the product. **Amended 2026-08-11**: the failure
+    list now includes the CLI provider's own modes — the program is not
+    installed, it is installed but not logged in, or it exits non-zero — and
+    the requirement is unchanged for each
 15. As the CLI, I want files I cannot parse (unsupported language, syntax
     errors) to still appear as file nodes with whatever edges are resolvable,
     so that the map is complete even where analysis is shallow
@@ -81,7 +135,27 @@ promises: one build variant contains no networking code at all.
     published, semver-versioned JSON Schema for the map format, so that I can
     emit files the CodeAtlas dashboard renders
 17. As the dashboard, I want to consume only local files and make zero
-    external requests, so that viewing a map is fully offline
+    external requests, so that viewing a map is fully offline. **Confirmed
+    unchanged 2026-08-11**: story 21 adds a question box, but the request it
+    makes is same-origin to the local server — the same category as the
+    `/api/map` request the dashboard already makes — so this story stands
+    word for word
+
+*Stories 18–21 added 2026-08-11.*
+
+18. As a developer with no API key of my own, I want enrichment someone else
+    already paid for to arrive with the repository, so that cloning is all I
+    have to do to get a map that explains itself
+19. As a developer whose organisation will not issue me an API key, I want to
+    enrich through a Claude CLI I am already logged into, so that CodeAtlas
+    never handles a credential and I never have to ask an administrator for
+    one
+20. As a first-time user of the dashboard, I want a walkthrough that
+    highlights each control in the live interface and says what it does, so
+    that I learn the application without clicking every button to find out
+21. As a newcomer to a codebase, I want to ask the map a question in my own
+    words and be shown which nodes answer it, so that I can find things
+    before I know what they are called
 
 ## Implementation Decisions
 
@@ -102,7 +176,15 @@ them:
   — full structural rescan every run; enrichment carried over by content hash
 - [ADR-0006](../adr/0006-zero-egress-enforced-by-compile-time-feature-gate.md)
   — zero egress enforced by a compile-time feature gate; sealed build; egress
-  tests; schema-derived redaction exhaustiveness
+  tests; schema-derived redaction exhaustiveness. Its rule is unchanged by the
+  2026-08-11 amendments; the list of what sits behind the gate is not
+- [ADR-0007](../adr/0007-the-annotation-store-is-a-committed-repository-artifact.md)
+  — the annotation store is a committed repository artifact
+- [ADR-0008](../adr/0008-enrichment-through-an-authenticated-claude-cli-behind-its-own-feature.md)
+  — enrichment can run through an already-authenticated Claude CLI, behind its
+  own `agent-cli` feature
+- [ADR-0009](../adr/0009-codebase-questions-are-answered-by-the-serving-binary.md)
+  — codebase questions are answered by the serving binary, not the dashboard
 
 Spec-level decisions on top of those:
 
@@ -145,9 +227,47 @@ Spec-level decisions on top of those:
 - **Language coverage is honest**: unsupported or unparseable files degrade
   per story 15 rather than disappearing.
 
+*Added 2026-08-11:*
+
+- **The annotation store is published, the map file is not.** Every scan
+  writes a `.codeatlas/.gitignore` that ignores the regenerated map and
+  publishes the annotation store, so the artifact exists without anyone
+  remembering a second command. The store gains provider, model, and date
+  fields: prose entering code review has to say what produced it.
+- **Committing prose and redacting prose are the same policy, not opposite
+  ones.** The line is the trust boundary. A share artifact goes to a recipient
+  chosen at send time who does not hold the source, so its prose is redacted;
+  a committed annotation store reaches only people who already hold the code
+  it describes, so it discloses nothing new.
+- **Provider selection gets a first-class surface.** A `--provider` flag joins
+  the existing `CODEATLAS_ENRICH_PROVIDER` variable. The recognised CLI spec
+  is `cli:claude` and nothing else — a generic `cli:<program>` would make
+  "CodeAtlas executes whatever you name it" a true sentence, which is a much
+  worse claim to defend than "CodeAtlas can invoke `claude`".
+- **The spawned CLI is a completion, not an agent.** No tools, no MCP servers,
+  a working directory outside the repository, and an allowlisted environment
+  (`PATH`, `HOME`, `XDG_*`) that deliberately excludes `ANTHROPIC_API_KEY` so
+  that `cli:` means the CLI's own credential rather than silent API billing.
+  Without the tool lockdown the CLI could read files through its own tooling
+  and void the standing guarantee that the model never receives file contents.
+- **Questions are answered by the binary, over `POST /api/ask`, behind an
+  explicit `serve --ask`.** This is `serve`'s first non-GET verb. Without the
+  flag `serve` stays provably egress-free. Questions travel through the same
+  provider trait as enrichment, so both credential paths work without a second
+  integration, and they are answered from a bounded slice of the map alone —
+  never file contents — with answers citing node IDs so a reader can check
+  them. The feature works on an unenriched map, answering from mechanical
+  summaries; gating it on enrichment would add a way to fail for a reason the
+  reader cannot see.
+- **The walkthrough of the application is not the tour of the codebase.** Two
+  things called "tour" in one product confuses both the code and the reader,
+  so story 20's feature and story 6's are named distinctly in the UI, and
+  starting one must not leave the other half-running.
+
 ## Testing Decisions
 
-Two seams, confirmed 2026-08-09. All tests assert external behaviour at these
+Two seams, confirmed 2026-08-09; two more added 2026-08-11 for work the
+original two cannot see. All tests assert external behaviour at these
 boundaries; no test reaches into pipeline internals.
 
 - **Seam 1 — the map contract.** The CLI is tested by running it against small
@@ -173,19 +293,63 @@ boundaries; no test reaches into pipeline internals.
 - **The contract is enforced across the language border**: CI regenerates the
   JSON Schema and TS types and fails on drift between committed and generated
   artifacts.
-- **Prior art**: none in this repo (greenfield). The fixture-repo pattern
-  mirrors the baselines' benchmark harness; the property-not-golden style is
-  the norm to establish here.
+- **Seam 3 — the spawned program's process interface** (added 2026-08-11, for
+  story 19). The subprocess sits *below* the provider trait, so seam 2 cannot
+  see the four things that actually break: argv construction, environment
+  scrubbing, stdout parsing, and exit-code handling. Tests point the provider
+  at a **fake executable** that echoes canned JSON and assert on what it was
+  invoked with and what the provider made of what came back — no network, no
+  credentials, no spend. The injection point is gated behind the
+  `test-provider` feature exactly as the `fake:`/`fail` backends already are,
+  so no shipped binary gains a way to run an arbitrary program.
+- **Seam 4 — `POST /api/ask` over real HTTP** (added 2026-08-11, for story
+  21). Run the real binary, speak HTTP/1.1 to it over 127.0.0.1, assert on the
+  response — and assert that the route is absent without `--ask`. The
+  *bounding* half of the story asserts at seam 2 instead: what reaches the
+  provider, and that it stays within the stated bound however the question is
+  phrased.
+- **The three build configurations are all tested** (amended 2026-08-11): both
+  features, neither, and `agent-cli` without `network`. The third is the
+  configuration ADR-0008 exists to make expressible; untested, it is a claim
+  rather than a guarantee. The sealed build's new refusal needs a
+  differently-shaped proof from the old one, because `cargo tree` cannot see a
+  subprocess: a behavioural test that the sealed binary rejects `cli:claude`,
+  and a byte probe finding no `claude` program string — both with the default
+  build as a live control, or neither asserts anything.
+- **Prior art**: the fixture-repo pattern and property-not-golden style
+  established across `crates/codeatlas/tests/`. Story 18's test follows the
+  temp-git-repo shape the egress suite already uses; story 21's follows the
+  run-the-real-binary-and-speak-HTTP shape of the serve suite; story 20's
+  follows the dashboard suite's real-components-and-real-user-events shape.
+  Story 2's rewritten checklist becomes a fixture table, one row per
+  convention per language, so a gap reads as a failing row rather than as an
+  absence nobody notices.
 
 ## Out of Scope
 
-- **Chat / explain / onboard commands** — out; they are cheap graph-grep
-  consumers that can arrive later as thin skill wrappers over the published
-  map (deferred in the interview, V2 candidates).
+- **Chat / explain / onboard *commands*** — still out as CLI subcommands; they
+  are cheap graph-grep consumers that can arrive later as thin skill wrappers
+  over the published map (deferred in the 2026-08-07 interview). **Narrowed
+  2026-08-11**: story 21 brings question-answering into the dashboard over
+  `POST /api/ask`, so what remains out is the *command-line* surface, not the
+  capability. Multi-turn conversation is out too — a question and its answer,
+  not a session.
 - **The Northstar → CodeAtlas producer skill** — out; it needs the published
   contract to exist first (parked in the intake doc).
-- **A `claude -p` / local-model provider** — out; the provider trait keeps the
-  door open (ADR-0004).
+- **A `claude -p` provider** — **brought in scope 2026-08-11** as story 19
+  ([ADR-0008](../adr/0008-enrichment-through-an-authenticated-claude-cli-behind-its-own-feature.md)).
+  ADR-0004 rejected it partly because its output was free text; the CLI's
+  `--json-schema` retired that objection, and the credential barrier made it
+  worth building rather than merely possible.
+- **A local-model provider** — still out; the provider trait keeps the door
+  open (ADR-0004), and nothing in V1 needs a third backend.
+- **A configurable API endpoint** (Bedrock, Vertex, a corporate gateway) —
+  out, decided 2026-08-11; it would collide with the tested invariant that the
+  transport can be steered nowhere. If ever revisited, the honest shape is an
+  explicit flag that the map *records*.
+- **Generating share artifacts from the dashboard** — out; it would put
+  ADR-0006's allowlist redaction into a second language, and the copy that
+  drifts is the one that leaks. The CLI stays the only thing that writes one.
 - **Incremental structural graph splicing** — out; full rescan is effectively
   free at V1 scale and splicing is a correctness trap (ADR-0005).
 - **Figma, wiki/knowledge-base analysis, locales, theme engines, multi-platform
@@ -208,10 +372,39 @@ boundaries; no test reaches into pipeline internals.
   configurable; credential resolution per ADR-0004.
 - `CONTEXT.md` does not exist yet; the glossary (node, edge, layer, tour,
   provenance, enrichment, sealed build, map contract, share artifact) should
-  be seeded when implementation starts coining terms in code.
+  be seeded when implementation starts coining terms in code. **The
+  2026-08-11 amendments add terms worth glossing at the same time**:
+  annotation store, enrichment provider, the `agent-cli` feature, and the ask
+  route.
 - Source material: [intake digest](../intake/2026-08-07-codeatlas-pitch-and-adr-agenda.md),
   [baseline research](../research/2026-08-07-baseline-repoatlas-understand-anything.md),
   [ADR index](../adr/README.md).
+
+*Added 2026-08-11:*
+
+- **`README.md` and `docs/SECURITY.md` currently make claims the amended story
+  9 contradicts** — that `--enrich` is the only egress-capable command and its
+  only possible destination is `api.anthropic.com`. They are deliberately left
+  alone until the code changes, because they describe what the code does and
+  editing them now would make three *tested* claims false. They change with
+  the implementation, held to story 9's sentence.
+- **Open question**: how the bounded slice for a question is selected, and
+  what the bound is. ADR-0009 requires a stated bound and mechanical
+  selection; the number and the ranking rule are for implementation to settle
+  by measurement, in the same spirit as the enrichment batch size above.
+- **Open question**: whether story 20's walkthrough steps are hand-written or
+  derived from the components present. A hand-written list goes stale the next
+  time the header changes; a derived one may not have anything useful to say.
+- **Story 13 stops being unverifiable once story 19 lands.** Five `/harden`
+  walks have recorded story 13 as verified only at the provider seam, because
+  the Claude-facing half needs credentials and real spend. The CLI provider
+  makes a genuine end-to-end enrichment run possible with a Claude Code seat
+  and no API key — which is an argument for sequencing story 19 *before* the
+  sixth walk rather than after it.
+- **Known consequence, recorded rather than solved**: an annotation store
+  committed by one person is prose nobody else reviewed line by line, arriving
+  through a normal pull. The store's new provider/model/date fields exist so a
+  reviewer can at least see what produced it.
 
 ## Verification
 
