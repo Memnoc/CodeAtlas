@@ -14,6 +14,10 @@ has no plain way out:
 - drilling into a region card, which replaces the overview canvas
 - selecting a file, which lights its edges and dims the rest
 - stepping through the tour, where the only movement offered is forward
+  — **this one turned out to be false when filed**: `TourPanel` already had a
+  Previous button, disabled at the first step. Recorded rather than quietly
+  dropped, because a ticket that describes a defect that does not exist is
+  worth noticing. The criterion below became a regression guard instead.
 
 There is a breadcrumb, and clicking the canvas background clears a selection,
 but both are things the reader has to discover. A person who has just arrived
@@ -25,10 +29,13 @@ somewhere wants a button that says *back*, in the place they are looking.
       overview, and it is reachable by keyboard.
 - [x] The tour offers a previous step alongside the next one, disabled at the
       first step rather than absent — a control that appears and disappears
-      is harder to aim at than one that greys out.
+      is harder to aim at than one that greys out. **Already true; no code
+      changed. Now pinned by a test that also walks forward and back.**
 - [x] Back from a file selection returns to the region view with the region
       still open, not to the overview: one step back, not all the way out.
-- [x] `Escape` does whatever the back control does, at every level.
+- [x] `Escape` does whatever the back control does, at every level — from
+      anywhere focus happens to be, and including the path panel, both of
+      which `/crosscheck` found missing on the first attempt.
 - [x] The control states where it goes ("Back to regions") rather than
       just "Back", since the same word at three depths means three things.
 - [x] Existing exits keep working — the breadcrumb and the click-the-canvas

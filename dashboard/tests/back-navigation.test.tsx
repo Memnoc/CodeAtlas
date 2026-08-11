@@ -113,6 +113,57 @@ describe("Escape goes back too", () => {
     expect(screen.getByTestId("region-docs")).toBeInTheDocument();
   });
 
+  it("reaches the overlay wherever focus is, not only in the input", async () => {
+    // The dead zone /crosscheck found: with the overlay's Escape living on
+    // the input and everything else on the document, tabbing once put focus
+    // on a result button, inside the search row but outside the input — and
+    // Escape reached neither handler. A keyboard-only reader was stuck with
+    // an overlay that had no keyboard exit.
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+    await user.type(screen.getByLabelText("Search nodes"), "main");
+    await user.tab();
+    expect(screen.getByLabelText("Search nodes")).not.toHaveFocus();
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByLabelText("Search results")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Search nodes")).toHaveFocus();
+  });
+
+  it("brings the results back on a click, even with the input still focused", async () => {
+    // Escape leaves focus on the input, so `onFocus` alone never fires again.
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+    await user.type(screen.getByLabelText("Search nodes"), "main");
+    await user.keyboard("{Escape}");
+    expect(screen.getByLabelText("Search nodes")).toHaveFocus();
+
+    await user.click(screen.getByLabelText("Search nodes"));
+
+    expect(screen.getByLabelText("Search results")).toBeInTheDocument();
+  });
+
+  it("closes the path panel before it leaves the region", async () => {
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+    await openRegion(user, "Source code");
+    await user.click(screen.getByRole("button", { name: "Path" }));
+    expect(screen.getByRole("button", { name: "Path" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await user.keyboard("{Escape}");
+
+    expect(screen.getByRole("button", { name: "Path" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    // The region is still open: one layer per press.
+    expect(screen.queryByTestId("region-docs")).not.toBeInTheDocument();
+  });
+
   it("belongs to the search overlay while that is open", async () => {
     // Escape is shared, so precedence has to be stated: the overlay is the
     // innermost thing on screen and gets it first. Without this the reader

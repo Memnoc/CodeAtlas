@@ -89,6 +89,7 @@ export function MapExplorer({
   // for.
   const [searchDismissed, setSearchDismissed] = useState(false);
   const searchRow = useRef<HTMLDivElement | null>(null);
+  const searchInput = useRef<HTMLInputElement | null>(null);
   const [tab, setTab] = useState<Tab>("info");
   const [pathOpen, setPathOpen] = useState(false);
   const [pathFrom, setPathFrom] = useState<MapNode | null>(null);
@@ -166,13 +167,36 @@ export function MapExplorer({
           }
         : { label: "Back to regions", go: () => setOpenRegionId(null) };
 
-  // Escape is the same gesture without the pointer. Precedence has to be
-  // stated rather than left to bubbling: the search overlay is the innermost
-  // thing on screen, so it takes Escape first — otherwise dismissing a search
-  // would also throw away the region the reader was reading.
+  // Escape is the same gesture without the pointer, and the whole cascade
+  // lives here — one listener, on the document, so it fires wherever focus
+  // happens to be. Splitting it (the overlay's Escape on the input, the rest
+  // on the document) left a hole: tab once from the input and focus lands on
+  // a result button, where neither handler was listening and Escape did
+  // nothing at all.
+  //
+  // Order is innermost-first, and it has to be written down because every
+  // layer wants the same key: the search overlay, then the path panel, then
+  // one step back up the overview → region → file stack.
+  //
+  // No dependency array on purpose. The handler closes over `searchShown`,
+  // `pathOpen` and `backStep`, all of which change on almost every render;
+  // re-subscribing each time is cheaper than the stale closure that any
+  // hand-maintained list here would eventually produce.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || searchShown) {
+      if (event.key !== "Escape") {
+        return;
+      }
+      if (searchShown) {
+        // A `type="search"` input clears itself on Escape in some browsers,
+        // and the query is the thing the reader keeps.
+        event.preventDefault();
+        setSearchDismissed(true);
+        searchInput.current?.focus();
+        return;
+      }
+      if (pathOpen) {
+        setPathOpen(false);
         return;
       }
       backStep?.go();
@@ -400,6 +424,7 @@ export function MapExplorer({
           ⌕
         </span>
         <input
+          ref={searchInput}
           type="search"
           aria-label="Search nodes"
           placeholder="Search nodes by name, path, or summary…"
@@ -408,17 +433,12 @@ export function MapExplorer({
             setQuery(e.target.value);
             setSearchDismissed(false);
           }}
-          onFocus={() => setSearchDismissed(false)}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              // Not `preventDefault`: a type="search" input clears itself on
-              // Escape in some browsers, and here the query is what the
-              // reader keeps. Stopping the default keeps the two gestures —
-              // put the list away, throw the search away — distinct.
-              e.preventDefault();
-              setSearchDismissed(true);
-            }
-          }}
+          // A click, not focus. Focus is too ambiguous a signal to reopen on:
+          // it fires when Escape restores focus here (which would reopen the
+          // list the reader just dismissed, immediately) and when tabbing
+          // through on the way somewhere else. Pressing the field, or typing
+          // in it, is an intention.
+          onClick={() => setSearchDismissed(false)}
         />
         {query.trim() !== "" && !searchDismissed && (
           <ul className="search-results" aria-label="Search results">

@@ -43,13 +43,20 @@ sketch.
 | | Dawn `#faf4ed` | Moon `#232136` |
 |---|---|---|
 | lit (`--link`, 2px) | **2.05:1** | 9.55:1 |
-| rest (`--link-dim` @0.55, 1px) | 1.50:1 | 2.14:1 |
-| dim (`--link-dim` @0.14) | 1.10:1 | 1.19:1 |
+| rest (`--link` @0.55, 1px) | 1.48:1 | 3.87:1 |
+| dim (`--link` @0.14) | 1.10:1 | 1.37:1 |
 | *previous* rest, for comparison | 1.12:1 | 1.25:1 |
 
 Every resting edge is more visible than before on both themes, which is the
 state the change was for — the hairline texture is what had to separate from
 the cards.
+
+A first attempt introduced a second, darker gold per theme for the resting
+state. `/crosscheck` caught it: `#d3a04d` and `#8d7f61` are in no Rosé Pine
+variant, which breaks this criterion and the stylesheet's own header rule.
+Removing them cost nothing and gained something — one gold at three opacities
+is identical on Dawn (1.48 vs 1.50) and markedly better on Moon (3.87 vs
+2.14), because the invented colour was muddier than the palette's own.
 
 **One number is worth knowing about: the lit edge on Dawn is 2.05:1**, under
 the 3:1 that WCAG asks of non-text. Rosé Pine Dawn has exactly one gold

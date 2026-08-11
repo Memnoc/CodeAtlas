@@ -12,15 +12,21 @@
  * Pine has exactly six accents and a palette cannot be invented without
  * leaving the theme.
  *
- * Gold is the one accent spent twice, and the exception is deliberate rather
- * than an oversight. `--affected` marks a card the diff touched; `--link`
- * strokes a connection. They are told apart by shape, not hue: gold as a
- * *fill or border* is diff-affected, gold as a *stroke* is a relationship,
- * and a card is never stroked in gold nor an edge filled with it. The two do
- * share a screen — the diff overlay is a checkbox over the ordinary canvas —
- * so this is the weakest rule in this file, and the honest reason for it is
- * that separating edges from cards by hue is worth more than the sixth
- * accent was.
+ * Gold is the one accent spent twice, and it is worth being exact about how
+ * weak that exception is. `--affected` and `--link` are the *same hex* in
+ * every theme block — two names for one gold, not two colours. What separates
+ * them is the surface: `--affected` only ever fills or borders a **card**,
+ * `--link` only ever strokes an **edge**. The one place that rule bends is
+ * the arrowhead on a lit edge, which is filled rather than stroked because a
+ * hollow head reads as a gap in the line; it belongs to the edge, so it takes
+ * the edge's colour.
+ *
+ * The two do share a screen — the diff overlay is a checkbox over the
+ * ordinary canvas — so with a diff loaded, gold cards and gold lines appear
+ * together and only their shape tells them apart. That is the weakest rule in
+ * this file. It is here because separating edges from cards by hue was worth
+ * more than the sixth accent was, and because Rosé Pine has exactly one warm
+ * accent to spend.
  *
  * What keeps that unambiguous is a surface rule, and it is worth stating
  * precisely because a looser version of it is easy to believe and false.
@@ -66,11 +72,10 @@
   /* Connections get their own hue. Cards are cool, so a warm line separates
      the relationships from the boxes faster than weight or opacity can —
      which matters most on a drilled-in region carrying fifty-odd edges.
-     Rosé Pine gold, kept apart from `--affected` because that one means
-     "touched by the diff" and reusing it would make one colour say two
-     things. */
+     Rosé Pine gold, and only ever this one gold: the three edge states are
+     told apart by opacity, because a second, darker gold would be a colour
+     this palette does not have. */
   --link: #ea9d34;
-  --link-dim: #d3a04d;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -93,7 +98,6 @@
     --kind-class: #ea9a97;
 
     --link: #f6c177;
-    --link-dim: #8d7f61;
   }
 }
 
@@ -117,7 +121,6 @@
   --kind-class: #ea9a97;
 
   --link: #f6c177;
-  --link-dim: #8d7f61;
 }
 
 /* Region identity: the six accents again, in a fixed rotation so a region
@@ -789,7 +792,7 @@ button.crumb:hover {
  * but a *warm* hairline, so the relationships separate from the boxes by hue
  * before weight or opacity get a say. */
 .react-flow__edge-path {
-  stroke: var(--link-dim);
+  stroke: var(--link);
   stroke-width: 1;
   opacity: 0.55;
 }
@@ -1513,7 +1516,7 @@ button.crumb:hover {
  * the same two palettes above. */
 .react-flow {
   --xy-background-color-default: var(--bg);
-  --xy-edge-stroke-default: var(--link-dim);
+  --xy-edge-stroke-default: var(--link);
   --xy-edge-stroke-selected-default: var(--link);
   --xy-connectionline-stroke-default: var(--accent);
   --xy-handle-background-color-default: var(--muted);
