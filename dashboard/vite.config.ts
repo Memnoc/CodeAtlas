@@ -37,6 +37,14 @@ function localArtifacts(): Plugin {
           `no map at ${mapPath} — run \`codeatlas scan\` or set CODEATLAS_MAP`,
         );
       });
+      // Mirroring the binary's shape includes saying what this server
+      // cannot do (ticket 27): the dev server holds no provider, so the
+      // question box is off here. `codeatlas serve --ask` is what turns it
+      // on, and it says so on its own capability route.
+      server.middlewares.use("/api/capabilities", (_req, res) => {
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ ask: false }));
+      });
       server.middlewares.use("/api/diff", (_req, res) => {
         const overlayPath = process.env["CODEATLAS_DIFF"]
           ? path.resolve(process.env["CODEATLAS_DIFF"])

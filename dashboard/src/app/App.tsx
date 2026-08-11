@@ -1,11 +1,17 @@
 // Loads the map: from the embedded share payload when this document is a
 // share artifact (first-class mode — checked before any network), else from
 // the local server (dev middleware or the serving binary) via same-origin
-// requests to /api/map and /api/diff, never anywhere else. In share mode no
-// fetch happens at all, so the artifact works from file:// where fetch is
-// unusable; the diff overlay is a live-workspace feature and is absent.
+// requests to /api/map, /api/diff and /api/capabilities, never anywhere else.
+// In share mode no fetch happens at all, so the artifact works from file://
+// where fetch is unusable; the diff overlay is a live-workspace feature and
+// is absent, and so are questions (ADR-0009 — there is no server to ask).
+//
+// This is also the only component that fetches, which is what keeps that
+// promise structural rather than remembered: the explorer is handed an asking
+// function, and in share mode it is handed none.
 import { useEffect, useState } from "react";
 import type { KnowledgeGraph } from "../index.js";
+import { askServer, type Capabilities, readCapabilities } from "./ask.js";
 import { MapExplorer } from "./MapExplorer.js";
 import type { DiffOverlay } from "./overlay.js";
 import { ShareBanner } from "./ShareBanner.js";
@@ -14,7 +20,12 @@ import { readSharePayload } from "./share.js";
 type LoadState =
   | { phase: "loading" }
   | { phase: "error"; message: string }
-  | { phase: "ready"; map: KnowledgeGraph; overlay: DiffOverlay | null };
+  | {
+      phase: "ready";
+      map: KnowledgeGraph;
+      overlay: DiffOverlay | null;
+      capabilities: Capabilities;
+    };
 
 export function App() {
   // Read once, synchronously: the payload is static document content.
@@ -42,10 +53,15 @@ export function App() {
         res.ok ? ((await res.json()) as DiffOverlay) : null,
       )
       .catch(() => null);
-    Promise.all([map, overlay])
-      .then(([map, overlay]) => {
+    // What this particular server process can do — which is not a property
+    // of the map, so it is not in the map (story 16's schema is a contract
+    // for external producers). Asked once, at load, alongside the map rather
+    // than by probing the question route later.
+    const capabilities = readCapabilities();
+    Promise.all([map, overlay, capabilities])
+      .then(([map, overlay, capabilities]) => {
         if (!cancelled) {
-          setState({ phase: "ready", map, overlay });
+          setState({ phase: "ready", map, overlay, capabilities });
         }
       })
       .catch((err: unknown) => {
@@ -73,6 +89,16 @@ export function App() {
     case "error":
       return <div className="load-error">{state.message}</div>;
     case "ready":
-      return <MapExplorer map={state.map} overlay={state.overlay} />;
+      return (
+        <MapExplorer
+          map={state.map}
+          overlay={state.overlay}
+          // Spread-in rather than assigned: under
+          // `exactOptionalPropertyTypes` an explicit `undefined` is not the
+          // same as an absent optional field, and absent is what "this
+          // server cannot answer questions" has to be.
+          {...(state.capabilities.ask ? { onAsk: askServer } : {})}
+        />
+      );
   }
 }

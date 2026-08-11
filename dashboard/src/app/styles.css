@@ -532,6 +532,138 @@ body {
   padding: 6px 10px;
 }
 
+/* ── Asking the map a question (ticket 27) ────────────────────────────── */
+
+/* Only rendered when the serving binary was started with `--ask`, so the
+   search row is unchanged for every other reader. */
+.ask-button {
+  flex: none;
+  padding: 7px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.ask-button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 24%, var(--panel));
+}
+
+.ask-button:disabled {
+  border-color: var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  cursor: default;
+}
+
+.ask-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A band rather than a floating overlay: the reader works through the
+   citations one at a time, and each click moves the canvas underneath, so
+   the answer has to stay put and stay out of the way of what it points at. */
+.answer {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+}
+
+.answer-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.answer-question {
+  flex: 1;
+  margin: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.answer-dismiss {
+  flex: none;
+  padding: 0 6px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.answer-dismiss:hover {
+  color: var(--text);
+}
+
+.answer-text,
+.answer-status,
+.answer-error,
+.answer-uncited {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.answer-status,
+.answer-uncited {
+  color: var(--muted);
+}
+
+.answer-error {
+  color: var(--changed);
+}
+
+/* Wrapping row rather than a list: the citations are a handful of chips,
+   and reading them across is faster than reading them down. */
+.answer-citations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+
+.answer-citations button,
+.citation-missing {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+}
+
+.answer-citations button {
+  cursor: pointer;
+}
+
+.answer-citations button:hover {
+  border-color: var(--accent);
+}
+
+/* Not a control, and it has to look like it: a citation the map cannot
+   resolve is shown, greyed and explained, rather than as a button that would
+   do nothing when pressed. */
+.citation-missing {
+  border-style: dashed;
+  background: var(--bg);
+  color: var(--muted);
+}
+
 /* ── Region chip row ──────────────────────────────────────────────────── */
 
 .chiprow {

@@ -1,7 +1,10 @@
 // The dashboard's seam component: give it a map conforming to the published
 // contract and it renders the whole explorer — header, search, canvas, right
-// panel. It consumes only the generated contract types (ADR-0003) and never
-// makes a network request.
+// panel. It consumes only the generated contract types (ADR-0003) and makes
+// no network request of its own: questions (story 21) are put through an
+// `onAsk` its host supplies, so the share artifact — which renders this same
+// component from a `file://` page — cannot acquire a network path by being
+// rendered.
 //
 // The canvas draws regions, not files. A repository has hundreds of files and
 // a handful of regions, and the overview's job is to be readable at a glance;
@@ -17,6 +20,8 @@ import {
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { KnowledgeGraph, Node as MapNode } from "../index.js";
+import { AnswerPanel } from "./AnswerPanel.js";
+import { type AskFn, useAsk } from "./ask.js";
 import { FilesPanel } from "./FilesPanel.js";
 import { FlowsPanel } from "./FlowsPanel.js";
 import {
@@ -74,6 +79,7 @@ export function MapExplorer({
   map,
   overlay,
   shared = false,
+  onAsk,
 }: {
   map: KnowledgeGraph;
   /** Diff impact overlay, when `codeatlas diff` produced one. */
@@ -82,6 +88,11 @@ export function MapExplorer({
    * dashboard: the map in hand is already redacted, and its reader has
    * nothing installed to run a CLI with. */
   shared?: boolean;
+  /** How to put a question to the serving binary, when the binary this
+   * dashboard came from was started with `--ask` (ADR-0009). Absent means the
+   * search bar takes names only — which is every share artifact, and every
+   * `serve` without the flag. */
+  onAsk?: AskFn;
 }) {
   const [mode, setMode] = useState<Mode>("overview");
   const [grouping, setGrouping] = useState<RegionKind>("structural");
@@ -159,6 +170,22 @@ export function MapExplorer({
 
   const searchShown = query.trim() !== "" && !searchDismissed;
 
+  // The same field, a second question of it: a name to match, or a question
+  // to answer. Which one the reader meant is not guessed from the text —
+  // pressing Ask (or Enter) is the difference, so a filename typed by someone
+  // who wanted a filename never becomes a request.
+  const asking = useAsk(onAsk);
+  const canAsk = onAsk !== undefined && query.trim() !== "";
+  const askQuestion = () => {
+    if (!canAsk) {
+      return;
+    }
+    // The results list is what the reader was just told about the *name*;
+    // leaving it open would cover the answer they asked for.
+    setSearchDismissed(true);
+    asking.submit(query);
+  };
+
   // Overview → region → file is a stack, and back means one step up it, never
   // two. The label names the destination because the same word at three
   // depths would mean three different things, and a reader deciding whether
@@ -182,11 +209,18 @@ export function MapExplorer({
   //
   // Order is innermost-first, and it has to be written down because every
   // layer wants the same key: the search overlay, then the share/export
-  // menu, then the path panel, then one step back up the overview → region
-  // → file stack.
+  // menu, then the path panel, then the answer to a question, then one step
+  // back up the overview → region → file stack.
+  //
+  // The answer sits below the two things that pop up *over* the page and
+  // above the navigation stack. It is a band the reader deliberately put
+  // there and may be working through — following one citation at a time —
+  // so anything opened on top of it goes first; but closing a panel is still
+  // a smaller undo than moving the canvas, so it goes before the step back.
   //
   // No dependency array on purpose. The handler closes over `searchShown`,
-  // `pathOpen` and `backStep`, all of which change on almost every render;
+  // `pathOpen`, `backStep` and the asking state, all of which change on
+  // almost every render;
   // re-subscribing each time is cheaper than the stale closure that any
   // hand-maintained list here would eventually produce.
   useEffect(() => {
@@ -208,6 +242,10 @@ export function MapExplorer({
       }
       if (pathOpen) {
         setPathOpen(false);
+        return;
+      }
+      if (asking.state.phase !== "idle") {
+        asking.dismiss();
         return;
       }
       backStep?.go();
@@ -441,11 +479,23 @@ export function MapExplorer({
           ref={searchInput}
           type="search"
           aria-label="Search nodes"
-          placeholder="Search nodes by name, path, or summary…"
+          placeholder={
+            onAsk === undefined
+              ? "Search nodes by name, path, or summary…"
+              : "Search by name, path, or summary — or ask a question and press Enter"
+          }
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
             setSearchDismissed(false);
+          }}
+          // Enter is the keyboard half of the Ask button. Without a question
+          // backend it does nothing at all, which is the same as before.
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              askQuestion();
+            }
           }}
           // A click, not focus. Focus is too ambiguous a signal to reopen on:
           // it fires when Escape restores focus here (which would reopen the
@@ -454,6 +504,19 @@ export function MapExplorer({
           // in it, is an intention.
           onClick={() => setSearchDismissed(false)}
         />
+        {onAsk !== undefined && (
+          <button
+            type="button"
+            className="ask-button"
+            // Disabled while one question is in flight: pressing again would
+            // spend the reader's model budget twice for one answer.
+            disabled={!canAsk || asking.state.phase === "asking"}
+            title="Answer this question from the map (the local server asks the model)"
+            onClick={askQuestion}
+          >
+            Ask
+          </button>
+        )}
         {query.trim() !== "" && !searchDismissed && (
           <ul className="search-results" aria-label="Search results">
             {results.slice(0, 40).map((n) => (
@@ -468,6 +531,16 @@ export function MapExplorer({
           </ul>
         )}
       </div>
+
+      {/* Below the field it was asked from, above the map it is about, and
+          left standing while the reader follows its citations into the
+          canvas. */}
+      <AnswerPanel
+        state={asking.state}
+        byId={byId}
+        onSelect={reveal}
+        onDismiss={asking.dismiss}
+      />
 
       <div className="chiprow">
         <span className="chiprow-total">

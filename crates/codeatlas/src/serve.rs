@@ -2,7 +2,7 @@
 //! — only when asked for — questions about the map (ticket 34).
 //!
 //! The server is a hand-rolled HTTP/1.1 responder on `std::net::TcpListener`
-//! rather than a server crate: three GET routes, one optional POST, and zero
+//! rather than a server crate: four GET routes, one optional POST, and zero
 //! TLS/streaming/routing machinery, so even the smallest server dependency
 //! (tiny_http and its transitive tree) would be more code than this file.
 //! Under ADR-0006 the serve path must survive a security audit by reading it
@@ -20,6 +20,13 @@
 //! `POST /api/ask` reaches a model through it (ADR-0009). That is opt-in,
 //! resolved before the socket is bound so a build or a machine that cannot
 //! answer questions says so at startup rather than on the first question.
+//!
+//! Which of the two shapes is running is what `GET /api/capabilities` states,
+//! for the dashboard (ticket 27): the same embedded bytes are served either
+//! way, so the page has to be told at runtime rather than at build time. It
+//! is not in the map, because whether one process was started with a flag is
+//! not a property of a map — and the map's schema is a published contract
+//! other producers emit against (ADR-0003).
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
@@ -118,6 +125,13 @@ pub fn serve(root: &Path, options: ServeOptions<'_>) -> Result<()> {
 /// The route a question is asked on. One constant because the server prints
 /// it, routes on it, and the dashboard fetches it.
 pub const ASK_ROUTE: &str = "/api/ask";
+
+/// Where the dashboard reads what this server process can do. One field
+/// today — whether [`ASK_ROUTE`] exists — because that is the one thing the
+/// page cannot work out for itself: it is the same build either way, and the
+/// alternative to being told is POSTing a question nobody asked to see
+/// whether the route is there.
+pub const CAPABILITIES_ROUTE: &str = "/api/capabilities";
 
 /// What a connection may be answered from. Cloned per connection: two
 /// paths and, when `--ask` was given, a shared handle on the provider.
@@ -243,6 +257,18 @@ fn handle(stream: TcpStream, routes: &Routes) -> std::io::Result<()> {
                 .as_bytes(),
             ),
         };
+    }
+
+    if path == CAPABILITIES_ROUTE {
+        // Always 200, always answered, in every build: an absent route and a
+        // route saying "no" would be two ways to express one fact, and the
+        // client would have to treat them the same anyway.
+        return respond(
+            &mut stream,
+            "200 OK",
+            "application/json",
+            format!("{{\"ask\":{}}}", routes.ask.is_some()).as_bytes(),
+        );
     }
 
     if path == "/api/diff" {

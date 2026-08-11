@@ -394,6 +394,50 @@ fn the_question_route_does_not_exist_without_the_flag() {
     assert!(status.contains("200"), "map status after POST: {status}");
 }
 
+/// Ticket 27: the dashboard is the same embedded bytes whether or not the
+/// binary serving it was started with `--ask`, so it has to be told at
+/// runtime. The claim is asserted against the route it describes — a
+/// capability answer nothing checks against reality is the kind of fact that
+/// drifts silently.
+#[test]
+fn the_capability_route_states_whether_questions_can_be_asked() {
+    let repo = materialize("simple");
+    scan(repo.path());
+
+    let plain = serve(repo.path());
+    let (status, headers, body) = http_get(plain.port, "/api/capabilities");
+    assert!(status.contains("200"), "capabilities status: {status}");
+    assert_eq!(header(&headers, "Content-Type"), Some("application/json"));
+    let said: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(said["ask"], serde_json::json!(false), "{said}");
+    // And it is telling the truth about this server: the route it says is
+    // absent really is. Deliberately an empty body — a POST that 405s is
+    // refused without being read out, so bytes left unread in the socket can
+    // reset the connection in the client's face (ticket 35). Nothing about
+    // routing needs a body to prove.
+    let (status, _, _) = http_post(plain.port, "/api/ask", "");
+    assert!(
+        status.contains("405"),
+        "said it could not answer, then did: {status}"
+    );
+
+    let outside = tempfile::tempdir().unwrap();
+    let spec = format!(
+        "fake:{}",
+        canned(outside.path(), "It starts in main.ts.", &[]).display()
+    );
+    let asking = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+    let (status, _, body) = http_get(asking.port, "/api/capabilities");
+    assert!(status.contains("200"), "capabilities status: {status}");
+    let said: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(said["ask"], serde_json::json!(true), "{said}");
+    let (status, _) = ask(asking.port, "where does the program start?");
+    assert!(
+        status.contains("200"),
+        "said it could answer, then did not: {status}"
+    );
+}
+
 /// Story 14's rule, applied to a route: the backend failing is a response,
 /// not the end of serving.
 #[test]

@@ -1,6 +1,6 @@
 # Ticket 27 — ask the codebase a question from the search bar
 
-**Status:** ready
+**Status:** done
 **Spec:** docs/specs/2026-08-09-codeatlas-v1.md
 **Story:** 21 — ask the map a question in my own words and be shown which
 nodes answer it (**the dashboard half**; ticket 34 is the binary half)
@@ -39,23 +39,23 @@ way into the map rather than a wall of prose beside it.
 
 ## Acceptance criteria
 
-- [ ] The search bar accepts a question and shows the answer, without losing
+- [x] The search bar accepts a question and shows the answer, without losing
       the name-matching search it already does — a reader typing a filename
       must still get the filename.
-- [ ] Cited nodes are rendered as controls that select the node on the canvas,
+- [x] Cited nodes are rendered as controls that select the node on the canvas,
       so the answer is navigable.
-- [ ] A citation naming a node absent from the map degrades visibly rather
+- [x] A citation naming a node absent from the map degrades visibly rather
       than rendering a control that does nothing.
-- [ ] While an answer is in flight the UI says so, and a failed request says
+- [x] While an answer is in flight the UI says so, and a failed request says
       what failed without discarding the question the reader typed.
-- [ ] The feature is **absent in a share artifact**, which has no server —
+- [x] The feature is **absent in a share artifact**, which has no server —
       driven through `<App/>` with an embedded payload, the way ticket 28's
       share-mode assertions are.
-- [ ] Absent when the served map's binary was started without `--ask`, without
+- [x] Absent when the served map's binary was started without `--ask`, without
       the dashboard needing to be rebuilt to notice.
-- [ ] `Escape` closes the answer through the explorer's one cascade, not a
+- [x] `Escape` closes the answer through the explorer's one cascade, not a
       second handler — see ticket 22, where a split Escape left a dead zone.
-- [ ] Driven by real user events in the dashboard suite, with the route
+- [x] Driven by real user events in the dashboard suite, with the route
       stubbed at the fetch boundary; no test performs real network I/O.
 
 ## Notes
@@ -150,3 +150,89 @@ category as what it does today. Once ADR-0009 put the model call in the
 serving binary, story 17 needed no amendment at all. The assumption that a
 question box must mean dashboard egress is what made this look like a larger
 decision than it was.
+
+## What the work found
+
+**The open question got a route of its own: `GET /api/capabilities`, one
+field, `{"ask": true|false}`.** Three candidates were live. Putting a
+server-capability field in the map was ruled out before the ticket started —
+the schema is a published contract external producers emit against (story 16,
+ADR-0003), and whether one process was started with a flag is not a property
+of a map. That left probing `POST /api/ask`, and a header on the `/api/map`
+response the dashboard already fetches.
+
+The header is genuinely cheaper: zero extra round trips, two lines of Rust.
+It was rejected on legibility. A reader asking "how does the page know the
+question box is available?" can `curl` a route, and `serve.rs`'s module
+comment can name it; nobody greps for response headers on an unrelated route.
+It also entangles the map route with a feature that has nothing to do with
+the map, and the same fact would have to be re-derived the next time the
+server acquires something optional. Probing was rejected for the reason the
+ticket gives, plus a sharper one: the only probe that distinguishes "no route"
+from "route present" is a POST, and a POST to `/api/ask` on a server that has
+the flag *is a question* — a probe would either spend the reader's model
+budget on a request nobody made or need a second, magic no-op question shape.
+
+The route always answers 200, in every build. An absent route and a route
+answering "no" would be two encodings of one fact, and the client has to
+treat them identically anyway — which it does: an old binary, the vite dev
+server, and a plain `serve` all read as `{ask: false}`, and `readCapabilities`
+never rejects. Nothing about a server that cannot answer questions is an error
+worth showing a reader.
+
+**The explorer still makes no request.** `MapExplorer` renders share
+artifacts too, and ADR-0009's rejection of a network path in a double-clicked
+`file://` page is only as strong as the component that renders it. So the
+capability arrives as a function: `App` — the one component that fetches —
+passes `onAsk` only when the served binary said yes, and share mode passes
+none. The feature is therefore absent in a share artifact by construction
+rather than by a `shared &&` somebody has to remember, and the absence is
+asserted anyway, through `<App/>` with an embedded payload and `fetch`
+deleted outright.
+
+**A question is a gesture, not a guess.** The field is one field and the
+name-matching search runs on every keystroke exactly as before; pressing Ask
+or Enter is what turns the text into a request. Sniffing for a question mark
+or a space would have made a filename with a space in it cost money.
+
+**The Escape layer went in fourth, not first.** The cascade is
+search overlay → export menu → path panel → answer → back. The answer is a
+band the reader may be working through one citation at a time, so the two
+things that pop up *over* the page take the key first; it still precedes the
+step back, because closing a panel is a smaller undo than moving the canvas.
+Both directions are asserted, including with focus parked on a citation
+button — ticket 22's dead zone was a keyboard reader unable to close what
+they had opened, and citations are exactly the kind of new focus target that
+reopens it.
+
+**Thirteen tests passed on the first run, which is not evidence.** Seven
+mutations were run against them afterwards, and each was caught by the test
+that claimed it: deleting the Escape layer, filtering unresolvable citations
+out instead of showing them, passing `onAsk` unconditionally, passing it in
+share mode, clearing the query on submit, and sending the body as
+`text/plain`. The last one matters most — `POST /api/ask` answers 415 to
+anything but `application/json`, and that demand is the whole cross-origin
+defence, so the dashboard's compliance with it is asserted on the recorded
+`fetch` arguments rather than assumed from a green request.
+
+**The new server test reproduced ticket 35 before it was written properly.**
+Its first form POSTed a question body to a plain `serve` to prove the route it
+had just called absent really was; that failed with `ConnectionReset` on
+roughly half of the `--no-default-features` runs. The mechanism is visible in
+ticket 34's own comments: a 405 is answered without reading the client out, so
+unread bytes in the socket turn the close into an RST. The cross-check is kept
+— a capability answer nothing verifies is a fact that drifts silently — but
+sent with an empty body, which proves the same routing fact with nothing left
+unread. Twelve consecutive runs are clean. `the_question_route_does_not_exist_without_the_flag`
+still flakes on its own, unchanged, and is still ticket 35's.
+
+**Deliberately not done.** The vite dev server now answers the capability
+route with `{"ask": false}` rather than falling through to the SPA index; it
+holds no provider, so that is the honest answer, and the dev middleware's
+stated job is to mirror the binary's shape. `README.md` gains nothing — it
+documents commands, not wire routes, and `serve --ask` is already described
+there. `docs/SECURITY.md` needed no amendment: the capability route serves
+five bytes from process memory over loopback and its claims about what plain
+`serve` holds and routes remain true word for word. No re-ask, no history, no
+multi-turn: the spec's Out of Scope keeps conversation out of V1, and an
+answer is a question and its reply.
