@@ -5,6 +5,7 @@
 **Story:** none yet. See Notes.
 **Blocks:** none
 **Blocked by:** a spec story covering it
+**Scope:** V1 — decided 2026-08-11, against a recommendation to defer it
 
 ## Problem
 

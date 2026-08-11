@@ -73,10 +73,15 @@ function motionDuration(ms: number): number {
 export function MapExplorer({
   map,
   overlay,
+  shared = false,
 }: {
   map: KnowledgeGraph;
   /** Diff impact overlay, when `codeatlas diff` produced one. */
   overlay?: DiffOverlay | null;
+  /** True when this document is a share artifact rather than the served
+   * dashboard: the map in hand is already redacted, and its reader has
+   * nothing installed to run a CLI with. */
+  shared?: boolean;
 }) {
   const [mode, setMode] = useState<Mode>("overview");
   const [grouping, setGrouping] = useState<RegionKind>("structural");
@@ -92,6 +97,7 @@ export function MapExplorer({
   const searchInput = useRef<HTMLInputElement | null>(null);
   const [tab, setTab] = useState<Tab>("info");
   const [pathOpen, setPathOpen] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
   const [pathFrom, setPathFrom] = useState<MapNode | null>(null);
   const [pathTo, setPathTo] = useState<MapNode | null>(null);
   const [showOverlay, setShowOverlay] = useState(false);
@@ -175,8 +181,9 @@ export function MapExplorer({
   // nothing at all.
   //
   // Order is innermost-first, and it has to be written down because every
-  // layer wants the same key: the search overlay, then the path panel, then
-  // one step back up the overview → region → file stack.
+  // layer wants the same key: the search overlay, then the share/export
+  // menu, then the path panel, then one step back up the overview → region
+  // → file stack.
   //
   // No dependency array on purpose. The handler closes over `searchShown`,
   // `pathOpen` and `backStep`, all of which change on almost every render;
@@ -193,6 +200,10 @@ export function MapExplorer({
         event.preventDefault();
         setSearchDismissed(true);
         searchInput.current?.focus();
+        return;
+      }
+      if (exportOpen) {
+        setExportOpen(false);
         return;
       }
       if (pathOpen) {
@@ -417,6 +428,9 @@ export function MapExplorer({
         }}
         pathOpen={pathOpen}
         onTogglePath={() => setPathOpen(!pathOpen)}
+        shared={shared}
+        exportOpen={exportOpen}
+        onExportOpen={setExportOpen}
       />
 
       <div className="searchrow" ref={searchRow}>

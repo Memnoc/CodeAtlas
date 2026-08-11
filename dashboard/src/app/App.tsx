@@ -62,7 +62,7 @@ export function App() {
     return (
       <div className="share-shell">
         <ShareBanner redaction={share.redaction} />
-        <MapExplorer map={share.map} overlay={null} />
+        <MapExplorer map={share.map} overlay={null} shared />
       </div>
     );
   }

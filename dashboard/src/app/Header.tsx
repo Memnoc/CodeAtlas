@@ -1,7 +1,7 @@
 // The top bar: what you are looking at, how you want to look at it, and the
 // two things you can do to it.
 import type { KnowledgeGraph } from "../index.js";
-import { downloadMap } from "./export.js";
+import { ExportMenu } from "./ExportMenu.js";
 import type { RegionKind } from "./regions.js";
 import { SegmentedControl } from "./SegmentedControl.js";
 import { ThemeToggle } from "./ThemeToggle.js";
@@ -17,6 +17,9 @@ export function Header({
   onGrouping,
   pathOpen,
   onTogglePath,
+  shared,
+  exportOpen,
+  onExportOpen,
 }: {
   map: KnowledgeGraph;
   mode: Mode;
@@ -25,6 +28,13 @@ export function Header({
   onGrouping: (grouping: RegionKind) => void;
   pathOpen: boolean;
   onTogglePath: () => void;
+  /** True when this document is a share artifact rather than the served
+   * dashboard — see {@link ExportMenu}. */
+  shared: boolean;
+  /** Owned by the explorer, not by the menu, so `Escape` can close it in the
+   * same cascade as everything else that opens (ticket 22). */
+  exportOpen: boolean;
+  onExportOpen: (open: boolean) => void;
 }) {
   const enriched = map.nodes.filter((n) => n.provenance === "llm").length;
   // Learn holds the tour *and* the flows, so the hint has to speak for both:
@@ -86,14 +96,12 @@ export function Header({
       </div>
 
       <div className="topbar-actions">
-        <button
-          type="button"
-          className="topbar-button"
-          title="Download this map as JSON. For a self-contained shareable page, run `codeatlas share`."
-          onClick={() => downloadMap(map)}
-        >
-          Export
-        </button>
+        <ExportMenu
+          map={map}
+          shared={shared}
+          open={exportOpen}
+          onOpen={onExportOpen}
+        />
         <button
           type="button"
           className={`topbar-button${pathOpen ? " topbar-button-on" : ""}`}

@@ -316,6 +316,98 @@ body {
   background: color-mix(in srgb, var(--accent) 14%, var(--panel));
 }
 
+/* The share/export menu hangs off its own button, so the wrapper is the
+   positioning context — and the ref the outside-click check measures. */
+.export-menu-wrap {
+  position: relative;
+}
+
+/* Above the search results (z-index 20), which sit lower in the document and
+   would otherwise paint over a panel anchored in the header. */
+.export-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 320px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 20%, transparent);
+  text-align: left;
+}
+
+.export-route + .export-route {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.export-route h2 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.export-route p {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.export-route p code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.export-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.export-command code {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+/* Always rendered, empty until there is something to announce: a live region
+   the reader's software only notices if it existed before the text did. */
+.export-note {
+  min-height: 1.5em;
+}
+
+/* The caution surface, same treatment as `.share-banner` and the same token:
+   iris is enriched prose everywhere in this file, and enriched prose is
+   exactly what this sentence is warning about.
+
+   Selected as `.export-route p.export-warning` on purpose. `.export-route p`
+   is 0-1-1 and mutes every paragraph in the panel; a bare `.export-warning`
+   at 0-1-0 loses to it, so the one line whose job is to be noticed would
+   render in the same grey as the body copy it sits under. */
+.export-route p.export-warning {
+  padding: 8px 10px;
+  border: 1px solid var(--llm);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--llm) 12%, var(--panel));
+  color: var(--text);
+}
+
 .theme-toggle {
   display: flex;
   align-items: center;

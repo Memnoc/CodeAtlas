@@ -5,6 +5,7 @@
 **Story:** none yet. See Notes.
 **Blocks:** none
 **Blocked by:** an ADR, then a spec story
+**Scope:** V1 — decided 2026-08-11, against a recommendation to defer it
 
 ## Problem
 
