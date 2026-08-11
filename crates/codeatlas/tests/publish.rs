@@ -19,18 +19,28 @@
 //!   deleting the map file would prove less: the map has to be absent
 //!   *because git never took it*, and the store present *because git did*.
 //!
+//! One test asks about no fixture at all. `this_repositorys_own_annotation
+//! _store_is_publishable` runs `git check-ignore` against the real repository
+//! root, because a temp fixture has no outer `.gitignore` and the defect this
+//! ticket found was in the outer one.
+//!
 //! No test here performs network I/O: the only backend selected anywhere in
 //! this file is `fake:`, compiled in by the `test-provider` feature, and the
 //! runs that matter select no backend at all — a test build has no default
 //! provider, so a run that reached for one would fail rather than spend
 //! anything.
 
+mod common;
+
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use codeatlas::enrich::ANNOTATIONS_FILE;
 use codeatlas::scan::{DEFAULT_IGNORE, IGNORE_FILE, OUTPUT_DIR};
+
+use common::{canned_provider, git, git_init, materialize, node, read_json};
 
 /// The provider-selection env var the test-built binary honors. Removed from
 /// every run below that is meant to have no backend.
@@ -45,54 +55,29 @@ const MAP_FILE: &str = "knowledge-graph.json";
 const ENRICHED_NODE: &str = "function:src/util.ts:greet";
 const PURCHASED_PROSE: &str = "Builds the greeting string shown to a caller.";
 
-fn fixture_dir(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), &target).unwrap();
-        }
-    }
-}
-
-/// Copies a committed fixture into a temp dir, activating its `_gitignore`
-/// (committed under a neutral name so it cannot affect this repository), and
-/// makes it a git repository — every claim here is about what git does.
-fn materialize(name: &str) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    copy_tree(&fixture_dir(name), dir.path());
-    let inert = dir.path().join("_gitignore");
-    if inert.exists() {
-        fs::rename(inert, dir.path().join(".gitignore")).unwrap();
-    }
-    git(dir.path(), &["init", "-q"]);
-    git(dir.path(), &["config", "user.email", "fixture@example.com"]);
-    git(dir.path(), &["config", "user.name", "Fixture"]);
-    git(dir.path(), &["config", "commit.gpgsign", "false"]);
+/// A materialized fixture that is also a git repository — every
+/// classification claim here is about what git does with a path.
+fn git_fixture(name: &str) -> tempfile::TempDir {
+    let dir = materialize(name);
+    git_init(dir.path());
     dir
 }
 
-fn git(repo: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .unwrap();
+/// This repository, from the crate the test is compiled in. Not a fixture:
+/// the one rule that broke story 18 lives here and nowhere a fixture can
+/// reach.
+fn repository_root() -> PathBuf {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("the workspace root must exist");
     assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+        root.join(".gitignore").is_file() && root.join(".git").exists(),
+        "{} is not this repository's git root; the check below would ask git \
+         about the wrong rules",
+        root.display()
     );
+    root
 }
 
 /// What `git check-ignore` says about a repo-relative path — the instrument
@@ -117,18 +102,6 @@ fn ignored_by_git(repo: &Path, path: &str) -> bool {
             String::from_utf8_lossy(&output.stderr)
         ),
     }
-}
-
-/// Writes a canned-responses file OUTSIDE the scanned repo and returns the
-/// `fake:` provider spec selecting it.
-fn canned_provider(dir: &Path, answers: &[(&str, &str)]) -> String {
-    let map: serde_json::Map<String, serde_json::Value> = answers
-        .iter()
-        .map(|(key, text)| (key.to_string(), serde_json::Value::from(*text)))
-        .collect();
-    let path = dir.join("canned.json");
-    fs::write(&path, serde_json::to_string_pretty(&map).unwrap()).unwrap();
-    format!("fake:{}", path.display())
 }
 
 /// A plain `codeatlas scan`: no `--enrich`, no `--provider`, and the
@@ -164,20 +137,6 @@ fn store_path(repo: &Path) -> PathBuf {
 
 fn ignore_path(repo: &Path) -> PathBuf {
     repo.join(OUTPUT_DIR).join(IGNORE_FILE)
-}
-
-fn read_json(path: &Path) -> serde_json::Value {
-    serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
-}
-
-/// The map's node with this id, or a panic naming it.
-fn node<'m>(map: &'m serde_json::Value, id: &str) -> &'m serde_json::Value {
-    map["nodes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|n| n["id"] == id)
-        .unwrap_or_else(|| panic!("node {id} missing from the map"))
 }
 
 /// Enriches `repo` through the fake provider, buying [`PURCHASED_PROSE`] for
@@ -218,7 +177,7 @@ fn the_ignore_file_publishes_the_store_the_code_actually_writes() {
 
 #[test]
 fn the_ignore_file_publishes_the_store_and_ignores_the_regenerated_map() {
-    let repo = materialize("simple");
+    let repo = git_fixture("simple");
     let _canned = buy_prose(repo.path());
 
     assert!(
@@ -248,9 +207,36 @@ fn the_ignore_file_publishes_the_store_and_ignores_the_regenerated_map() {
     );
 }
 
+/// The mechanism above holds in a fixture with no outer ignore rules at all,
+/// which is precisely the condition ticket 30 discovered this repository does
+/// not meet. Its root `.gitignore` said `.codeatlas/`, and git will not let a
+/// nested file re-include anything under a directory excluded outright — so
+/// the feature was working, tested, green, and doing nothing here.
+///
+/// Re-tightening that one line would break story 18 again with every other
+/// test in this file still passing, because every other test in this file
+/// runs somewhere the line does not exist. This one asks git about the real
+/// root.
+#[test]
+fn this_repositorys_own_annotation_store_is_publishable() {
+    let root = repository_root();
+    assert!(
+        !ignored_by_git(&root, &format!("{OUTPUT_DIR}/{ANNOTATIONS_FILE}")),
+        "this repository's own rules un-publish its annotation store, so \
+         enriching it would help nobody who clones it. The outer rule must \
+         ignore the directory's contents (`**/{OUTPUT_DIR}/*`) and not the \
+         directory itself"
+    );
+    assert!(
+        ignored_by_git(&root, &format!("{OUTPUT_DIR}/{MAP_FILE}")),
+        "this repository would commit the regenerated map, which is ~790 KB \
+         rebuilt on every scan"
+    );
+}
+
 #[test]
 fn a_missing_ignore_file_is_written_by_the_next_scan() {
-    let repo = materialize("simple");
+    let repo = git_fixture("simple");
     plain_scan(repo.path()).success();
     assert_eq!(
         fs::read_to_string(ignore_path(repo.path())).unwrap(),
@@ -268,7 +254,7 @@ fn a_missing_ignore_file_is_written_by_the_next_scan() {
 
 #[test]
 fn an_edited_ignore_file_is_never_clobbered_and_its_decision_stands() {
-    let repo = materialize("simple");
+    let repo = git_fixture("simple");
     let _canned = buy_prose(repo.path());
 
     // Someone decides their prose is not going into git. Overwriting that
@@ -290,9 +276,40 @@ fn an_edited_ignore_file_is_never_clobbered_and_its_decision_stands() {
     );
 }
 
+/// "Never clobber what somebody else put there" has to hold for things that
+/// are not files, too. A directory at the ignore file's path is the readable
+/// stand-in for the whole class — a file present but unreadable behaves the
+/// same way and cannot be staged portably, since a test run as root would
+/// read it anyway and prove nothing.
+///
+/// The failure this pins is a scan that aborts: answering "does anything
+/// exist here" by reading the path reports a directory as absent, and the
+/// write that follows fails and takes the entire scan with it.
+#[test]
+fn a_directory_where_the_ignore_file_belongs_neither_fails_nor_is_replaced() {
+    let repo = git_fixture("simple");
+    let obstruction = ignore_path(repo.path());
+    fs::create_dir_all(obstruction.join("somebodys-idea")).unwrap();
+
+    plain_scan(repo.path()).success();
+
+    assert!(
+        obstruction.is_dir(),
+        "a scan replaced something it did not put there"
+    );
+    assert!(
+        obstruction.join("somebodys-idea").is_dir(),
+        "the contents went too"
+    );
+    assert!(
+        map_path(repo.path()).exists(),
+        "the scan wrote no map, so it did not really succeed"
+    );
+}
+
 #[test]
 fn a_clone_gets_the_prose_with_no_credential_and_no_provider() {
-    let origin = materialize("simple");
+    let origin = git_fixture("simple");
     let _canned = buy_prose(origin.path());
 
     // What one person commits. `git add -A` obeys the ignore file just
@@ -343,7 +360,7 @@ fn a_clone_gets_the_prose_with_no_credential_and_no_provider() {
 
 #[test]
 fn the_store_records_what_produced_its_prose() {
-    let repo = materialize("simple");
+    let repo = git_fixture("simple");
     let _canned = buy_prose(repo.path());
     let store = read_json(&store_path(repo.path()));
 
@@ -376,7 +393,7 @@ fn the_store_records_what_produced_its_prose() {
 
 #[test]
 fn a_store_written_before_the_provenance_fields_still_reattaches() {
-    let repo = materialize("simple");
+    let repo = git_fixture("simple");
     let _canned = buy_prose(repo.path());
 
     // Roll the store back to the shape a binary before ticket 30 wrote:
@@ -410,4 +427,113 @@ fn a_store_written_before_the_provenance_fields_still_reattaches() {
         "an old-shaped store stopped re-attaching"
     );
     assert_eq!(greet["provenance"], "llm");
+}
+
+/// Guarantee 5 of `docs/SECURITY.md` opens with a claim about the whole
+/// filesystem — *a scan writes into `.codeatlas/` under the scanned root and
+/// nowhere else* — and nothing held it. The claim is true of the code today,
+/// because `scan::save` and `save_store` are the only writers and both build
+/// their path from [`OUTPUT_DIR`], but "the only two writers today" is a fact
+/// about a reading, not a guarantee.
+///
+/// So: fingerprint everything under the root except `.codeatlas/` itself,
+/// scan, fingerprint again. A new path, a vanished one, or a rewrite — length,
+/// contents or modification time — all fail. `.git` is inside the fingerprint
+/// on purpose; a scan has no business there either.
+#[test]
+fn a_scan_writes_nothing_outside_the_directory_it_owns() {
+    let repo = git_fixture("simple");
+    let before = fingerprint_outside_output_dir(repo.path());
+    assert!(
+        before.len() > 1,
+        "the fixture is empty, so this would pass without looking at anything"
+    );
+
+    plain_scan(repo.path()).success();
+
+    // `assert!` and not `assert_eq!`: the two maps hold every path in the
+    // fixture, and dumping both of them buries the one line that matters.
+    let after = fingerprint_outside_output_dir(repo.path());
+    assert!(
+        before == after,
+        "a scan touched something outside {OUTPUT_DIR}/: {}",
+        describe_difference(&before, &after)
+    );
+    // The control: the run really did write, so an unchanged tree is evidence
+    // of restraint rather than of a scan that never happened.
+    assert!(
+        map_path(repo.path()).exists() && ignore_path(repo.path()).exists(),
+        "the scan wrote neither map nor ignore file, so it wrote nothing \
+         anywhere and this proves nothing"
+    );
+}
+
+/// Every path under `root` except the `.codeatlas/` directory CodeAtlas owns,
+/// each rendered as a short string that changes if the file does: its length,
+/// a content hash, and its modification time. Three because each catches what
+/// the others can miss — a same-length edit, a same-content rewrite, and a
+/// filesystem whose timestamps are coarse.
+fn fingerprint_outside_output_dir(root: &Path) -> BTreeMap<String, String> {
+    let owned = root.join(OUTPUT_DIR);
+    let mut found = BTreeMap::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path == owned {
+                continue;
+            }
+            let key = path.strip_prefix(root).unwrap().display().to_string();
+            if entry.file_type().unwrap().is_dir() {
+                found.insert(key, "<directory>".to_string());
+                pending.push(path);
+                continue;
+            }
+            let bytes = fs::read(&path).unwrap();
+            let modified = entry.metadata().unwrap().modified().unwrap();
+            found.insert(
+                key,
+                format!(
+                    "{} bytes, fnv {:016x}, modified {modified:?}",
+                    bytes.len(),
+                    fnv1a64(&bytes)
+                ),
+            );
+        }
+    }
+    found
+}
+
+/// FNV-1a 64-bit, so a fingerprint stays one short line whatever the file's
+/// size. Not cryptographic: nothing here is adversarial.
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    hash
+}
+
+/// The paths on which two fingerprints disagree, so a failure names the file
+/// rather than printing two whole trees.
+fn describe_difference(
+    before: &BTreeMap<String, String>,
+    after: &BTreeMap<String, String>,
+) -> String {
+    let mut lines = Vec::new();
+    for (path, was) in before {
+        match after.get(path) {
+            None => lines.push(format!("{path}: removed (was {was})")),
+            Some(now) if now != was => lines.push(format!("{path}: {was} -> {now}")),
+            Some(_) => {}
+        }
+    }
+    for path in after.keys() {
+        if !before.contains_key(path) {
+            lines.push(format!("{path}: created"));
+        }
+    }
+    lines.join("; ")
 }

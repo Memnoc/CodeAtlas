@@ -248,19 +248,32 @@ backend were compiled in — a guard that cannot fail.
   | --- | --- | --- | --- |
   | sealed (`--no-default-features`) | 0 | 0 | 0 |
   | `network` only | 3 | 1 | 23 |
-  | `agent-cli` only | 2 | 0 | 0 |
-  | default (both features) | 5 | 1 | 25 |
+  | `agent-cli` only | 3 | 0 | 0 |
+  | default (both features) | 5 | 1 | 24 |
 
-  Re-measured 2026-08-11 (ticket 30). These are `grep -c` *line* counts over a
-  binary: they move with the toolchain and with code that has nothing to do
-  with either route, so only the sealed row's zeros are asserted anywhere —
-  the rest is a recorded reading, and the shape it is read for is that the
-  default row is the sum of the two above it.
+  **Only the sealed row is a claim. The other three rows are a reading, and
+  no arithmetic relates them.** `grep -c` counts *lines*, and a "line" in a
+  binary is whatever falls between two `0x0a` bytes — a boundary that depends
+  on how the linker happened to lay the strings out. Two occurrences that
+  share a line in one link land on two in another, so the counts move with
+  the toolchain, with the build path, and with code that has nothing to do
+  with either route.
+
+  That is not a caution written in the abstract. Re-measured 2026-08-11 on
+  ticket 30's crosscheck amendment — same machine, same toolchain, same
+  build directory — `agent-cli` went from 2 to 3 and default `ureq` from 25
+  to 24, moved by a `#[serde(flatten)]` in the annotation store and nothing
+  else. An earlier version of this paragraph read the table for a shape, that
+  the default row is the sum of the two above it. It was true of the `claude`
+  column at the time and of no other column even then, and one refactor of an
+  unrelated struct made it false there too. There is no shape. Do not add one
+  back.
 
   `claude` is **not** an `agent-cli`-only string, and the table is its own
-  disproof: 5 is 3 + 2. Under `agent-cli` it is `agent_cli::PROGRAM` and
-  `SPEC` plus the help that names them; under `network` it is
-  `DEFAULT_MODEL = "claude-opus-5"` and `SPEC = "claude"`
+  disproof: the `network`-only build has no CLI backend compiled in at all
+  and still contains three lines of it. Under `agent-cli` the string is
+  `agent_cli::PROGRAM` and `SPEC` plus the help that names them; under
+  `network` it is `DEFAULT_MODEL = "claude-opus-5"` and `SPEC = "claude"`
   (`crates/codeatlas/src/enrich/claude.rs`). That breadth is right for the sealed
   *subject*, which must contain neither route — but it is useless in the
   *control*, so the control asks for `cli:claude` (`agent_cli::SPEC`), which
@@ -317,8 +330,9 @@ The artifact also self-discloses which fields were redacted and how often.
 
 ### 5. What a scan writes into your repository, and which of it is published
 
-A scan writes into `.codeatlas/` under the scanned root and nowhere else. As
-of [ADR-0007] it writes a nested `.codeatlas/.gitignore` there too, and that
+A scan writes into `.codeatlas/` under the scanned root and nowhere else — not
+into `.git`, not a dotfile at the root, not a lock file beside it. As of
+[ADR-0007] it writes a nested `.codeatlas/.gitignore` there too, and that
 file makes one artifact **committable by default**: the annotation store,
 `.codeatlas/annotations.json`. Everything else CodeAtlas regenerates — the map
 and the diff overlay — stays ignored.
@@ -326,10 +340,15 @@ and the diff overlay — stays ignored.
 This is a disclosure decision and belongs in an audit document, because it
 sends LLM-written prose into git without anyone asking for it each time. What
 the store holds is exactly what the map's enrichable slots hold: node
-summaries, layer names, domain-flow names and tour labels, keyed by node id
-(which embeds a repo-relative path) and a content hash. It holds no file
-contents, for the reason guarantee 2 gives — the model is never sent any, so
-there are none for it to paraphrase.
+summaries, layer names, domain-flow names and tour labels. Two keyings, not
+one. A node summary is keyed by node id — which embeds a repo-relative path —
+and carries a hash of that file's contents, so editing the file expires the
+prose. A layer or domain-flow label is keyed by the layer's or the flow's own
+id, and a tour label by the tour stop's node id; each of those carries an
+`inputs_hash` over the *derivation inputs* the label was bought for
+(membership, step chains), which is what expires a name for a shape that has
+changed. Neither keying holds file contents, for the reason guarantee 2 gives
+— the model is never sent any, so there are none for it to paraphrase.
 
 **It is the same policy as section 4's redaction, not the opposite one. The
 line is the trust boundary, not the prose.** A share artifact goes to a
@@ -347,15 +366,29 @@ Two properties keep this from being a surprise:
 - **The store says what produced it**: provider, model and UTC date, so prose
   arriving in a pull request can be read as generated rather than written.
 
-**Enforced by** `crates/codeatlas/tests/publish.rs`, which asks `git
-check-ignore` rather than reading the file's text — the claim is about what
-git does:
+**Enforced by** `crates/codeatlas/tests/publish.rs`, which for the
+classification claims asks `git check-ignore` rather than reading the file's
+text — those claims are about what git does:
 
+- `a_scan_writes_nothing_outside_the_directory_it_owns` — the "and nowhere
+  else" above, which is otherwise a claim about a reading of the code. It
+  fingerprints every path under the root except `.codeatlas/` — length,
+  content hash and modification time, `.git` included — scans, and
+  fingerprints again; a created, removed or rewritten path fails. Its control
+  is that the run demonstrably wrote *something*, so an unchanged tree is
+  evidence of restraint and not of a scan that never ran
 - `the_ignore_file_publishes_the_store_and_ignores_the_regenerated_map` — the
   map, and anything else in the directory, ignored; the store and the ignore
   file, not
+- `this_repositorys_own_annotation_store_is_publishable` — the same question
+  asked of the real repository root rather than a fixture, because the only
+  rule that has ever broken this mechanism was an outer one, and no fixture
+  has an outer rule (see the limitation on parent exclusions below)
 - `an_edited_ignore_file_is_never_clobbered_and_its_decision_stands` — and the
   edit is what git then obeys, which is the half that matters
+- `a_directory_where_the_ignore_file_belongs_neither_fails_nor_is_replaced` —
+  "never overwrite what somebody else put there" holds for things that are not
+  files, and a scan that met one must not abort
 - `a_clone_gets_the_prose_with_no_credential_and_no_provider` — the story end
   to end through a real local clone: what travels is what the ignore file
   allowed, and a plain `scan` with no backend selected re-attaches the prose
@@ -412,11 +445,19 @@ git does:
   nested ignore file re-include anything under a directory an outer
   `.gitignore` excluded outright, so a repository whose own rules say
   `.codeatlas/` gets no annotation store in git no matter what section 5's
-  nested file says. Narrowing the outer rule to `.codeatlas/*` restores it.
-  The failure is in the safe direction — prose stays unpublished rather than
-  being published by surprise — and it is documented in the README rather
-  than detected, because CodeAtlas does not read the repository's own ignore
-  rules to second-guess them.
+  nested file says. Narrowing the outer rule to `**/.codeatlas/*` — this
+  repository's own rule, and what the README tells a reader to write —
+  restores it: the contents are ignored, the directory is reachable, and the
+  `**/` keeps the rule applying below the root, where a scan run from a
+  subdirectory leaves a `.codeatlas/` too. The failure is in the safe
+  direction — prose stays unpublished rather than being published by surprise
+  — and it is documented in the README rather than detected, because
+  CodeAtlas does not read the repository's own ignore rules to second-guess
+  them. What is guarded is this repository's own case:
+  `this_repositorys_own_annotation_store_is_publishable`
+  (`crates/codeatlas/tests/publish.rs`) asks `git check-ignore` about the real
+  root, so re-tightening the rule fails the suite instead of silently
+  un-publishing the store.
 - **Netns skip conditions.** The egress tests need unprivileged user
   namespaces (`unshare -r -n`). Where that is unavailable — common inside
   containers and sandboxes — they SKIP with an explicit message rather than

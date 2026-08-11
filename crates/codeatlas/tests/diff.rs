@@ -3,39 +3,12 @@
 //! the emitted `.codeatlas/diff-overlay.json`. Never on internals; zero LLM,
 //! zero network — the diff path is pure git + graph traversal.
 
+mod common;
+
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-fn fixture_dir(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), &target).unwrap();
-        }
-    }
-}
-
-/// Copies a committed fixture into a temp dir, activating its `_gitignore`
-/// (committed under a neutral name so it cannot affect this repository).
-fn materialize(name: &str) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    copy_tree(&fixture_dir(name), dir.path());
-    let inert = dir.path().join("_gitignore");
-    if inert.exists() {
-        fs::rename(inert, dir.path().join(".gitignore")).unwrap();
-    }
-    dir
-}
+use common::{git, git_init, materialize};
 
 fn scan(repo: &Path) {
     assert_cmd::Command::cargo_bin("codeatlas")
@@ -69,28 +42,12 @@ fn strings(overlay: &serde_json::Value, field: &str) -> Vec<String> {
         .collect()
 }
 
-fn git(repo: &Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 /// Turns the materialized fixture into a real git repository with one
-/// commit. Identity and signing are configured locally in the tempdir so
-/// the machine's global git config can never affect the test.
+/// commit. The identity and signing configuration lives in `common::git_init`,
+/// local to the tempdir so the machine's global git config can never affect
+/// the test.
 fn git_init_and_commit(repo: &Path) {
-    git(repo, &["init", "-q"]);
-    git(repo, &["config", "user.email", "fixture@example.com"]);
-    git(repo, &["config", "user.name", "Fixture"]);
-    git(repo, &["config", "commit.gpgsign", "false"]);
+    git_init(repo);
     git(repo, &["add", "-A"]);
     git(repo, &["commit", "-q", "-m", "fixture baseline"]);
 }

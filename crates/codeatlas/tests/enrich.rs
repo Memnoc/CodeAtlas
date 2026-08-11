@@ -8,43 +8,14 @@
 //! feature).
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 mod common;
 
+use common::{canned_provider, materialize, node, read_map};
+
 /// The provider-selection env var the test-built binary honors.
 const PROVIDER_ENV: &str = "CODEATLAS_ENRICH_PROVIDER";
-
-fn fixture_dir(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), &target).unwrap();
-        }
-    }
-}
-
-/// Copies a committed fixture into a temp dir, activating its `_gitignore`
-/// (committed under a neutral name so it cannot affect this repository).
-fn materialize(name: &str) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    copy_tree(&fixture_dir(name), dir.path());
-    let inert = dir.path().join("_gitignore");
-    if inert.exists() {
-        fs::rename(inert, dir.path().join(".gitignore")).unwrap();
-    }
-    dir
-}
 
 /// Runs `codeatlas scan [--enrich]` in `repo` with the provider env var
 /// either cleared (`None`) or set to the given spec.
@@ -79,20 +50,6 @@ fn scan_selecting(
         cmd.args(["--provider", spec]);
     }
     cmd.assert()
-}
-
-fn read_map(repo: &Path) -> serde_json::Value {
-    let raw = fs::read_to_string(repo.join(".codeatlas/knowledge-graph.json")).unwrap();
-    serde_json::from_str(&raw).unwrap()
-}
-
-fn node<'m>(map: &'m serde_json::Value, id: &str) -> &'m serde_json::Value {
-    map["nodes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|n| n["id"] == id)
-        .unwrap_or_else(|| panic!("node {id} missing from the map"))
 }
 
 fn assert_schema_valid(map: &serde_json::Value) {
@@ -135,20 +92,6 @@ fn tour_step<'m>(map: &'m serde_json::Value, node: &str) -> &'m serde_json::Valu
         .iter()
         .find(|s| s["node"] == node)
         .unwrap_or_else(|| panic!("tour step for {node} missing from the map"))
-}
-
-/// Writes a canned-responses file (slot key → text; keys are prefixed by
-/// slot kind: `summary:<node-id>`, `layer-name:<layer-id>`,
-/// `flow-name:<flow-id>`, `tour-label:<node-id>`) OUTSIDE the scanned repo
-/// and returns the provider spec selecting it.
-fn canned_provider(dir: &Path, answers: &[(&str, &str)]) -> String {
-    let map: serde_json::Map<String, serde_json::Value> = answers
-        .iter()
-        .map(|(id, summary)| (id.to_string(), serde_json::Value::from(*summary)))
-        .collect();
-    let path = dir.join("canned.json");
-    fs::write(&path, serde_json::to_string_pretty(&map).unwrap()).unwrap();
-    format!("fake:{}", path.display())
 }
 
 #[test]

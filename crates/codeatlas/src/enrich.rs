@@ -307,28 +307,48 @@ pub struct AnnotationStore {
 /// so per-annotation provenance would be honest only for the slots that run
 /// happened to buy, and quietly wrong for the rest. This says what the last
 /// run to write the store was, which is a claim that stays true.
+///
+/// The backend's half is held as a whole [`ProviderIdentity`] and flattened
+/// into the same JSON object rather than copied across field by field: the
+/// two structs otherwise differ by exactly one field, and a hand transcription
+/// between them is a place for a third field to be added to one and forgotten
+/// in the other.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ProducedBy {
-    /// The provider spec that produced it, e.g. `claude` or `cli:claude`.
-    provider: String,
-    /// The model within that backend, where the backend names one. A CLI
-    /// backend left on its subscription's own default names none, and
-    /// inventing one here would be a guess presented as a record.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    model: Option<String>,
+    /// Which backend, and which model within it.
+    #[serde(flatten)]
+    identity: ProviderIdentity,
     /// UTC calendar date, `YYYY-MM-DD`. A date and not a timestamp: this is
     /// read by a person in a diff, and a second-resolution clock would churn
     /// the file on every run that changed nothing else.
     date: String,
 }
 
+impl ProducedBy {
+    /// What a run through `identity` produced, dated today.
+    fn today(identity: ProviderIdentity) -> Self {
+        Self {
+            identity,
+            date: today_utc(),
+        }
+    }
+}
+
 /// How a backend names itself in a written store. Defaulted on the trait, so
 /// the dozen test doubles that will never write one owe nothing.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Serializable because it *is* the provenance record's provider half
+/// ([`ProducedBy`]), flattened in place — `provider` and `model` sit directly
+/// in `produced_by`, exactly as they read before this type owned them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderIdentity {
-    /// The spec a reader would pass to `--provider` to get this backend.
+    /// The spec a reader would pass to `--provider` to get this backend, e.g.
+    /// `claude` or `cli:claude`.
     pub provider: String,
-    /// The model it used, where it names one.
+    /// The model it used, where it names one. A CLI backend left on its
+    /// subscription's own default names none, and inventing one here would be
+    /// a guess presented as a record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
 }
 
@@ -558,11 +578,7 @@ fn save_store(root: &Path, graph: &KnowledgeGraph, identity: ProviderIdentity) -
         .collect();
     let store = AnnotationStore {
         version: STORE_VERSION,
-        produced_by: Some(ProducedBy {
-            provider: identity.provider,
-            model: identity.model,
-            date: today_utc(),
-        }),
+        produced_by: Some(ProducedBy::today(identity)),
         annotations,
         layers,
         flows,
@@ -1781,7 +1797,12 @@ mod tests {
         }
 
         let root = TempRoot::new("store-provenance");
+        // The clock is read once by `save_store` and bracketed here, rather
+        // than read a second time at assert time: a run straddling UTC
+        // midnight would compare two different days and fail for no reason.
+        let opened = today_utc();
         save_store(root.path(), &graph(), Named.identity()).unwrap();
+        let closed = today_utc();
 
         let written: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(
@@ -1794,7 +1815,12 @@ mod tests {
         .unwrap();
         assert_eq!(written["produced_by"]["provider"], "a-backend");
         assert_eq!(written["produced_by"]["model"], "a-model");
-        assert_eq!(written["produced_by"]["date"], today_utc());
+        let date = written["produced_by"]["date"].as_str().unwrap();
+        assert!(
+            date == opened || date == closed,
+            "the store's date is not the date of the run that wrote it: \
+             {date} is neither {opened} nor {closed}"
+        );
         assert_eq!(
             written["version"], STORE_VERSION,
             "the provenance fields are additive; a bump would discard every \
@@ -1823,15 +1849,30 @@ mod tests {
         let root = TempRoot::new("store-no-model");
         save_store(root.path(), &graph(), Modelless.identity()).unwrap();
 
-        let raw = fs::read_to_string(
-            root.path()
-                .join(crate::scan::OUTPUT_DIR)
-                .join(ANNOTATIONS_FILE),
+        let written: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(
+                root.path()
+                    .join(crate::scan::OUTPUT_DIR)
+                    .join(ANNOTATIONS_FILE),
+            )
+            .unwrap(),
         )
         .unwrap();
+        // The key, by name, in the object that would carry it. Searching the
+        // whole serialized store for the substring `model` would say the same
+        // thing today and would go on to fail on any future field — or any
+        // annotation prose — that happened to contain those five letters.
+        let produced_by = written["produced_by"]
+            .as_object()
+            .unwrap_or_else(|| panic!("the store recorded nothing about its producer: {written}"));
         assert!(
-            !raw.contains("model"),
-            "an absent model must be absent, not null: {raw}"
+            !produced_by.contains_key("model"),
+            "an absent model must be absent, not null: {written}"
+        );
+        assert!(
+            produced_by.contains_key("provider"),
+            "the object checked for an absent `model` must be the one that \
+             would carry it: {written}"
         );
     }
 

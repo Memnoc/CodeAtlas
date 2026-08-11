@@ -538,10 +538,19 @@ pub fn save(root: &Path, graph: &KnowledgeGraph) -> Result<()> {
 /// decision, and a tool that silently overwrites a decision every scan is one
 /// people stop trusting with their repository. A file already byte-identical
 /// to the default is left alone too: rewriting it would only churn its mtime.
+///
+/// The existence question is asked with [`Path::try_exists`] and not by
+/// reading the file, because reading answers a different question and answers
+/// it in the dangerous direction: a file present but unreadable, or a
+/// directory sitting at that path, both read as *absent*, and the write that
+/// follows either clobbers or fails the whole scan. An `Err` — the path
+/// cannot be classified at all — is not a licence to write either. Only a
+/// definite "nothing is there" is.
 fn write_ignore_file(dir: &Path) -> Result<()> {
     let path = dir.join(IGNORE_FILE);
-    if fs::read(&path).is_ok() {
-        return Ok(());
+    match path.try_exists() {
+        Ok(false) => fs::write(&path, DEFAULT_IGNORE)
+            .with_context(|| format!("cannot write {}", path.display())),
+        Ok(true) | Err(_) => Ok(()),
     }
-    fs::write(&path, DEFAULT_IGNORE).with_context(|| format!("cannot write {}", path.display()))
 }

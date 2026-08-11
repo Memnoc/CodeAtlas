@@ -66,7 +66,9 @@ is the one way this mechanism silently does nothing: git will not let a nested
 file re-include anything under a directory its parent excluded outright. A
 repository whose own `.gitignore` says `.codeatlas/` therefore publishes
 nothing, however correct the nested file is, and the fix is to ignore the
-directory's *contents* instead — `.codeatlas/*`. This repository's own
-`.gitignore` said the former and was changed. The failure is at least in the
-safe direction: prose stays unpublished rather than being published by
-surprise.
+directory's *contents* instead — `**/.codeatlas/*`, which is what this
+repository's own `.gitignore` now says in place of `.codeatlas/`. The `**/` is
+not decoration: without it the rule stops applying at the root, and a scan run
+from a subdirectory leaves a `.codeatlas/` there that nothing ignores. The
+failure is at least in the safe direction: prose stays unpublished rather than
+being published by surprise.

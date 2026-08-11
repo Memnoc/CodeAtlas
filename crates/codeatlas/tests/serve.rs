@@ -13,36 +13,7 @@ use predicates::prelude::PredicateBooleanExt;
 
 mod common;
 
-fn fixture_dir(name: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name)
-}
-
-fn copy_tree(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let target = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_tree(&entry.path(), &target);
-        } else {
-            fs::copy(entry.path(), &target).unwrap();
-        }
-    }
-}
-
-/// Copies a committed fixture into a temp dir, activating its `_gitignore`
-/// (committed under a neutral name so it cannot affect this repository).
-fn materialize(name: &str) -> tempfile::TempDir {
-    let dir = tempfile::tempdir().unwrap();
-    copy_tree(&fixture_dir(name), dir.path());
-    let inert = dir.path().join("_gitignore");
-    if inert.exists() {
-        fs::rename(inert, dir.path().join(".gitignore")).unwrap();
-    }
-    dir
-}
+use common::materialize;
 
 /// The provider-selection env var the test-built binary honors. Cleared on
 /// every child, so a value in the developer's shell cannot decide what these

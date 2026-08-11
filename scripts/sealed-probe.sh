@@ -67,20 +67,26 @@ fi
 #   build                             claude  api.anthropic.com  ureq
 #   sealed (--no-default-features)         0                  0     0
 #   network only                           3                  1    23
-#   agent-cli only                         2                  0     0
-#   default (both features)                5                  1    25
+#   agent-cli only                         3                  0     0
+#   default (both features)                5                  1    24
 #
-# Re-measured 2026-08-11 (ticket 30). These are `grep -c` LINE counts over a
-# binary, so they move with the toolchain and with unrelated code: only the
-# sealed row's zeros and the presence checks above are asserted. What survives
-# re-measurement is the shape — the default row is the sum of the other two.
+# ONLY THE SEALED ROW IS A CLAIM. The other three are a reading, and no
+# arithmetic relates them. `grep -c` counts LINES, and a line in a binary is
+# whatever falls between two 0x0a bytes — a boundary the linker decides — so
+# these move with the toolchain, the build path, and unrelated code. Measured
+# 2026-08-11 on ticket 30's crosscheck amendment; the same machine at
+# f6b4fa4 read 2 and 25 in the cells that now read 3 and 24, moved by a
+# #[serde(flatten)] in the annotation store. An earlier comment here read the
+# table for a shape ("the default row is the sum of the other two"). There is
+# no shape. Do not add one back; docs/SECURITY.md carries the long version.
 #
-# The `network only` row is the one to read twice: 5 is 3 + 2, not 2. Under
-# `agent-cli` the string is `agent_cli::PROGRAM` and `SPEC` plus the help
-# that names them; under `network` it is `DEFAULT_MODEL = "claude-opus-5"`
-# and `SPEC = "claude"` (src/enrich/claude.rs), which have nothing to do with
-# the CLI backend. That is why section 0's
-# control asks for `cli:claude` instead.
+# The `network only` row is still the one to read twice, for the reason that
+# does not depend on arithmetic: that build has no CLI backend compiled in at
+# all and contains `claude` anyway. Under `agent-cli` the string is
+# `agent_cli::PROGRAM` and `SPEC` plus the help that names them; under
+# `network` it is `DEFAULT_MODEL = "claude-opus-5"` and `SPEC = "claude"`
+# (src/enrich/claude.rs), which have nothing to do with the CLI backend. That
+# is why section 0's control asks for `cli:claude` instead.
 for needle in "api.anthropic.com" "ureq" "claude"; do
   if grep -q -a "$needle" "$sealed"; then
     fail "sealed binary contains '$needle'"

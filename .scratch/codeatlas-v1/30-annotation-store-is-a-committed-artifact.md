@@ -153,3 +153,105 @@ something unwanted. Filed as prose in the README and in `docs/SECURITY.md`'s
 limitations instead. The `agent-cli` `identity()` also reports the `cli-exec:`
 stand-in by name rather than as `cli:claude`, behind a `cfg(test-provider)`
 split, so no released binary carries a name for a program it cannot run.
+
+## What /crosscheck found
+
+**The sentence this ticket was proudest of was wrong, and the fix for it was
+wrong too.** The paragraph above says the byte-count table's shape survives
+re-measurement — "default is the sum of the two above it" — and the `ureq`
+column in the same table disproved it on the day it was written: 23 plus 0 is
+23, but default read 25. The review asked for the claim to be scoped back to
+the `claude` column, where 5 was 3 + 2. Re-measuring for this amendment
+showed that narrower claim is now false as well. On the same machine, the
+same toolchain and the same build directory, `f6b4fa4` reads 2 in the
+`agent-cli` cell and 25 in default's `ureq`; this amendment reads 3 and 24,
+and the only thing between them is a `#[serde(flatten)]` on a struct in the
+annotation store. So the sum was not scoped back. It was removed, from
+`docs/SECURITY.md` and from `scripts/sealed-probe.sh`, and both now say why
+in terms a future reader cannot mistake for arithmetic: `grep -c` counts
+lines, a line in a binary is whatever falls between two `0x0a` bytes, and the
+linker decides that. Only the sealed row is a claim. The table's real
+argument does not need a sum at all — the `network`-only build has no CLI
+backend compiled into it and contains `claude` three times regardless, which
+is the whole reason the probe's control asks for `cli:claude` instead.
+
+**Three consecutive tickets have shipped a false sentence into
+`docs/SECURITY.md`, and all three were the same mistake:** a claim about
+numbers written next to the numbers, without reading them. This one was
+caught by measuring before writing rather than after.
+
+**Guarantee 5 opened with a claim nothing enforced.** "A scan writes into
+`.codeatlas/` under the scanned root and nowhere else" was true of the code —
+`scan::save` and `save_store` are the only writers and both build their path
+from `OUTPUT_DIR` — but "the only two writers today" is a fact about a
+reading, and the document's own preamble promises a committed test beside
+every claim. `a_scan_writes_nothing_outside_the_directory_it_owns`
+fingerprints every path under the fixture root except `.codeatlas/` — length,
+content hash and modification time, `.git` included — scans, and compares.
+Three fingerprints and not one because each catches what the others miss: a
+same-length edit, a same-content rewrite, and a filesystem whose timestamps
+are too coarse to notice. Its control is that the run demonstrably wrote
+something, so an unchanged tree is evidence of restraint rather than of a
+scan that never ran.
+
+**The defect this ticket discovered had no regression guard, which is the
+sharpest thing the review found.** Every other test in `publish.rs` runs in a
+temp fixture, and a temp fixture has no outer `.gitignore` — the one rule
+that has ever broken this mechanism. Re-tightening the root rule back to
+`.codeatlas/` would have un-published the store again with a completely green
+suite. `this_repositorys_own_annotation_store_is_publishable` asks `git
+check-ignore` about the real repository root instead of a fixture. It is four
+lines and it guards the exact thing that was broken.
+
+**Documentation prescribed a narrower fix than the tool gave itself.**
+ADR-0007 and the README both told a reader to narrow their rule to
+`.codeatlas/*` while this repository's own rule says `**/.codeatlas/*`, whose
+`**/` keeps the reach of the pattern it replaced for a scan run from a
+subdirectory. Not false, but a reader following the documentation got less
+than CodeAtlas gave itself. All three documents now say the same thing and
+say what the `**/` is for.
+
+**Guarantee 5 also described one keying where there are two.** Annotations
+are keyed by node id and carry a hash of the file's contents; layer, flow and
+tour labels are keyed by their own ids and carry an `inputs_hash` over the
+derivation inputs they were bought for. "Keyed by node id and a content hash"
+was true of a quarter of the store.
+
+**`write_ignore_file` failed in the wrong direction.** It answered "does
+anything exist here" by reading the whole file, which reports a
+present-but-unreadable file, and a directory, as *absent* — and the write
+that follows either clobbers or takes the whole scan down with it. For a
+function whose entire purpose is never to overwrite somebody's decision,
+failing open into a write is backwards. It now asks `try_exists`, writes only
+on a definite "nothing is there", and treats an unclassifiable path the same
+as an occupied one.
+`a_directory_where_the_ignore_file_belongs_neither_fails_nor_is_replaced`
+pins it; against the old code the scan aborted with `cannot write
+./.codeatlas/.gitignore: Is a directory`.
+
+**Two assertions were shaped so that they could fail for the wrong reason.**
+The store's date was compared against a second reading of the clock, which
+fails spuriously on a run straddling UTC midnight — the clock is now read on
+both sides of the write and the store's date must be one of the two. And an
+absent model was asserted by searching the whole serialized store for the
+substring `model`, which is not vacuous today but would fail on any future
+field, or any annotation prose, containing those five letters; it now asks
+the `produced_by` object whether it has the key, with the presence of
+`provider` beside it as the control that the object being asked is the one
+that would carry it.
+
+**`ProducedBy` and `ProviderIdentity` differed by one field and were
+transcribed across by hand.** `ProducedBy` now holds a whole
+`ProviderIdentity` flattened into the same JSON object, so the two cannot
+drift and the on-disk shape is unchanged. That refactor is also what moved
+two cells of the byte-count table, which is a better argument against reading
+shapes into those numbers than any sentence about them.
+
+**Six copies of `materialize` became one.** `fixture_dir`, `copy_tree`,
+`materialize`, `git`, `read_json`, `read_map`, `node` and `canned_provider`
+now live in `tests/common/mod.rs`, which already existed to hold shared test
+policy. What stayed local is what a reader has to see beside the assertion to
+know the assertion can fail: `plain_scan`, whose `env_remove` of the provider
+variable is the reason no test here can reach a real backend, and
+`ignored_by_git`, whose `--no-index` is the difference between asking the
+ignore rules and asking whether a file happens to be tracked.

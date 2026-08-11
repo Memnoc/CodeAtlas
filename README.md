@@ -31,9 +31,12 @@ ignored, the annotation store is not. That one exception is deliberate — see
 never overwritten, so editing it is how you change the arrangement.
 
 If your repository already ignores `.codeatlas/` outright, remove that line or
-narrow it to `.codeatlas/*`: git will not let a nested file re-include
-anything under a directory the parent excluded, so an outright exclusion keeps
-enrichment unpublished no matter what the nested file says.
+narrow it to `**/.codeatlas/*` — which is what CodeAtlas's own `.gitignore`
+says. Git will not let a nested file re-include anything under a directory the
+parent excluded, so an outright exclusion keeps enrichment unpublished no
+matter what the nested file says; ignoring the *contents* lets the nested file
+do its job. Keep the `**/` or the rule stops applying at the root, and a scan
+run from a subdirectory leaves a `.codeatlas/` there that nothing ignores.
 
 ## Commands
 
