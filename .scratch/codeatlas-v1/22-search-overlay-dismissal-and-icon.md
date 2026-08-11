@@ -1,6 +1,6 @@
 # Ticket 22 — the search overlay does not dismiss, and its icon is too small
 
-**Status:** ready
+**Status:** done
 **Spec:** docs/specs/2026-08-09-codeatlas-v1.md
 **Story:** 3 — interactive local dashboard (graph canvas, search, layer grouping, node detail)
 **Blocks:** none
@@ -22,16 +22,21 @@ full-width input. It reads as a decoration rather than as the thing that says
 
 ## Acceptance criteria
 
-- [ ] A click anywhere outside the overlay closes it, leaving the query text
+- [x] A click anywhere outside the overlay closes it, leaving the query text
       alone — a reader who clicks the canvas is dismissing the results, not
       abandoning their search.
-- [ ] `Escape` closes it too, and returns focus to the input.
-- [ ] Selecting a result closes it, which is already true; keep it true.
-- [ ] Dismissal does not swallow the click that caused it — clicking a region
+- [x] `Escape` closes it too, and returns focus to the input.
+- [x] Selecting a result closes it, which is already true; keep it true.
+- [x] Dismissal does not swallow the click that caused it — clicking a region
       card both closes the overlay and selects that card.
 - [ ] The icon is sized to sit with the input rather than beside it; pick the
-      size against the rendered bar, not in the abstract.
-- [ ] Driven by real user events in the dashboard suite, not by calling the
+      size against the rendered bar, not in the abstract. **Changed 16px →
+      22px with a pinned line-height and a fixed 24px box, but chosen in the
+      abstract: no browser can be driven in this environment, so the rendered
+      bar has never been looked at.** Left unticked deliberately — the
+      criterion asked for a judgement against the real thing, and that
+      judgement is the reader's to make.
+- [x] Driven by real user events in the dashboard suite, not by calling the
       handler directly.
 
 ## Notes

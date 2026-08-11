@@ -147,6 +147,19 @@ fn scan_extracts_functions_and_classes_with_contains_edges() {
         "mechanical summary expected, got: {summary}"
     );
 
+    // The mechanical summary is the fallback a reader is meant to trust when
+    // a map is not enriched, and it is a file card's caption on screen — so
+    // it has to be spelled correctly. `pair.ts` holds Alpha and Beta.
+    let pair = nodes
+        .iter()
+        .find(|n| n["id"] == "file:src/pair.ts")
+        .unwrap();
+    let pair_summary = pair["summary"].as_str().unwrap();
+    assert!(
+        pair_summary.contains("2 classes"),
+        "expected `2 classes`, got: {pair_summary}"
+    );
+
     let edges = map["edges"].as_array().unwrap();
     assert!(
         edges.iter().any(|e| e["source"] == "file:src/util.ts"

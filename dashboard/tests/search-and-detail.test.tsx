@@ -106,3 +106,69 @@ describe("node detail", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("dismissing the search results", () => {
+  it("closes on a click outside, without discarding the query", async () => {
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+
+    await user.type(screen.getByLabelText("Search nodes"), "main");
+    expect(screen.getByLabelText("Search results")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("heading", { level: 1 }));
+    expect(screen.queryByLabelText("Search results")).not.toBeInTheDocument();
+    // The reader dismissed the results, not their search.
+    expect(screen.getByLabelText("Search nodes")).toHaveValue("main");
+  });
+
+  it("reopens when the reader goes back to the input", async () => {
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+
+    await user.type(screen.getByLabelText("Search nodes"), "main");
+    await user.click(screen.getByRole("heading", { level: 1 }));
+    await user.click(screen.getByLabelText("Search nodes"));
+
+    expect(screen.getByLabelText("Search results")).toBeInTheDocument();
+  });
+
+  it("closes on Escape and leaves focus on the input", async () => {
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+
+    await user.type(screen.getByLabelText("Search nodes"), "main");
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByLabelText("Search results")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Search nodes")).toHaveFocus();
+  });
+
+  it("does not swallow the click that dismissed it", async () => {
+    // The usual bug: a document-level mousedown closes the overlay before
+    // React's click reaches the element under the pointer, so the reader has
+    // to click twice and the first click appears to do nothing.
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+
+    await user.type(screen.getByLabelText("Search nodes"), "greeter");
+    const chips = screen
+      .getAllByRole("button")
+      .filter((b) => b.classList.contains("region-chip"));
+    await user.click(chips[0]!);
+
+    expect(screen.queryByLabelText("Search results")).not.toBeInTheDocument();
+    expect(chips[0]).toHaveClass("region-chip-on");
+  });
+
+  it("closes when a result is chosen", async () => {
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+
+    await user.type(screen.getByLabelText("Search nodes"), "main");
+    await user.click(
+      within(screen.getByLabelText("Search results")).getByText("main"),
+    );
+
+    expect(screen.queryByLabelText("Search results")).not.toBeInTheDocument();
+  });
+});

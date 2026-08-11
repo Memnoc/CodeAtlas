@@ -83,6 +83,12 @@ export function MapExplorer({
   const [openRegionId, setOpenRegionId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  // Dismissal is tracked apart from the query, because putting the results
+  // away and giving up on the search are different intentions: a reader who
+  // clicks the canvas wants to see it, not to retype what they were looking
+  // for.
+  const [searchDismissed, setSearchDismissed] = useState(false);
+  const searchRow = useRef<HTMLDivElement | null>(null);
   const [tab, setTab] = useState<Tab>("info");
   const [pathOpen, setPathOpen] = useState(false);
   const [pathFrom, setPathFrom] = useState<MapNode | null>(null);
@@ -126,6 +132,7 @@ export function MapExplorer({
   const reveal = useCallback(
     (id: string) => {
       setSelectedId(id);
+      setSearchDismissed(true);
       const node = byId.get(id);
       if (node === undefined) {
         return;
@@ -142,6 +149,59 @@ export function MapExplorer({
     },
     [byId, regionOfPath, fileIdOfPath],
   );
+
+  const searchShown = query.trim() !== "" && !searchDismissed;
+
+  // Overview → region → file is a stack, and back means one step up it, never
+  // two. The label names the destination because the same word at three
+  // depths would mean three different things, and a reader deciding whether
+  // to press it is deciding where they end up.
+  const backStep =
+    openRegion === null
+      ? null
+      : selectedId !== null
+        ? {
+            label: `Back to ${openRegion.name}`,
+            go: () => setSelectedId(null),
+          }
+        : { label: "Back to regions", go: () => setOpenRegionId(null) };
+
+  // Escape is the same gesture without the pointer. Precedence has to be
+  // stated rather than left to bubbling: the search overlay is the innermost
+  // thing on screen, so it takes Escape first — otherwise dismissing a search
+  // would also throw away the region the reader was reading.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || searchShown) {
+        return;
+      }
+      backStep?.go();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  });
+
+  // Put the results away when the reader looks somewhere else. Listening on
+  // `pointerdown` rather than `click` means the overlay is gone before the
+  // press completes, so it never covers what is being aimed at — and because
+  // nothing here calls `preventDefault` or `stopPropagation`, the click still
+  // reaches whatever was underneath. Closing on `click` instead would work
+  // too; closing on `mousedown` *and* consuming the event is the version that
+  // makes the first click on a region chip do nothing.
+  useEffect(() => {
+    if (searchDismissed) {
+      return;
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && searchRow.current?.contains(target)) {
+        return;
+      }
+      setSearchDismissed(true);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [searchDismissed]);
 
   const pathIds = useMemo(() => {
     if (pathFrom === null || pathTo === null) {
@@ -335,7 +395,7 @@ export function MapExplorer({
         onTogglePath={() => setPathOpen(!pathOpen)}
       />
 
-      <div className="searchrow">
+      <div className="searchrow" ref={searchRow}>
         <span className="search-glyph" aria-hidden="true">
           ⌕
         </span>
@@ -344,9 +404,23 @@ export function MapExplorer({
           aria-label="Search nodes"
           placeholder="Search nodes by name, path, or summary…"
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setSearchDismissed(false);
+          }}
+          onFocus={() => setSearchDismissed(false)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              // Not `preventDefault`: a type="search" input clears itself on
+              // Escape in some browsers, and here the query is what the
+              // reader keeps. Stopping the default keeps the two gestures —
+              // put the list away, throw the search away — distinct.
+              e.preventDefault();
+              setSearchDismissed(true);
+            }
+          }}
         />
-        {query.trim() !== "" && (
+        {query.trim() !== "" && !searchDismissed && (
           <ul className="search-results" aria-label="Search results">
             {results.slice(0, 40).map((n) => (
               <li key={n.id}>
@@ -458,6 +532,19 @@ export function MapExplorer({
 
         <main className="canvas">
           <nav className="breadcrumb" aria-label="Canvas scope">
+            {/* Beside the trail rather than instead of it: the breadcrumb
+                says where you are, and this says how to leave. Both still
+                work, and so does clicking the canvas. */}
+            {backStep !== null && (
+              <button
+                type="button"
+                className="back"
+                data-testid="back"
+                onClick={backStep.go}
+              >
+                <span aria-hidden="true">←</span> {backStep.label}
+              </button>
+            )}
             <button
               type="button"
               className={openRegion === null ? "crumb crumb-on" : "crumb"}

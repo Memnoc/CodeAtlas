@@ -467,12 +467,23 @@ fn extension_of(path: &str) -> &str {
         .unwrap_or_default()
 }
 
+/// The English plural of a noun these summaries use. Sibilant endings take
+/// `es` — "class" becomes "classes", not "classs" — and everything else takes
+/// `s`.
+///
+/// Deliberately a spelling rule and not an i18n system: the summary is the
+/// prose a reader falls back on when a map is not enriched, and it is a file
+/// card's caption on screen, so it only has to be *right*. The rule covers
+/// the whole sibilant family rather than the one word that exposed it,
+/// because the next noun added here would hit the same edge.
 fn plural(word: &str, n: usize) -> String {
     if n == 1 {
-        word.to_string()
-    } else {
-        format!("{word}s")
+        return word.to_string();
     }
+    let sibilant = ["s", "x", "z", "ch", "sh"]
+        .iter()
+        .any(|ending| word.ends_with(ending));
+    format!("{word}{}", if sibilant { "es" } else { "s" })
 }
 
 /// Writes the map to `.codeatlas/knowledge-graph.json` under the scanned root.

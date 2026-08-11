@@ -1,6 +1,6 @@
 # Ticket 25 — connections need their own colour, not the cards' colour
 
-**Status:** ready
+**Status:** done
 **Spec:** docs/specs/2026-08-09-codeatlas-v1.md
 **Story:** 3 — interactive local dashboard (graph canvas, search, layer grouping, node detail)
 **Blocks:** none
@@ -17,18 +17,19 @@ Requested 2026-08-11: warm the connections up — more yellow or orange —
 
 ## Acceptance criteria
 
-- [ ] Edges take a warm accent from Rosé Pine — `gold` is the obvious
+- [x] Edges take a warm accent from Rosé Pine — `gold` is the obvious
       candidate (`#f6c177` on Moon, `#ea9d34` on Dawn) — and no colour is
       introduced that is not in the palette.
-- [ ] It works in all three theme states: Dawn, Moon, and the system default
+- [x] It works in all three theme states: Dawn, Moon, and the system default
       that stamps no `data-theme` attribute.
-- [ ] Lit and dimmed edges stay distinguishable from each other after the
+- [x] Lit and dimmed edges stay distinguishable from each other after the
       change; the dim state is what makes a selection readable, and a warmer
       hue at low opacity can lose that.
-- [ ] The arrowhead on a lit edge picks up the same accent — a warm line with
+- [x] The arrowhead on a lit edge picks up the same accent — a warm line with
       a cool arrowhead reads as two things.
-- [ ] Contrast against the canvas background is checked at both themes rather
-      than assumed; gold on the Dawn background is the risky one.
+- [x] Contrast against the canvas background is checked at both themes rather
+      than assumed; gold on the Dawn background is the risky one. Computed,
+      not eyeballed — and Dawn was indeed the risky one. See Notes.
 
 ## Notes
 
@@ -36,3 +37,24 @@ Aesthetic, but not only aesthetic: the reason to warm the edges is that hue
 separates them from the cards faster than weight or opacity can. Judge the
 result on a real drilled-in region with fifty-odd edges, not on a two-node
 sketch.
+
+### Measured contrast, against the canvas background
+
+| | Dawn `#faf4ed` | Moon `#232136` |
+|---|---|---|
+| lit (`--link`, 2px) | **2.05:1** | 9.55:1 |
+| rest (`--link-dim` @0.55, 1px) | 1.50:1 | 2.14:1 |
+| dim (`--link-dim` @0.14) | 1.10:1 | 1.19:1 |
+| *previous* rest, for comparison | 1.12:1 | 1.25:1 |
+
+Every resting edge is more visible than before on both themes, which is the
+state the change was for — the hairline texture is what had to separate from
+the cards.
+
+**One number is worth knowing about: the lit edge on Dawn is 2.05:1**, under
+the 3:1 that WCAG asks of non-text. Rosé Pine Dawn has exactly one gold
+(`#ea9d34`) and darkening it would leave the palette, which the request
+explicitly ruled out. A lit edge also carries double stroke width and an
+arrowhead, so colour is not the only thing marking it — but this is a real
+trade of contrast for palette fidelity, made deliberately and recorded here
+rather than discovered later. Moon is unaffected.
