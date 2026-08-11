@@ -810,15 +810,16 @@ fn the_help_names_the_providers_this_build_recognises() {
         stdout.contains("--provider"),
         "help must offer it: {stdout}"
     );
-    // The discriminating assertion: `claude` appears in the help exactly when
-    // the build compiled it in. Asserting only that `fake:` is listed would
-    // pass against a hardcoded string naming every spec that has ever
-    // existed — which is the failure this help text exists to prevent, since
-    // it would offer a sealed build a backend it cannot select.
+    // `cli:claude` is the discriminating spec here: it is not a substring of
+    // any other, so it can be asked about directly. (`claude` cannot — it is
+    // a substring of `cli:claude`, which is how ticket 29's version of this
+    // assertion broke the moment ADR-0008's backend arrived. The exact
+    // list-versus-build check now lives in a unit test that parses the
+    // rendered sentence, where clap's line wrapping cannot interfere.)
     assert_eq!(
-        stdout.contains("claude"),
-        cfg!(feature = "network"),
-        "help offers the Claude backend exactly when it exists: {stdout}"
+        stdout.contains("cli:claude"),
+        cfg!(feature = "agent-cli"),
+        "help offers the CLI backend exactly when it exists: {stdout}"
     );
     assert!(
         stdout.contains("fake:"),
@@ -841,9 +842,14 @@ fn choosing_a_provider_without_asking_for_enrichment_is_refused() {
     );
 }
 
-/// Sealed builds only. The flag must still exist and explain itself — a
-/// selection surface that vanishes in one build configuration teaches the
-/// reader nothing about why. (As with the sibling sealed test above, a
+/// Builds with no enrichment backend at all. The flag must still exist and
+/// explain itself — a selection surface that vanishes in one build
+/// configuration teaches the reader nothing about why.
+///
+/// Gated on *both* backends being absent, not on `network` alone: in an
+/// `agent-cli`-without-`network` build `--model` is honoured by the CLI
+/// backend, so asserting it has nothing to modify would be asserting a
+/// falsehood. (As with the sibling sealed test above, a
 /// `cargo test` build carries `test-provider`, so `fake:` is selectable here
 /// and the genuinely sealed binary is CI's subject, not this one.)
 ///
@@ -851,9 +857,9 @@ fn choosing_a_provider_without_asking_for_enrichment_is_refused() {
 /// `recognised_specs`, not here: clap wraps help text at the terminal width,
 /// so an assertion on the rendered list tests the wrapping as much as the
 /// content.
-#[cfg(not(feature = "network"))]
+#[cfg(not(any(feature = "network", feature = "agent-cli")))]
 #[test]
-fn the_provider_flag_exists_in_sealed_builds_and_refuses_claude() {
+fn the_provider_flag_exists_with_no_backend_compiled_in_and_refuses_claude() {
     let help = assert_cmd::Command::cargo_bin("codeatlas")
         .unwrap()
         .args(["scan", "--help"])
@@ -874,10 +880,262 @@ fn the_provider_flag_exists_in_sealed_builds_and_refuses_claude() {
         .nth(1)
         .expect("--model must be in the help");
     assert!(
-        model_paragraph.contains("did not compile in"),
+        model_paragraph.contains("compiled none in"),
         "--model must say it has nothing to modify: {model_paragraph}"
     );
 
     let repo = materialize("simple");
     scan_selecting(repo.path(), None, Some("claude")).failure();
+}
+
+// ── The CLI backend (ticket 31, seam 3) ──────────────────────────────────
+//
+// Seam 3 is the spawned program's process interface. The unit tests in
+// `src/enrich/agent_cli.rs` cover argv construction and output parsing as
+// pure functions; what only a real spawn can show is that the environment
+// was actually cleared, the working directory actually changed, and the whole
+// path from `--provider` to a filled slot actually joins up. That is what
+// these do, against a stand-in executable — never the real `claude`.
+
+#[cfg(feature = "agent-cli")]
+/// Writes an executable stand-in for the Claude CLI. It records the working
+/// directory, selected environment variables and its whole argv to
+/// `<dir>/record.txt`, then prints `envelope` on stdout and exits with
+/// `code`. The record path is baked in rather than passed through the
+/// environment, because the environment is exactly what is under test.
+fn fake_cli(dir: &Path, envelope: &str, code: i32) -> String {
+    fs::create_dir_all(dir).unwrap();
+    let record = dir.join("record.txt");
+    let program = dir.join("fake-claude");
+    let script = format!(
+        r#"#!/bin/sh
+{{
+  printf 'cwd=%s\n' "$(pwd)"
+  printf 'api-key=%s\n' "${{ANTHROPIC_API_KEY-<unset>}}"
+  printf 'secret=%s\n' "${{CODEATLAS_TEST_SECRET-<unset>}}"
+  printf 'home=%s\n' "${{HOME-<unset>}}"
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+}} > '{record}'
+cat <<'CODEATLAS_ENVELOPE'
+{envelope}
+CODEATLAS_ENVELOPE
+exit {code}
+"#,
+        record = record.display(),
+    );
+    fs::write(&program, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    format!("cli-exec:{}", program.display())
+}
+
+/// Runs `scan --enrich --provider <spec>` with a credential and an unrelated
+/// secret in the parent environment, so the child's environment can be
+/// checked for both.
+#[cfg(feature = "agent-cli")]
+fn scan_with_secrets(repo: &Path, spec: &str) -> assert_cmd::assert::Assert {
+    assert_cmd::Command::cargo_bin("codeatlas")
+        .unwrap()
+        .args(["scan", "--enrich", "--provider", spec])
+        .current_dir(repo)
+        .env_remove(PROVIDER_ENV)
+        .env("ANTHROPIC_API_KEY", "sk-ant-must-not-reach-the-child")
+        .env("CODEATLAS_TEST_SECRET", "must-not-reach-the-child")
+        .assert()
+}
+
+#[cfg(feature = "agent-cli")]
+fn record_lines(dir: &Path) -> Vec<String> {
+    fs::read_to_string(dir.join("record.txt"))
+        .expect("the stand-in CLI recorded nothing — it was never run")
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[cfg(feature = "agent-cli")]
+#[test]
+fn the_cli_backend_fills_slots_through_a_spawned_program() {
+    let repo = materialize("simple");
+    let outside = tempfile::tempdir().unwrap();
+    let spec = fake_cli(
+        outside.path(),
+        r#"{"type":"result","subtype":"success","is_error":false,
+            "structured_output":{"answers":[
+              {"key":"summary:file:src/main.ts","text":"The entry point."}
+            ]}}"#,
+        0,
+    );
+
+    scan_with_secrets(repo.path(), &spec).success();
+
+    let map = read_map(repo.path());
+    assert_schema_valid(&map);
+    let main = node(&map, "file:src/main.ts");
+    assert_eq!(main["summary"], "The entry point.");
+    assert_eq!(main["provenance"], "llm");
+}
+
+#[cfg(feature = "agent-cli")]
+#[test]
+fn the_child_gets_no_credential_no_unrelated_variable_and_no_repository() {
+    let repo = materialize("simple");
+    let outside = tempfile::tempdir().unwrap();
+    let spec = fake_cli(
+        outside.path(),
+        r#"{"type":"result","subtype":"success","is_error":false,
+            "structured_output":{"answers":[]}}"#,
+        0,
+    );
+
+    scan_with_secrets(repo.path(), &spec).success();
+    let lines = record_lines(outside.path());
+    let field = |name: &str| {
+        lines
+            .iter()
+            .find_map(|l| l.strip_prefix(name))
+            .unwrap_or_else(|| panic!("{name} missing from {lines:?}"))
+            .to_string()
+    };
+
+    // `cli:` must mean the CLI's own credential. A key that leaked through
+    // would silently bill the API instead — working, and wrong.
+    assert_eq!(field("api-key="), "<unset>");
+    // The allowlist is a list, not a filter on names that look secret.
+    assert_eq!(field("secret="), "<unset>");
+    // ...and it is not so aggressive that the CLI cannot find its own
+    // credentials, which live under HOME.
+    assert_ne!(field("home="), "<unset>");
+
+    // The structural guarantee behind "the model never receives file
+    // contents": the child runs somewhere empty, and is never pointed at the
+    // repository it is describing.
+    let cwd = field("cwd=");
+    let repo_path = repo.path().canonicalize().unwrap();
+    assert!(
+        !Path::new(&cwd).starts_with(&repo_path),
+        "the child ran inside the scanned repository: {cwd}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.contains(repo_path.to_str().unwrap())),
+        "the repository path reached the child: {lines:?}"
+    );
+}
+
+#[cfg(feature = "agent-cli")]
+#[test]
+fn the_child_is_invoked_as_a_locked_down_one_shot_completion() {
+    let repo = materialize("simple");
+    let outside = tempfile::tempdir().unwrap();
+    let spec = fake_cli(
+        outside.path(),
+        r#"{"type":"result","subtype":"success","is_error":false,
+            "structured_output":{"answers":[]}}"#,
+        0,
+    );
+
+    scan_with_secrets(repo.path(), &spec).success();
+    let args: Vec<String> = record_lines(outside.path())
+        .iter()
+        .filter_map(|l| l.strip_prefix("arg=").map(str::to_string))
+        .collect();
+
+    for flag in ["--print", "--safe-mode", "--strict-mcp-config", "--tools="] {
+        assert!(args.iter().any(|a| a == flag), "{flag} missing: {args:?}");
+    }
+    // The prompt reached the child as its own argument rather than being
+    // absorbed by a preceding variadic flag. A shell script has no argument
+    // parser, so this checks the shape the real parser would act on.
+    let fence = args.iter().position(|a| a == "--").expect("a -- fence");
+    assert_eq!(
+        fence,
+        args.len() - 2,
+        "exactly one argument follows the fence — the prompt: {args:?}"
+    );
+    assert!(
+        args[fence + 1].starts_with("Project:"),
+        "the prompt must be what follows the fence: {args:?}"
+    );
+    assert!(
+        !args.iter().any(|a| a == "--add-dir"),
+        "the child's file scope must never be widened: {args:?}"
+    );
+    assert!(
+        !args.iter().any(|a| a == "--bare"),
+        "--bare would demand the API key this backend exists to avoid: {args:?}"
+    );
+}
+
+/// Story 14 at seam 3: every way a spawned program can disappoint leaves a
+/// complete, schema-valid structural map behind.
+#[cfg(feature = "agent-cli")]
+#[test]
+fn every_way_the_child_can_fail_leaves_the_structural_map_intact() {
+    let outside = tempfile::tempdir().unwrap();
+    let cases = [
+        (
+            "not installed",
+            "cli-exec:/nonexistent/definitely-not-a-program".to_string(),
+        ),
+        (
+            "a non-zero exit",
+            fake_cli(&outside.path().join("exit"), "", 1),
+        ),
+        (
+            "output that is not JSON",
+            fake_cli(&outside.path().join("garbage"), "not json at all", 0),
+        ),
+        (
+            "an error envelope",
+            fake_cli(
+                &outside.path().join("errored"),
+                r#"{"type":"result","subtype":"error_during_execution","is_error":true,
+                    "result":"the session failed"}"#,
+                0,
+            ),
+        ),
+    ];
+
+    for (what, spec) in cases {
+        let repo = materialize("simple");
+        scan_with_secrets(repo.path(), &spec).failure();
+
+        let map = read_map(repo.path());
+        assert_schema_valid(&map);
+        node(&map, "file:src/main.ts");
+        for n in map["nodes"].as_array().unwrap() {
+            assert_eq!(
+                n["provenance"], "structural",
+                "{what}: no enrichment should have landed: {n:?}"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "agent-cli")]
+#[test]
+fn the_cli_backend_runs_claude_and_refuses_to_run_anything_else() {
+    let repo = materialize("simple");
+    let assert = scan_selecting(repo.path(), None, Some("cli:sh")).failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+
+    assert!(
+        stderr.contains("cli:claude"),
+        "must name the one CLI backend there is: {stderr}"
+    );
+    assert!(
+        stderr.contains("arbitrary program"),
+        "must say why, not merely that it is unknown: {stderr}"
+    );
+
+    // Spec story 14 again: refusing to run a program is still a clean
+    // degradation.
+    let map = read_map(repo.path());
+    assert_schema_valid(&map);
+    node(&map, "file:src/main.ts");
 }

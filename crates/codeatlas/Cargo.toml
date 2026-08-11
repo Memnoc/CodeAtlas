@@ -32,8 +32,16 @@ ureq = { version = "3.4.0", optional = true }
 # Networking is opt-out at compile time (ADR-0006): the default build ships
 # the Claude API enrichment provider, `--no-default-features` produces the
 # sealed build in which no networking code exists (ticket 15 verifies).
-default = ["network"]
+default = ["network", "agent-cli"]
 network = ["dep:ureq"]
+# The subscription-billed backend (ADR-0008): spawns the user's
+# already-authenticated `claude` CLI as a schema-constrained completion, so
+# CodeAtlas never handles a credential. Deliberately NOT part of `network`: a
+# subprocess links no HTTP client, so folding it in would make that feature's
+# name false and would hide the configuration this split exists to express —
+# `--no-default-features --features agent-cli`, an approved CLI with no HTTP
+# client in the binary at all.
+agent-cli = []
 # Compiles the offline fake/fail enrichment providers used at the provider
 # seam in tests. Enabled only for test builds through the self
 # dev-dependency below, so shipped binaries carry no test machinery.

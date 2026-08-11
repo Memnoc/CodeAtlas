@@ -35,7 +35,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{EnrichmentProvider, EnrichmentRequest, EnrichmentResponse, EnrichmentSlot};
+use super::prompt;
+use super::{EnrichmentProvider, EnrichmentRequest, EnrichmentResponse};
 
 /// The one URL this binary can ever talk to (ADR-0006). Hardcoded on
 /// purpose: no env var, flag, or config may redirect enrichment traffic —
@@ -56,16 +57,6 @@ const OAUTH_BETA: &str = "oauth-2025-04-20";
 /// one-sentence summaries — well under this even with the model's internal
 /// reasoning counted against the same cap.
 const MAX_TOKENS: u32 = 8192;
-
-const SYSTEM_PROMPT: &str = "You fill labeling slots in a code map. Each slot \
-has a kind and a key; echo each slot's key exactly as given and answer for \
-every slot. Slot kinds: 'summary' — one concise sentence describing the \
-entity's purpose, grounded in its kind, name, path, and mechanical summary; \
-'layer-name' — a short human-readable name (a few words) for the group of \
-files under the given directory; 'flow-name' — a short business-domain name \
-for the call flow described by its entry point and steps; 'tour-label' — one \
-engaging sentence narrating this stop on a guided tour of the codebase, \
-grounded in the path and its import fan-in/fan-out.";
 
 /// The Claude Messages API provider behind the [`EnrichmentProvider`]
 /// trait. Holds only the model name; credentials are resolved per call so
@@ -138,93 +129,23 @@ fn auth_headers(credentials: &Credentials) -> Vec<(&'static str, String)> {
     }
 }
 
-/// One slot as it rides the prompt: its kind, its response key, and the
-/// mechanically summarized topology that slot kind carries — nothing else
-/// (spec: bounded prompts).
-fn slot_payload(slot: &EnrichmentSlot) -> serde_json::Value {
-    let key = slot.key();
-    match slot {
-        EnrichmentSlot::NodeSummary(s) => json!({
-            "slot": "summary",
-            "key": key,
-            "kind": s.kind,
-            "name": s.name,
-            "path": s.path,
-            "mechanical_summary": s.mechanical_summary,
-        }),
-        EnrichmentSlot::LayerName(s) => json!({
-            "slot": "layer-name",
-            "key": key,
-            "directory": s.id,
-            "member_files": s.member_files,
-        }),
-        EnrichmentSlot::FlowName(s) => json!({
-            "slot": "flow-name",
-            "key": key,
-            "domain": s.domain,
-            "entry_point": s.entry,
-            "steps": s.step_names,
-            "step_count": s.step_count,
-        }),
-        EnrichmentSlot::TourLabel(s) => json!({
-            "slot": "tour-label",
-            "key": key,
-            "path": s.path,
-            "fan_in": s.fan_in,
-            "fan_out": s.fan_out,
-            "mechanical_label": s.mechanical_label,
-        }),
-    }
-}
-
 /// Builds the Messages API request body for one batch: the slots being
 /// enriched and the project name — nothing else (spec: bounded prompts).
-/// `output_config.format` carries the JSON schema the response must
-/// satisfy; a map with dynamic keys is not expressible under structured
-/// outputs (`additionalProperties` must be `false`), so answers arrive as
-/// an array of `{key, text}` objects.
+/// `output_config.format` carries [`prompt::answers_schema`], the same
+/// schema the CLI backend constrains its own response with.
 fn build_request_body(model: &str, request: &EnrichmentRequest) -> serde_json::Value {
-    let slots: Vec<serde_json::Value> = request.slots.iter().map(slot_payload).collect();
     json!({
         "model": model,
         "max_tokens": MAX_TOKENS,
-        "system": SYSTEM_PROMPT,
+        "system": prompt::SYSTEM_PROMPT,
         "messages": [{
             "role": "user",
-            "content": format!(
-                "Project: {}\n\nSlots to fill:\n{}",
-                request.project,
-                serde_json::to_string_pretty(&slots).expect("slots serialize"),
-            ),
+            "content": prompt::user_message(request),
         }],
         "output_config": {
             "format": {
                 "type": "json_schema",
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "answers": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "key": {
-                                        "type": "string",
-                                        "description": "The slot key, exactly as given",
-                                    },
-                                    "text": {
-                                        "type": "string",
-                                        "description": "The text filling the slot",
-                                    },
-                                },
-                                "required": ["key", "text"],
-                                "additionalProperties": false,
-                            },
-                        },
-                    },
-                    "required": ["answers"],
-                    "additionalProperties": false,
-                },
+                "schema": prompt::answers_schema(),
             },
         },
     })
@@ -244,19 +165,6 @@ struct ContentBlock {
     #[serde(rename = "type")]
     kind: String,
     #[serde(default)]
-    text: String,
-}
-
-/// The structured-outputs answer shape — must mirror the schema in
-/// [`build_request_body`].
-#[derive(Deserialize)]
-struct Answers {
-    answers: Vec<Answer>,
-}
-
-#[derive(Deserialize)]
-struct Answer {
-    key: String,
     text: String,
 }
 
@@ -282,15 +190,9 @@ fn parse_response(raw: &str) -> Result<EnrichmentResponse> {
         .find(|block| block.kind == "text" && !block.text.is_empty())
         .map(|block| block.text.as_str())
         .ok_or_else(|| anyhow!("the Claude API response carries no text content"))?;
-    let answers: Answers = serde_json::from_str(text)
-        .context("the structured output did not match the requested schema")?;
-    Ok(EnrichmentResponse {
-        answers: answers
-            .answers
-            .into_iter()
-            .map(|answer| (answer.key, answer.text))
-            .collect(),
-    })
+    let structured: serde_json::Value =
+        serde_json::from_str(text).context("the structured output was not JSON")?;
+    prompt::parse_answers(structured)
 }
 
 /// The single network call in the binary (ADR-0006): one blocking POST to
@@ -353,6 +255,7 @@ mod tests {
     //! HTTP call itself is the one thing these tests do not cover.
 
     use super::*;
+    use crate::enrich::EnrichmentSlot;
     use crate::map::{NodeId, NodeKind};
     use std::collections::BTreeMap;
 

@@ -49,8 +49,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::map::{EdgeKind, KnowledgeGraph, NodeId, NodeKind, Provenance};
 
+#[cfg(feature = "agent-cli")]
+pub mod agent_cli;
 #[cfg(feature = "network")]
 pub mod claude;
+/// What the model is asked and how its answer is read — shared by every
+/// backend, so `docs/SECURITY.md`'s statement of what a model receives has
+/// one place to be true rather than one per transport.
+#[cfg(any(feature = "network", feature = "agent-cli"))]
+mod prompt;
 
 /// The env var the CLI resolves its enrichment provider from.
 pub const PROVIDER_ENV: &str = "CODEATLAS_ENRICH_PROVIDER";
@@ -729,11 +736,15 @@ pub fn recognised_specs() -> Vec<&'static str> {
     let mut specs: Vec<&'static str> = Vec::new();
     #[cfg(feature = "network")]
     specs.push("claude");
+    #[cfg(feature = "agent-cli")]
+    specs.push(agent_cli::SPEC);
     #[cfg(feature = "test-provider")]
     {
         specs.push("fake:<path>");
         specs.push("fail");
     }
+    #[cfg(all(feature = "agent-cli", feature = "test-provider"))]
+    specs.push("cli-exec:<path>");
     specs
 }
 
@@ -775,20 +786,53 @@ pub fn provider_help() -> String {
     help
 }
 
+/// The specs that actually reach a model, and so the ones `--model` means
+/// anything to. The offline test backends ignore it.
+///
+/// Feature-gated exactly like [`recognised_specs`], and a function rather
+/// than a `const` for that reason: an ungated array would put the literal
+/// `cli:claude` into a binary compiled without the CLI backend, and ticket
+/// 32's sealed byte probe asserts no such string survives. Built from the
+/// same conditions as the selectable list, so the two cannot disagree.
+// `vec![]` cannot express this: which elements exist is a compile-time
+// question, and collapsing the pushes into a literal is exactly what the
+// feature gates forbid.
+#[allow(clippy::vec_init_then_push)]
+fn model_aware_specs() -> Vec<&'static str> {
+    #[allow(unused_mut)]
+    let mut specs: Vec<&'static str> = Vec::new();
+    #[cfg(feature = "network")]
+    specs.push("claude");
+    #[cfg(feature = "agent-cli")]
+    specs.push(agent_cli::SPEC);
+    specs
+}
+
 /// `--model`'s help text. Build-aware for the same reason as
-/// [`provider_help`]: where the Claude provider was not compiled in, this
-/// flag modifies something absent, and a flag whose help describes a thing
-/// that is not there is worse than one that says so.
+/// [`provider_help`]: where no backend that reads a model was compiled in,
+/// this flag modifies nothing, and a flag whose help describes a thing that
+/// is not there is worse than one that says so.
+///
+/// Derived from [`recognised_specs`] rather than from a feature name. An
+/// earlier version keyed on the Claude API backend alone and told an
+/// `agent-cli`-without-`network` build that the flag had nothing to modify,
+/// while the CLI backend was honouring it.
 pub fn model_help() -> String {
-    if recognised_specs().contains(&"claude") {
-        return "Model for the Claude enrichment provider (default: \
-                claude-opus-5). Ignored by every other backend."
-            .to_string();
+    let honoured = model_aware_specs();
+    if honoured.is_empty() {
+        return format!(
+            "Model for an enrichment backend. This build compiled none in, so \
+             this flag has nothing to modify. {}",
+            recognised_sentence()
+        );
     }
+    // No backend is named outside the honoured list. Prose mentioning the
+    // Claude API's default would appear in a build that has no Claude API
+    // backend — the same falsehood this function exists to avoid.
     format!(
-        "Model for the Claude enrichment provider, which this build did not \
-         compile in — so this flag has nothing to modify. {}",
-        recognised_sentence()
+        "Model for the enrichment backend. Honoured by: {}. A backend with a \
+         default of its own keeps it unless this is given.",
+        honoured.join(", ")
     )
 }
 
@@ -821,7 +865,7 @@ fn provider_from_spec(
     spec: Option<&str>,
     model: Option<&str>,
 ) -> Result<Box<dyn EnrichmentProvider>> {
-    #[cfg(not(feature = "network"))]
+    #[cfg(not(any(feature = "network", feature = "agent-cli")))]
     let _ = model;
     match spec {
         #[cfg(feature = "test-provider")]
@@ -832,25 +876,53 @@ fn provider_from_spec(
         Some("fail") => Ok(Box::new(test_provider::FailingProvider)),
         #[cfg(feature = "network")]
         Some("claude") => Ok(Box::new(claude::ClaudeProvider::new(model))),
+        #[cfg(feature = "agent-cli")]
+        Some(spec) if spec == agent_cli::SPEC => Ok(Box::new(agent_cli::CliProvider::new(model))),
+        // Seam 3's injection point: a stand-in executable so the spawn can be
+        // asserted without running the real CLI. Gated exactly as the `fake:`
+        // and `fail` backends are, so no shipped binary can run an arbitrary
+        // program.
+        #[cfg(all(feature = "agent-cli", feature = "test-provider"))]
+        Some(spec) if spec.starts_with("cli-exec:") => Ok(Box::new(
+            agent_cli::CliProvider::with_program(&spec["cli-exec:".len()..], model),
+        )),
+        // A `cli:` spec naming anything else is refused by name rather than
+        // falling into the generic message, because the reason is specific
+        // and worth saying: this is not a general "run that program" hatch
+        // (ADR-0008).
+        //
+        // Gated on the feature, so a build without the CLI backend carries
+        // neither this message nor the `cli:claude` literal in it — and falls
+        // through to the ordinary unknown-spec error, which is the truthful
+        // answer there. The literal matters: ticket 32's sealed byte probe
+        // asserts no `claude` program string survives into that binary.
+        #[cfg(feature = "agent-cli")]
+        Some(other) if other.starts_with("cli:") => Err(anyhow!(
+            "unsupported enrichment provider {other:?}: the only CLI backend \
+             is `{}`. CodeAtlas does not run an arbitrary program on request. \
+             The structural map was written without enrichment",
+            agent_cli::SPEC
+        )),
         Some(other) => Err(unknown_provider(other)),
         None => default_provider(model),
     }
 }
 
-/// The provider used when [`PROVIDER_ENV`] is unset.
+/// The provider used when neither `--provider` nor [`PROVIDER_ENV`] names
+/// one. Every configuration is spelled out because getting one wrong is
+/// invisible until someone runs that build:
 ///
-/// - **Shipped `network` build** — the Claude API provider (ADR-0004): the
-///   one real backend is the default, no configuration needed.
-/// - **Test build (`test-provider`)** — no default: tests must select a
-///   backend explicitly, so no test can ever fall through to a provider
-///   that opens sockets (the no-network-in-tests rule).
-/// - **Sealed build (`--no-default-features`)** — no networking code exists
-///   (ADR-0006); enrichment is simply not available.
+/// - **Test build (`test-provider`)** — no default, whatever else is
+///   compiled in. Tests must select a backend explicitly, so none can fall
+///   through to one that opens a socket or spawns a process.
+/// - **`network`** — the Claude API provider (ADR-0004).
+/// - **`agent-cli` without `network`** — the CLI provider (ADR-0008). A
+///   binary with exactly one backend defaults to it; anything else would
+///   mean shipping a build whose only backend must be named by hand.
+/// - **Neither** — the sealed build (ADR-0006): enrichment is unavailable,
+///   and the message says so without naming a feature, because which
+///   feature is missing depends on the build.
 fn default_provider(model: Option<&str>) -> Result<Box<dyn EnrichmentProvider>> {
-    #[cfg(all(feature = "network", not(feature = "test-provider")))]
-    {
-        Ok(Box::new(claude::ClaudeProvider::new(model)))
-    }
     #[cfg(feature = "test-provider")]
     {
         let _ = model;
@@ -860,13 +932,25 @@ fn default_provider(model: Option<&str>) -> Result<Box<dyn EnrichmentProvider>> 
              was written without enrichment"
         ))
     }
-    #[cfg(not(any(feature = "network", feature = "test-provider")))]
+    #[cfg(all(feature = "network", not(feature = "test-provider")))]
+    {
+        Ok(Box::new(claude::ClaudeProvider::new(model)))
+    }
+    #[cfg(all(
+        feature = "agent-cli",
+        not(feature = "network"),
+        not(feature = "test-provider")
+    ))]
+    {
+        Ok(Box::new(agent_cli::CliProvider::new(model)))
+    }
+    #[cfg(not(any(feature = "network", feature = "agent-cli", feature = "test-provider")))]
     {
         let _ = model;
         Err(anyhow!(
-            "enrichment is not available in this build: it was compiled without \
-             the `network` feature (ADR-0006 sealed build), so no LLM backend \
-             exists; the structural map was written without enrichment"
+            "enrichment is not available in this build: it was compiled with \
+             no enrichment backend at all (ADR-0006 sealed build); the \
+             structural map was written without enrichment"
         ))
     }
 }
@@ -936,17 +1020,26 @@ mod tests {
         );
     }
 
-    /// The list a reader is offered names the Claude backend exactly when the
-    /// build has it. Asserted on the rendered sentence rather than on
-    /// [`recognised_specs`] alone, because a rendering that silently dropped
-    /// the list would leave that test green.
+    /// The list a reader is offered is exactly the list the build can select.
+    ///
+    /// Parsed back out of the sentence rather than substring-matched. An
+    /// earlier version asked whether the sentence contained `"claude"`, which
+    /// was equivalent while the API backend was the only spec with that word
+    /// in it — and became wrong the moment `cli:claude` existed. The
+    /// `--no-default-features --features agent-cli` configuration caught it
+    /// on its first run, which is the whole argument for that configuration
+    /// existing.
     #[test]
-    fn the_offered_list_names_claude_exactly_when_it_is_compiled_in() {
+    fn the_offered_list_is_exactly_what_this_build_can_select() {
+        let sentence = recognised_sentence();
+        let offered: Vec<&str> = match sentence.split_once("recognises: ") {
+            Some((_, list)) => list.trim_end_matches('.').split(", ").collect(),
+            None => Vec::new(),
+        };
         assert_eq!(
-            recognised_sentence().contains("claude"),
-            cfg!(feature = "network"),
-            "the offered list must match the build: {}",
-            recognised_sentence()
+            offered,
+            recognised_specs(),
+            "the rendered list must be the selectable list: {sentence}"
         );
     }
 
@@ -969,16 +1062,41 @@ mod tests {
         );
     }
 
-    /// `--model` modifies the Claude provider and nothing else, so where that
-    /// provider was not compiled in the flag has to say so rather than
-    /// describing itself as though it worked.
+    /// `--model` means something only to a backend that reaches a model, so
+    /// where none was compiled in the flag has to say so rather than
+    /// describing itself as though it worked — and where one *was*, it must
+    /// not claim otherwise.
+    ///
+    /// Keyed on both backends, not on `network` alone. The first version of
+    /// this asked only about the API backend and told an
+    /// `agent-cli`-without-`network` build that the flag had nothing to
+    /// modify while the CLI backend was honouring it.
     #[test]
-    fn model_help_admits_when_the_claude_provider_is_absent() {
+    fn model_help_admits_only_a_genuinely_absent_backend() {
+        let none_compiled_in = !cfg!(feature = "network") && !cfg!(feature = "agent-cli");
         assert_eq!(
-            model_help().contains("did not compile in"),
-            !cfg!(feature = "network"),
-            "--model must admit an absent provider, and only then: {}",
+            model_help().contains("compiled none in"),
+            none_compiled_in,
+            "--model must admit an absent backend, and only then: {}",
             model_help()
+        );
+        // Parsed out of the honoured list rather than substring-matched
+        // against the whole text: `claude` is a substring of `cli:claude`,
+        // and prose about one backend would otherwise read as a claim about
+        // the other.
+        let help = model_help();
+        let honoured: Vec<&str> = match help.split_once("Honoured by: ") {
+            Some((_, rest)) => rest
+                .split_once(". ")
+                .map_or(rest, |(list, _)| list)
+                .split(", ")
+                .collect(),
+            None => Vec::new(),
+        };
+        assert_eq!(
+            honoured,
+            model_aware_specs(),
+            "--model must name exactly the backends that read it: {help}"
         );
     }
 

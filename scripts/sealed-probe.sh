@@ -55,10 +55,14 @@ out="$("$sealed" scan --enrich "$tmp/repo" 2>&1)"
 code=$?
 set -e
 [ "$code" -ne 0 ] || fail "sealed 'scan --enrich' succeeded; it must refuse"
-echo "$out" | grep -q 'compiled without' \
+# The message says the build has no enrichment backend, rather than naming
+# one missing feature. Since ADR-0008 there are two features a build can lack
+# and two it can have, so "compiled without the network feature" would be the
+# wrong reason as often as the right one.
+echo "$out" | grep -q 'no enrichment backend' \
   || fail "sealed --enrich error does not explain the build: $out"
-echo "$out" | grep -q 'network' \
-  || fail "sealed --enrich error does not name the missing feature: $out"
+echo "$out" | grep -q 'ADR-0006' \
+  || fail "sealed --enrich error does not cite the decision behind it: $out"
 [ -f "$tmp/repo/.codeatlas/knowledge-graph.json" ] \
   || fail "sealed --enrich left no structural map behind"
 echo "ok: sealed --enrich refuses with the sealed message and the map survives"
