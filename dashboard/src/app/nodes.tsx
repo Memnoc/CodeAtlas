@@ -4,7 +4,7 @@ import type { EntityFlowNode, RegionFlowNode } from "./graph.js";
 /** One region card on the overview: coloured spine, the complexity word, the
  * name, the mechanical description, and the file count. */
 export function RegionNode({ data, selected }: NodeProps<RegionFlowNode>) {
-  const { region, colorIndex } = data;
+  const { region, colorIndex, caption } = data;
   const fileCount = region.files.length;
   return (
     <div
@@ -24,6 +24,9 @@ export function RegionNode({ data, selected }: NodeProps<RegionFlowNode>) {
       </div>
       <span className="region-name">{region.name}</span>
       <span className="region-description">{region.description}</span>
+      {caption !== undefined && (
+        <span className="region-caption">{caption}</span>
+      )}
       <span className="region-count">
         {fileCount} {fileCount === 1 ? "file" : "files"}
       </span>
@@ -34,7 +37,7 @@ export function RegionNode({ data, selected }: NodeProps<RegionFlowNode>) {
 
 /** One file inside a drilled-into region. */
 export function EntityNode({ data }: NodeProps<EntityFlowNode>) {
-  const { node, highlight, onPath, neighbour, dim } = data;
+  const { node, caption, highlight, onPath, neighbour, dim } = data;
   const classes = [
     "entity",
     `entity-${node.kind}`,
@@ -50,6 +53,9 @@ export function EntityNode({ data }: NodeProps<EntityFlowNode>) {
       <Handle type="target" position={Position.Top} />
       <span className="entity-kind">{node.kind}</span>
       <span className="entity-name">{node.name}</span>
+      {caption !== undefined && (
+        <span className="entity-caption">{caption}</span>
+      )}
       <Handle type="source" position={Position.Bottom} />
     </div>
   );

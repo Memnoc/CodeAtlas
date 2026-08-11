@@ -479,9 +479,13 @@ body {
 
 /* ── Workspace ────────────────────────────────────────────────────────── */
 
+/* Panel on the left, canvas filling the rest. The panel is where a reader
+ * starts — the tour, the rankings, the detail of whatever they just clicked —
+ * and a left-to-right reader starts at the left. The DOM is in the same order,
+ * so tabbing follows the eye. */
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: 360px minmax(0, 1fr);
   min-height: 0;
 }
 
@@ -659,6 +663,39 @@ button.crumb:hover {
   color: var(--muted);
 }
 
+/* The caption a label preset puts under a card's name. Two lines at most and
+ * clipped there: a card is a label on a picture, and one that grows to fit
+ * its own prose stops being the same size as its neighbours, which is the
+ * one thing the layout below it relies on. */
+.entity-caption,
+.region-caption {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.region-caption {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  font-style: italic;
+}
+
+/* A named edge only ever appears on the edges under the reader's question,
+ * so it can afford to be legible rather than apologetic. */
+.react-flow__edge.edge-lit .react-flow__edge-text {
+  fill: var(--text);
+  font-size: 10px;
+}
+
+.react-flow__edge.edge-lit .react-flow__edge-textbg {
+  fill: var(--panel);
+}
+
 .entity-name {
   font-size: 13px;
   overflow: hidden;
@@ -742,7 +779,7 @@ button.crumb:hover {
   overflow-y: auto;
   padding: 0 16px 24px;
   background: var(--panel);
-  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
 }
 
 .tabs {
@@ -1458,4 +1495,40 @@ button.crumb:hover {
   border-radius: 8px;
   overflow: hidden;
   box-shadow: none;
+}
+
+/* ── The plain-words account of a node ────────────────────────────────── */
+
+/* Shown in the tour and in the detail panel: what a file holds, what reaches
+ * it, what it reaches. Set as prose, not as a stat block — the whole reason
+ * it exists is that "fan-in 0, fan-out 8" is a sentence a reader has to
+ * translate before they can use it. */
+.narrative {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--border);
+  background: var(--bg);
+  border-radius: 0 6px 6px 0;
+}
+
+.narrative p {
+  margin: 0 0 6px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.narrative p:last-child {
+  margin-bottom: 0;
+}
+
+/* The one place the dashboard admits what it cannot know from structure. */
+.narrative-hint {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.narrative-hint code,
+.narrative code {
+  font-size: 11px;
 }

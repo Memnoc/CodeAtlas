@@ -14,6 +14,13 @@ import {
   projectCounts,
 } from "../src/app/insights.js";
 import { fileFlow, regionFlow } from "../src/app/graph.js";
+import {
+  captionOf,
+  edgeLabelOf,
+  enrichmentHint,
+  narrativeOf,
+  regionCaptionOf,
+} from "../src/app/labels.js";
 import { shortestPath } from "../src/app/paths.js";
 import {
   complexityOf,
@@ -479,6 +486,44 @@ describe("the region drill-in layout", () => {
     expect(rows.size).toBeLessThan(files.length);
   });
 
+  it("never overlaps at a taller card height either", () => {
+    // A label preset makes cards taller to fit a caption. If the layout kept
+    // banding on the default height, every layer would be drawn through the
+    // one below it — the caption feature breaking the layout silently.
+    // Enough standalone files to wrap onto a second parked row, which is the
+    // tightest pitch in the layout, and a height taller than the gap between
+    // layers so the banding has to account for it too.
+    const loose = Array.from({ length: 11 }, (_, i) => `loose${i}.ts`);
+    const map = repo(
+      ["a.ts", "b.ts", "c.ts", ...loose],
+      [
+        ["a.ts", "b.ts"],
+        ["b.ts", "c.ts"],
+      ],
+    );
+    const region = structuralRegions(map)[0];
+    if (region === undefined) {
+      throw new Error("fixture has no region");
+    }
+
+    for (const height of [58, 92, 200]) {
+      const { nodes } = fileFlow(map, region, height);
+      for (const one of nodes) {
+        for (const two of nodes) {
+          if (one.id >= two.id) {
+            continue;
+          }
+          const apart =
+            Math.abs(one.position.x - two.position.x) >= (one.width ?? 0) ||
+            Math.abs(one.position.y - two.position.y) >= height;
+          expect(apart, `${one.id} and ${two.id} overlap at ${height}px`).toBe(
+            true,
+          );
+        }
+      }
+    }
+  });
+
   it("never draws two file cards on top of each other", () => {
     const { nodes } = drawn(
       repo(
@@ -525,6 +570,114 @@ describe("the region drill-in layout", () => {
 
     // A loop from a card back to itself is a scribble, not information.
     expect(edges).toEqual([]);
+  });
+});
+
+describe("card captions and named edges", () => {
+  const file = (name: string) =>
+    tour.nodes.find((n) => n.kind === "file" && n.name === name)!;
+
+  it("gives a file card the map's own summary of it", () => {
+    // Not a second opinion computed here: whatever the map says, including
+    // the prose enrichment puts there, so the caption improves with the map.
+    const node = file("main.ts");
+    expect(captionOf(node)).toBe(node.summary);
+    expect(captionOf({ ...node, summary: "" })).toBeNull();
+  });
+
+  it("reads a region by how the other regions lean on it", () => {
+    const regions = structuralRegions(tour);
+    const links = regionLinks(tour, regions);
+    const byId = new Map(regions.map((r) => [r.id, r]));
+    // cli imports src and nothing imports cli.
+    expect(regionCaptionOf(byId.get("src")!, links)).toMatch(/foundation/i);
+    expect(regionCaptionOf(byId.get("cli")!, links)).toMatch(/way in/i);
+    // A region nothing links to either way says so, rather than saying zero.
+    expect(regionCaptionOf(byId.get("src")!, [])).toBe("Keeps to itself");
+  });
+
+  it("agrees a region caption's verb with its count", () => {
+    // "1 region lean on it" reads as a bug in the map rather than the prose.
+    const region = structuralRegions(tour)[0]!;
+    const link = (source: string) => ({
+      source,
+      target: region.id,
+      count: 1,
+      label: "1 import",
+    });
+    expect(regionCaptionOf(region, [link("a")])).toContain("1 region leans on");
+    expect(regionCaptionOf(region, [link("a"), link("b")])).toContain(
+      "2 regions lean on",
+    );
+  });
+
+  it("names a focused edge by direction, so the arrow needs no decoding", () => {
+    expect(edgeLabelOf(true)).toBe("uses");
+    expect(edgeLabelOf(false)).toBe("used by");
+  });
+});
+
+describe("the plain-words account of a node", () => {
+  const byId = new Map(tour.nodes.map((n) => [n.id, n]));
+  const say = (id: string) =>
+    narrativeOf(tour, byId.get(id)!, byId).join(" ");
+
+  it("names what a file holds, rather than counting it", () => {
+    // A name is something a reader can go and look at; a number is something
+    // they have to go and find out.
+    const said = say("file:src/util.ts");
+    expect(said).toMatch(/holds \d+ definitions?:/i);
+    expect(said).toContain("greet");
+  });
+
+  it("names who reaches it and what it reaches, in both directions", () => {
+    const said = say("file:src/main.ts");
+    expect(said).toMatch(/reached by|way in/i);
+    expect(said).toMatch(/it reaches/i);
+  });
+
+  it("says a way in is a way in, instead of leaving the reader to infer it", () => {
+    // This is the sentence that replaces "Entry point — fan-in 0, fan-out 8".
+    expect(say("file:cli/run.ts")).toMatch(/nothing in this map reaches it/i);
+  });
+
+  it("caps the names it lists and counts the rest", () => {
+    const many: KnowledgeGraph = {
+      ...tour,
+      edges: [
+        ...tour.edges,
+        ...["a", "b", "c", "d", "e"].map((n) => ({
+          source: `file:${n}.ts`,
+          target: "file:src/util.ts",
+          kind: "imports" as const,
+          weight: 1,
+        })),
+      ],
+      nodes: [
+        ...tour.nodes,
+        ...["a", "b", "c", "d", "e"].map((n) => ({
+          id: `file:${n}.ts`,
+          kind: "file" as const,
+          name: `${n}.ts`,
+          path: `${n}.ts`,
+          summary: "",
+          provenance: "structural" as const,
+        })),
+      ],
+    };
+    const wide = new Map(many.nodes.map((n) => [n.id, n]));
+    const said = narrativeOf(many, wide.get("file:src/util.ts")!, wide).join(" ");
+    expect(said).toMatch(/and \d+ more/);
+    // One conjunction per list: "a, b and c, and 4 more" trips the reader.
+    expect(said).not.toMatch(/\w and \w[^,]*, and \d+ more/);
+  });
+
+  it("offers enrichment only where the prose is still mechanical", () => {
+    const node = byId.get("file:src/main.ts")!;
+    expect(enrichmentHint({ ...node, provenance: "structural" })).toContain(
+      "--enrich",
+    );
+    expect(enrichmentHint({ ...node, provenance: "llm" })).toBeNull();
   });
 });
 

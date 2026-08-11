@@ -15,6 +15,8 @@ import type { Region, RegionLink } from "./regions.js";
 
 export type EntityData = {
   node: MapNode;
+  /** Caption under the name, when the label preset asks for one. */
+  caption?: string;
   /** Diff-overlay highlight, set only while the overlay toggle is on. */
   highlight?: "changed" | "affected";
   /** Set while this node is a step of the path the Path control found. */
@@ -28,6 +30,8 @@ export type RegionData = {
   region: Region;
   /** Which of the six accents this region is drawn in. */
   colorIndex: number;
+  /** Caption under the description, when the label preset asks for one. */
+  caption?: string;
 };
 
 export type EntityFlowNode = FlowNode<EntityData, "entity">;
@@ -54,6 +58,13 @@ const STANDALONE_COLS = 8;
 
 /** A dependency, reduced to its endpoints — all the layout ever needs. */
 type Link = { source: string; target: string };
+
+/** A caption field that is absent when there is none: under
+ * `exactOptionalPropertyTypes` an explicit `undefined` is not the same as an
+ * omitted optional field. */
+function caption(text: string | null | undefined): { caption?: string } {
+  return text === null || text === undefined ? {} : { caption: text };
+}
 
 /** Appends to the list under `key`, starting one if this is the first. */
 function push(index: Map<string, string[]>, key: string, value: string): void {
@@ -96,6 +107,7 @@ function handles(width: number, height: number) {
 export function regionFlow(
   regions: readonly Region[],
   links: readonly RegionLink[],
+  captionOf?: (region: Region) => string | null,
 ): { nodes: AppFlowNode[]; edges: FlowEdge[] } {
   const depths = dependencyDepths(
     regions.map((r) => r.id),
@@ -132,7 +144,11 @@ export function regionFlow(
         width: REGION_WIDTH,
         height: REGION_HEIGHT,
         handles: handles(REGION_WIDTH, REGION_HEIGHT),
-        data: { region, colorIndex: colorIndex.get(region.id) ?? 0 },
+        data: {
+          region,
+          colorIndex: colorIndex.get(region.id) ?? 0,
+          ...caption(captionOf?.(region)),
+        },
       });
     });
     row0 += Math.max(1, Math.ceil(band.length / REGION_COLS));
@@ -408,6 +424,10 @@ const TRANSPOSE_ROUNDS = 4;
 export function fileFlow(
   map: KnowledgeGraph,
   region: Region,
+  /** Card height, which the label preset decides: a caption needs room, and
+   * a card that clips it is worse than a card without one. */
+  cardHeight: number = NODE_HEIGHT,
+  captionOf?: (node: MapNode) => string | null,
 ): { nodes: AppFlowNode[]; edges: FlowEdge[] } {
   const inside = new Set(region.files.map((f) => f.id));
   const links = map.edges.filter(
@@ -444,17 +464,17 @@ export function fileFlow(
       // feeding it instead of off at one end with its links stretched across.
       at.set(id, {
         x: (i - (layer.length - 1) / 2 + (span - 1) / 2) * pitch,
-        y: depth * (NODE_HEIGHT + LAYER_GAP),
+        y: depth * (cardHeight + LAYER_GAP),
       });
     });
   });
 
   const below =
-    layers.length === 0 ? 0 : layers.length * (NODE_HEIGHT + LAYER_GAP) + LAYER_GAP;
+    layers.length === 0 ? 0 : layers.length * (cardHeight + LAYER_GAP) + LAYER_GAP;
   standalone.forEach((file, i) => {
     at.set(file.id, {
       x: ((i % cols) + (span - cols) / 2) * pitch,
-      y: below + Math.floor(i / cols) * (NODE_HEIGHT + GAP),
+      y: below + Math.floor(i / cols) * (cardHeight + GAP),
     });
   });
 
@@ -463,9 +483,9 @@ export function fileFlow(
     type: "entity",
     position: at.get(node.id) ?? { x: 0, y: 0 },
     width: NODE_WIDTH,
-    height: NODE_HEIGHT,
-    handles: handles(NODE_WIDTH, NODE_HEIGHT),
-    data: { node },
+    height: cardHeight,
+    handles: handles(NODE_WIDTH, cardHeight),
+    data: { node, ...caption(captionOf?.(node)) },
   }));
 
   // No label. Every edge on this canvas is an import, and eighty-five

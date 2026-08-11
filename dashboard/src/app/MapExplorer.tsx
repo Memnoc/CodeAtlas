@@ -28,6 +28,14 @@ import {
   searchNodes,
 } from "./graph.js";
 import { Header, type Mode } from "./Header.js";
+import {
+  CARD_HEIGHT,
+  captionOf,
+  edgeLabelOf,
+  enrichmentHint,
+  narrativeOf,
+  regionCaptionOf,
+} from "./labels.js";
 import { InfoPanel } from "./InfoPanel.js";
 import { nodeTypes } from "./nodes.js";
 import type { DiffOverlay } from "./overlay.js";
@@ -40,7 +48,7 @@ import {
   type RegionKind,
 } from "./regions.js";
 import { shortestPath } from "./paths.js";
-import { TourPanel } from "./TourPanel.js";
+import { Narrative, TourPanel } from "./TourPanel.js";
 import "@xyflow/react/dist/style.css";
 import "./styles.css";
 
@@ -146,8 +154,8 @@ export function MapExplorer({
   const flow = useMemo(
     () =>
       openRegion === null
-        ? regionFlow(regions, links)
-        : fileFlow(map, openRegion),
+        ? regionFlow(regions, links, (region) => regionCaptionOf(region, links))
+        : fileFlow(map, openRegion, CARD_HEIGHT, captionOf),
     [map, openRegion, regions, links],
   );
 
@@ -239,9 +247,13 @@ export function MapExplorer({
     for (const edge of flow.edges) {
       const touches =
         edge.source === selectedFileId || edge.target === selectedFileId;
+      const phrase = touches
+        ? edgeLabelOf(edge.source === selectedFileId)
+        : null;
       (touches ? lit : rest).push({
         ...edge,
         className: touches ? "edge-lit" : "edge-dim",
+        ...(phrase === null ? {} : { label: phrase }),
         // Direction is worth ink only on the edges being read: an arrowhead
         // on all eighty-five is more of exactly what makes this unreadable.
         ...(touches
@@ -286,6 +298,7 @@ export function MapExplorer({
         ...node,
         selected: node.id === selectedFileId,
         data: {
+          ...node.data,
           node: node.data.node,
           ...(highlight === undefined ? {} : { highlight }),
           ...(pathIds.has(node.id) ? { onPath: true } : {}),
@@ -387,6 +400,62 @@ export function MapExplorer({
       </div>
 
       <div className="workspace">
+
+        <aside className="rightpanel">
+          <div className="tabs" role="tablist" aria-label="Detail">
+            {(["info", "files"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                aria-selected={tab === t}
+                className={`tab${tab === t ? " tab-on" : ""}`}
+                onClick={() => setTab(t)}
+              >
+                {t === "info" ? "Info" : "Files"}
+              </button>
+            ))}
+          </div>
+
+          {pathOpen && (
+            <PathFinder
+              map={map}
+              from={pathFrom}
+              to={pathTo}
+              onPick={(end, node) =>
+                end === "from" ? setPathFrom(node) : setPathTo(node)
+              }
+              onSelectNode={reveal}
+            />
+          )}
+
+          {selected && (
+            <DetailPanel map={map} node={selected} onSelect={reveal} />
+          )}
+
+          {/* The two header switches each do one job, and this is where that
+              shows: Overview | Learn chooses what the panel is *for* —
+              the facts, or the guided read through them — while
+              Domain | Structural only changes how the canvas groups files,
+              which the Info panel then describes either way. */}
+          {tab === "files" ? (
+            <FilesPanel map={map} regions={regions} onSelectNode={reveal} />
+          ) : mode === "learn" ? (
+            <>
+              <TourPanel map={map} onSelect={reveal} />
+              <FlowsPanel map={map} onSelect={reveal} />
+            </>
+          ) : (
+            <InfoPanel
+              map={map}
+              regions={regions}
+              links={links}
+              onSelectNode={reveal}
+              onOpenRegion={setOpenRegionId}
+            />
+          )}
+        </aside>
+
         <main className="canvas">
           <nav className="breadcrumb" aria-label="Canvas scope">
             <button
@@ -443,61 +512,6 @@ export function MapExplorer({
             <MiniMap pannable zoomable ariaLabel="Canvas minimap" />
           </ReactFlow>
         </main>
-
-        <aside className="rightpanel">
-          <div className="tabs" role="tablist" aria-label="Detail">
-            {(["info", "files"] as const).map((t) => (
-              <button
-                key={t}
-                type="button"
-                role="tab"
-                aria-selected={tab === t}
-                className={`tab${tab === t ? " tab-on" : ""}`}
-                onClick={() => setTab(t)}
-              >
-                {t === "info" ? "Info" : "Files"}
-              </button>
-            ))}
-          </div>
-
-          {pathOpen && (
-            <PathFinder
-              map={map}
-              from={pathFrom}
-              to={pathTo}
-              onPick={(end, node) =>
-                end === "from" ? setPathFrom(node) : setPathTo(node)
-              }
-              onSelectNode={reveal}
-            />
-          )}
-
-          {selected && (
-            <DetailPanel map={map} node={selected} onSelect={reveal} />
-          )}
-
-          {/* The two header switches each do one job, and this is where that
-              shows: Overview | Learn chooses what the panel is *for* —
-              the facts, or the guided read through them — while
-              Domain | Structural only changes how the canvas groups files,
-              which the Info panel then describes either way. */}
-          {tab === "files" ? (
-            <FilesPanel map={map} regions={regions} onSelectNode={reveal} />
-          ) : mode === "learn" ? (
-            <>
-              <TourPanel map={map} onSelect={reveal} />
-              <FlowsPanel map={map} onSelect={reveal} />
-            </>
-          ) : (
-            <InfoPanel
-              map={map}
-              regions={regions}
-              links={links}
-              onSelectNode={reveal}
-              onOpenRegion={setOpenRegionId}
-            />
-          )}
-        </aside>
       </div>
     </div>
   );
@@ -531,6 +545,9 @@ function DetailPanel({
         </p>
       )}
       <p className="detail-summary">{node.summary}</p>
+      {/* What the summary cannot say without enrichment: where this sits and
+          what it touches, in sentences rather than a fan-in/fan-out pair. */}
+      <Narrative map={map} node={node} />
       <h3>Edges</h3>
       {touching.length === 0 ? (
         <p className="no-edges">No edges</p>

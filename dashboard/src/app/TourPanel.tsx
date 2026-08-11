@@ -4,8 +4,9 @@
 // this panel only renders that decision and moves the canvas selection along
 // with it.
 import { useMemo, useState } from "react";
-import type { KnowledgeGraph } from "../index.js";
+import type { KnowledgeGraph, Node as MapNode } from "../index.js";
 import { nodesById } from "./graph.js";
+import { enrichmentHint, narrativeOf } from "./labels.js";
 import { ProvenanceBadge } from "./ProvenanceBadge.js";
 
 export function TourPanel({
@@ -16,6 +17,7 @@ export function TourPanel({
   /** Selects a node on the canvas — the tour's whole effect. */
   onSelect: (id: string) => void;
 }) {
+  const byId = useMemo(() => nodesById(map), [map]);
   // A step naming a node this map does not contain cannot be pointed at, so
   // it is not part of the walk. `tour` is optional in the contract.
   const steps = useMemo(() => {
@@ -61,6 +63,11 @@ export function TourPanel({
       <p className="tour-label">
         {current.label} <ProvenanceBadge provenance={current.provenance} />
       </p>
+      {/* The label is the CLI's one-line reason for the stop. On its own it
+          is a topology fact — "Entry point … fan-in 0, fan-out 8" — which is
+          the right fact said in the wrong language, so the walk also gets the
+          plain-words account of the file it is standing on. */}
+      <Narrative map={map} node={byId.get(current.node)} />
       <div className="tour-controls">
         <button
           type="button"
@@ -78,5 +85,28 @@ export function TourPanel({
         </button>
       </div>
     </section>
+  );
+}
+
+/** The plain-words account of a node, wherever a reader is looking at one. */
+export function Narrative({
+  map,
+  node,
+}: {
+  map: KnowledgeGraph;
+  node: MapNode | undefined;
+}) {
+  const byId = useMemo(() => nodesById(map), [map]);
+  if (node === undefined) {
+    return null;
+  }
+  const hint = enrichmentHint(node);
+  return (
+    <div className="narrative">
+      {narrativeOf(map, node, byId).map((line) => (
+        <p key={line}>{line}</p>
+      ))}
+      {hint !== null && <p className="narrative-hint">{hint}</p>}
+    </div>
   );
 }
