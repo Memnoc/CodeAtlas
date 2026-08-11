@@ -1,11 +1,11 @@
 # Ticket 27 — ask the codebase a question from the search bar
 
-**Status:** ready
+**Status:** blocked
 **Spec:** docs/specs/2026-08-09-codeatlas-v1.md
 **Story:** 21 — ask the map a question in my own words and be shown which
-nodes answer it
+nodes answer it (**the dashboard half**; ticket 34 is the binary half)
 **Blocks:** none
-**Blocked by:** none — ADR-0009 and story 21 both landed 2026-08-11
+**Blocked by:** 34 — `serve --ask` and `POST /api/ask`
 **Scope:** V1 — decided 2026-08-11, against a recommendation to defer it
 
 ## Problem
@@ -18,6 +18,56 @@ The appeal is obvious: the map already holds the structure and, once
 enriched, the prose. A reader who does not know the codebase does not know
 what to search *for*, which is precisely when a name-matching search is least
 useful.
+
+## Scope: the dashboard half only
+
+**Split 2026-08-11 during `/to-tickets`.** As originally filed this ticket
+covered the route, the flag, the retrieval, the bounding, the UI, share-mode
+absence and the sealed refusal — more than one session, and split at the
+boundary the spec's own seams already draw. Ticket 34 delivers everything
+below HTTP and is verifiable with `curl` alone; this ticket is the interface
+on top of it.
+
+## What to build
+
+The search bar takes a question as well as a name. The answer appears with the
+nodes it cites, and clicking one selects it on the canvas — so an answer is a
+way into the map rather than a wall of prose beside it.
+
+## Acceptance criteria
+
+- [ ] The search bar accepts a question and shows the answer, without losing
+      the name-matching search it already does — a reader typing a filename
+      must still get the filename.
+- [ ] Cited nodes are rendered as controls that select the node on the canvas,
+      so the answer is navigable.
+- [ ] A citation naming a node absent from the map degrades visibly rather
+      than rendering a control that does nothing.
+- [ ] While an answer is in flight the UI says so, and a failed request says
+      what failed without discarding the question the reader typed.
+- [ ] The feature is **absent in a share artifact**, which has no server —
+      driven through `<App/>` with an embedded payload, the way ticket 28's
+      share-mode assertions are.
+- [ ] Absent when the served map's binary was started without `--ask`, without
+      the dashboard needing to be rebuilt to notice.
+- [ ] `Escape` closes the answer through the explorer's one cascade, not a
+      second handler — see ticket 22, where a split Escape left a dead zone.
+- [ ] Driven by real user events in the dashboard suite, with the route
+      stubbed at the fetch boundary; no test performs real network I/O.
+
+## Notes
+
+**The Escape criterion is not boilerplate.** `MapExplorer` owns one
+document-level cascade — search overlay, share/export menu, path panel, one
+step back — because ticket 22 shipped a version where Escape lived in two
+places and tabbing once put focus where neither listened. A third handler in a
+third component is how that hole reopens. Add a layer to the cascade.
+
+**How the dashboard learns whether `--ask` is on** is unsettled and worth
+deciding early rather than discovering: the map payload does not carry server
+capabilities today, and probing the route to find out is a request made to
+answer a question nobody asked. Ticket 34 may be the better place to expose
+it.
 
 ## How it was unblocked
 
@@ -47,7 +97,7 @@ credential paths (API key, and the `cli:claude` provider of ADR-0008) work
 here without a second integration. The section below is kept as the record of
 why this was filed blocked.
 
-## Why this was blocked rather than ready
+### Why this was blocked rather than ready
 
 It is not a dashboard feature with an LLM bolted on; it changes what the
 product *is*, in three ways that the existing ADRs answer differently:
@@ -69,7 +119,7 @@ product *is*, in three ways that the existing ADRs answer differently:
 None of these is a reason not to build it. They are reasons the decision
 belongs in an `/adr` rather than in a ticket.
 
-## Questions the ADR has to settle
+### Questions the ADR had to settle
 
 - Does the *dashboard* call the model, or does the CLI serving it do so —
   keeping egress in the binary where ADR-0006's guarantee already lives?
@@ -84,11 +134,16 @@ belongs in an `/adr` rather than in a ticket.
 - Is it answerable from the map alone, or does it need file contents? Those
   are very different privacy postures.
 
-## Notes
+### What that prediction got wrong
 
-**Needs a spec story as well as an ADR.** Story 17 currently says the
-dashboard makes zero external requests; this feature contradicts that story
-as written, so the story changes or a new one carves out an exception. Either
-way `/harden` needs something to walk.
+The note filed with this ticket said: *"Story 17 currently says the dashboard
+makes zero external requests; this feature contradicts that story as written,
+so the story changes or a new one carves out an exception."*
 
-Filed now so the idea is not lost; deliberately not `ready`.
+It does not, and the reasoning was worth catching. The dashboard already
+fetches `/api/map` from the local server, so "zero external requests" has
+always meant *off-origin* — a same-origin POST to 127.0.0.1 is the same
+category as what it does today. Once ADR-0009 put the model call in the
+serving binary, story 17 needed no amendment at all. The assumption that a
+question box must mean dashboard egress is what made this look like a larger
+decision than it was.
