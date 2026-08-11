@@ -807,12 +807,14 @@ attribution.
   its file share a content hash — so touching one line in a large file
   re-purchases every node in it. Conservative and never stale, but coarser
   than "only the code that changed".
-- The "mapped N files" message reports node count, not file count (693 vs.
+- ~~The "mapped N files" message reports node count, not file count (693 vs.
   187 on CodeAtlas itself; 6000 vs. 3000 on the synthetic repo). Unchanged
   across five walks — 801 vs. 219 at `e68c184`. It has now been carried long
   enough to be a decision rather than an oversight: it is the only place the
   CLI states a number to the user that is not true, and it is a one-word fix
-  at `lib.rs:100`.
+  at `lib.rs:100`.~~ **Fixed 2026-08-11 in ticket 34**, which was the next
+  work to touch that function; the count is now of `file`-kind nodes, with a
+  test that fails if it reverts to `nodes.len()`.
 - **Referential integrity is not part of the contract.** A dangling edge —
   one whose `source` or `target` names no node — validates against the
   published schema and is accepted by `share`. It matters only for

@@ -51,6 +51,10 @@ use crate::map::{EdgeKind, KnowledgeGraph, NodeId, NodeKind, Provenance};
 
 #[cfg(feature = "agent-cli")]
 pub mod agent_cli;
+/// Questions about a map, answered from a bounded slice of it (ADR-0009).
+/// Ungated: selection is pure and reaches nothing, and a build with no
+/// backend simply cannot get as far as asking.
+pub mod ask;
 #[cfg(feature = "network")]
 pub mod claude;
 /// What the model is asked and how its answer is read — shared by every
@@ -201,7 +205,37 @@ pub struct EnrichmentResponse {
 /// error degrades the run, never the map.
 pub trait EnrichmentProvider {
     fn enrich(&self, request: &EnrichmentRequest) -> Result<EnrichmentResponse>;
+
+    /// Answers a question about the map (ADR-0009), from the bounded slice
+    /// the question carries and nothing else.
+    ///
+    /// Defaulted rather than required. Both real backends implement it, but
+    /// the trait has a dozen implementors between the test doubles and the
+    /// offline backends, and making every one of them able to answer
+    /// questions in order to compile would be a tax paid for nothing. A
+    /// backend that has not implemented questions says so plainly here, so
+    /// the absence surfaces as a message rather than as an empty answer.
+    fn ask(&self, _question: &ask::Question) -> Result<ask::Answer> {
+        Err(anyhow!(
+            "this enrichment backend cannot answer questions about the map"
+        ))
+    }
 }
+
+/// A provider ready to be shared between the threads of `serve --ask`.
+///
+/// The auto-trait bounds live on the boxed selection rather than on
+/// [`EnrichmentProvider`] itself: every spec-selectable backend holds a
+/// string or a path and is trivially both, while the in-process test doubles
+/// record what they were asked through a `RefCell` and are neither. Putting
+/// the bounds here keeps the server sound without making every test double
+/// pay for a thread it will never cross.
+pub type SelectedProvider = Box<dyn EnrichmentProvider + Send + Sync>;
+
+/// The same provider once `serve --ask` has to hand it to every connection
+/// thread. One thread per connection is what makes the bounds necessary at
+/// all; [`SelectedProvider`] converts into this directly.
+pub type SharedProvider = std::sync::Arc<dyn EnrichmentProvider + Send + Sync>;
 
 /// The annotation store's file name under [`crate::scan::OUTPUT_DIR`]. The
 /// store is internal — NOT part of the map contract — but deterministic
@@ -786,6 +820,20 @@ pub fn provider_help() -> String {
     help
 }
 
+/// `serve --ask`'s help text. Build-aware for the same reason as
+/// [`provider_help`]: a flag that offers to answer questions must not appear
+/// unqualified on a binary that has nothing to answer them with — the sealed
+/// build's copy has to say so where a reader looks before running it, not
+/// only when the server refuses to start.
+pub fn ask_help() -> String {
+    format!(
+        "Answer questions about the map at POST /api/ask, from a bounded \
+         slice of the map alone (ADR-0009). Needs an enrichment backend, \
+         selected exactly as `scan --enrich` selects one. {}",
+        recognised_sentence()
+    )
+}
+
 /// The specs that actually reach a model, and so the ones `--model` means
 /// anything to. The offline test backends ignore it.
 ///
@@ -838,10 +886,13 @@ pub fn model_help() -> String {
 
 /// Told a name is wrong, a reader should also be told a right one — not
 /// being told was the failure that kept the second credential path invisible.
+///
+/// Says nothing about the structural map. Since ADR-0009 there are two
+/// callers, and only one of them has written a map by the time this is
+/// raised; the caller that has says so itself.
 fn unknown_provider(spec: &str) -> anyhow::Error {
     anyhow!(
-        "unknown enrichment provider {spec:?}. {} The structural map was \
-         written without enrichment.",
+        "unknown enrichment provider {spec:?}. {}",
         recognised_sentence()
     )
 }
@@ -851,7 +902,7 @@ fn unknown_provider(spec: &str) -> anyhow::Error {
 /// Without a usable provider this fails with a clear message: the structural
 /// map has already been written by the time this runs, so `--enrich`
 /// degrades cleanly (spec story 14).
-pub fn resolve_provider(choice: ProviderChoice<'_>) -> Result<Box<dyn EnrichmentProvider>> {
+pub fn resolve_provider(choice: ProviderChoice<'_>) -> Result<SelectedProvider> {
     let from_env = std::env::var(PROVIDER_ENV).ok();
     let spec = choice.spec.or(from_env.as_deref());
     provider_from_spec(spec, choice.model)
@@ -861,10 +912,7 @@ pub fn resolve_provider(choice: ProviderChoice<'_>) -> Result<Box<dyn Enrichment
 /// the environment, or nowhere — so it is unit-testable without touching a
 /// process-global. Which surface wins is [`resolve_provider`]'s job; with no
 /// spec at all the default depends on the build (see [`default_provider`]).
-fn provider_from_spec(
-    spec: Option<&str>,
-    model: Option<&str>,
-) -> Result<Box<dyn EnrichmentProvider>> {
+fn provider_from_spec(spec: Option<&str>, model: Option<&str>) -> Result<SelectedProvider> {
     #[cfg(not(any(feature = "network", feature = "agent-cli")))]
     let _ = model;
     match spec {
@@ -899,8 +947,7 @@ fn provider_from_spec(
         #[cfg(feature = "agent-cli")]
         Some(other) if other.starts_with("cli:") => Err(anyhow!(
             "unsupported enrichment provider {other:?}: the only CLI backend \
-             is `{}`. CodeAtlas does not run an arbitrary program on request. \
-             The structural map was written without enrichment",
+             is `{}`. CodeAtlas does not run an arbitrary program on request",
             agent_cli::SPEC
         )),
         Some(other) => Err(unknown_provider(other)),
@@ -922,14 +969,13 @@ fn provider_from_spec(
 /// - **Neither** — the sealed build (ADR-0006): enrichment is unavailable,
 ///   and the message says so without naming a feature, because which
 ///   feature is missing depends on the build.
-fn default_provider(model: Option<&str>) -> Result<Box<dyn EnrichmentProvider>> {
+fn default_provider(model: Option<&str>) -> Result<SelectedProvider> {
     #[cfg(feature = "test-provider")]
     {
         let _ = model;
         Err(anyhow!(
             "no enrichment provider is configured: this is a test build, which \
-             has no default provider — set {PROVIDER_ENV}; the structural map \
-             was written without enrichment"
+             has no default provider — set {PROVIDER_ENV} or pass --provider"
         ))
     }
     #[cfg(all(feature = "network", not(feature = "test-provider")))]
@@ -948,9 +994,8 @@ fn default_provider(model: Option<&str>) -> Result<Box<dyn EnrichmentProvider>> 
     {
         let _ = model;
         Err(anyhow!(
-            "enrichment is not available in this build: it was compiled with \
-             no enrichment backend at all (ADR-0006 sealed build); the \
-             structural map was written without enrichment"
+            "this build has no enrichment backend at all: it was compiled \
+             without one (ADR-0006 sealed build)"
         ))
     }
 }
@@ -1054,6 +1099,13 @@ mod tests {
             provider_help().contains(&sentence),
             "--provider help must render the shared sentence: {}",
             provider_help()
+        );
+        // `serve --ask` offers to answer questions through the same
+        // backends, so it has the same way to be wrong about them.
+        assert!(
+            ask_help().contains(&sentence),
+            "--ask help must render the shared sentence: {}",
+            ask_help()
         );
         let error = unknown_provider("nope").to_string();
         assert!(
@@ -1560,20 +1612,56 @@ mod test_provider {
         pub path: PathBuf,
     }
 
-    impl EnrichmentProvider for CannedProvider {
-        fn enrich(&self, _request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
+    /// The reserved key holding a canned answer to any question, and the
+    /// one holding the node IDs it claims to rest on (whitespace-separated).
+    /// Prefixed like every other key in the file, so they cannot collide
+    /// with a slot address.
+    const ASK_ANSWER: &str = "ask:answer";
+    const ASK_CITATIONS: &str = "ask:citations";
+
+    impl CannedProvider {
+        fn canned(&self) -> Result<BTreeMap<String, String>> {
             let raw = fs::read_to_string(&self.path)
                 .with_context(|| format!("cannot read canned responses {:?}", self.path))?;
-            let answers: BTreeMap<String, String> = serde_json::from_str(&raw)?;
-            Ok(EnrichmentResponse { answers })
+            Ok(serde_json::from_str(&raw)?)
         }
     }
 
-    /// Errors on every call — failure injection for spec story 14.
+    impl EnrichmentProvider for CannedProvider {
+        fn enrich(&self, _request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
+            Ok(EnrichmentResponse {
+                answers: self.canned()?,
+            })
+        }
+
+        /// Answers from [`ASK_ANSWER`], citing [`ASK_CITATIONS`] verbatim —
+        /// including IDs that are not in the map, so seam 4 can watch an
+        /// invented citation being dropped.
+        fn ask(&self, _question: &ask::Question) -> Result<ask::Answer> {
+            let canned = self.canned()?;
+            let text = canned.get(ASK_ANSWER).ok_or_else(|| {
+                anyhow!("the canned responses {:?} hold no {ASK_ANSWER}", self.path)
+            })?;
+            Ok(ask::Answer {
+                text: text.clone(),
+                citations: canned
+                    .get(ASK_CITATIONS)
+                    .map(|ids| ids.split_whitespace().map(str::to_string).collect())
+                    .unwrap_or_default(),
+            })
+        }
+    }
+
+    /// Errors on every call — failure injection for spec story 14, and for
+    /// ADR-0009's requirement that a failed question leaves the server up.
     pub struct FailingProvider;
 
     impl EnrichmentProvider for FailingProvider {
         fn enrich(&self, _request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
+            Err(anyhow!("injected provider failure"))
+        }
+
+        fn ask(&self, _question: &ask::Question) -> Result<ask::Answer> {
             Err(anyhow!("injected provider failure"))
         }
     }

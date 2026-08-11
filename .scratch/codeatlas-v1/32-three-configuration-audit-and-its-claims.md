@@ -50,6 +50,13 @@ claim in them names the test that makes it so.
       accounts for `serve --ask` being the exception to `serve`, and §2's
       "All network code is the Claude provider" is corrected — it is the
       sentence ADR-0006 already had to fix for the same reason.
+- [ ] `docs/SECURITY.md` states what a model receives on the **question**
+      path as well as the enrichment one: a node's id, kind, name,
+      repo-relative path and existing summary, for at most
+      `ask::CONTEXT_NODES` nodes with each summary capped at
+      `ask::MAX_SUMMARY_CHARS` — never file contents. Added 2026-08-11:
+      `enrich::ask::NodeContext` carries a comment pointing here, and until
+      this lands that pointer names a paragraph that does not exist.
 - [ ] Every claim added or changed names the code and the committed test that
       enforces it, which is the standard `docs/SECURITY.md` already holds
       itself to.

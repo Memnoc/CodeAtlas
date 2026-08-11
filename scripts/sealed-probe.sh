@@ -100,4 +100,41 @@ if [ -n "$control" ]; then
   echo "ok: control binary offers the Claude backend (help probe is live)"
 fi
 
+# --- 4. `serve --ask` explains itself rather than failing obscurely (ticket
+# 34, ADR-0009). Like section 3 this can only be checked here: every `cargo
+# test` build carries `test-provider`, so a backend is always selectable
+# there and the no-backend branch is unreachable.
+#
+# The sealed binary must refuse at startup — before binding, so there is no
+# server left listening on a route it cannot serve.
+ask_paragraph() {
+  "$1" serve --help 2>&1 | sed -n '/--ask/,/^$/p'
+}
+
+sealed_ask="$(ask_paragraph "$sealed")"
+if ! echo "$sealed_ask" | grep -q -- '--ask'; then
+  fail "sealed 'serve --help' omits --ask; the flag must not vanish: $sealed_ask"
+fi
+if ! echo "$sealed_ask" | grep -q 'recognises none'; then
+  fail "sealed --ask does not say it has no backend: $sealed_ask"
+fi
+
+set +e
+out="$("$sealed" serve --port 0 --ask "$tmp/repo" 2>&1)"
+code=$?
+set -e
+[ "$code" -ne 0 ] || fail "sealed 'serve --ask' started; it must refuse"
+echo "$out" | grep -q 'no enrichment backend' \
+  || fail "sealed 'serve --ask' does not explain the build: $out"
+echo "$out" | grep -q -- '--ask' \
+  || fail "sealed 'serve --ask' does not name the flag that failed: $out"
+echo "ok: sealed serve --ask refuses at startup and says why"
+
+if [ -n "$control" ]; then
+  if ! ask_paragraph "$control" | grep -qi 'claude'; then
+    fail "control --ask lacks 'claude' — the --ask help probe is vacuous"
+  fi
+  echo "ok: control binary offers a question backend (--ask probe is live)"
+fi
+
 echo "sealed probe passed"

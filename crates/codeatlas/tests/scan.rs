@@ -49,6 +49,34 @@ fn read_map(repo: &Path) -> serde_json::Value {
     serde_json::from_str(&raw).unwrap()
 }
 
+/// The count the CLI prints must be the count of files. It reported
+/// `nodes.len()` for five harden walks — roughly four times the truth, since
+/// the map holds a node per function and class as well.
+#[test]
+fn scan_reports_the_number_of_files_it_mapped() {
+    let repo = materialize("simple");
+    let output = assert_cmd::Command::cargo_bin("codeatlas")
+        .unwrap()
+        .arg("scan")
+        .current_dir(repo.path())
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr).to_string();
+
+    let map = read_map(repo.path());
+    let nodes = map["nodes"].as_array().unwrap();
+    let files = nodes.iter().filter(|n| n["kind"] == "file").count();
+    assert!(
+        nodes.len() > files,
+        "this fixture must contain symbols too, or the two counts coincide \
+         and the message cannot be wrong"
+    );
+    assert!(
+        stderr.contains(&format!("mapped {files} files")),
+        "expected a count of {files} files, got: {stderr}"
+    );
+}
+
 fn node_ids(map: &serde_json::Value) -> Vec<String> {
     map["nodes"]
         .as_array()

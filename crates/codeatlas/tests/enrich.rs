@@ -10,6 +10,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod common;
+
 /// The provider-selection env var the test-built binary honors.
 const PROVIDER_ENV: &str = "CODEATLAS_ENRICH_PROVIDER";
 
@@ -897,41 +899,6 @@ fn the_provider_flag_exists_with_no_backend_compiled_in_and_refuses_claude() {
 // path from `--provider` to a filled slot actually joins up. That is what
 // these do, against a stand-in executable — never the real `claude`.
 
-#[cfg(feature = "agent-cli")]
-/// Writes an executable stand-in for the Claude CLI. It records the working
-/// directory, selected environment variables and its whole argv to
-/// `<dir>/record.txt`, then prints `envelope` on stdout and exits with
-/// `code`. The record path is baked in rather than passed through the
-/// environment, because the environment is exactly what is under test.
-fn fake_cli(dir: &Path, envelope: &str, code: i32) -> String {
-    fs::create_dir_all(dir).unwrap();
-    let record = dir.join("record.txt");
-    let program = dir.join("fake-claude");
-    let script = format!(
-        r#"#!/bin/sh
-{{
-  printf 'cwd=%s\n' "$(pwd)"
-  printf 'api-key=%s\n' "${{ANTHROPIC_API_KEY-<unset>}}"
-  printf 'secret=%s\n' "${{CODEATLAS_TEST_SECRET-<unset>}}"
-  printf 'home=%s\n' "${{HOME-<unset>}}"
-  for a in "$@"; do printf 'arg=%s\n' "$a"; done
-}} > '{record}'
-cat <<'CODEATLAS_ENVELOPE'
-{envelope}
-CODEATLAS_ENVELOPE
-exit {code}
-"#,
-        record = record.display(),
-    );
-    fs::write(&program, script).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    format!("cli-exec:{}", program.display())
-}
-
 /// Runs `scan --enrich --provider <spec>` with a credential and an unrelated
 /// secret in the parent environment, so the child's environment can be
 /// checked for both.
@@ -948,20 +915,11 @@ fn scan_with_secrets(repo: &Path, spec: &str) -> assert_cmd::assert::Assert {
 }
 
 #[cfg(feature = "agent-cli")]
-fn record_lines(dir: &Path) -> Vec<String> {
-    fs::read_to_string(dir.join("record.txt"))
-        .expect("the stand-in CLI recorded nothing — it was never run")
-        .lines()
-        .map(str::to_string)
-        .collect()
-}
-
-#[cfg(feature = "agent-cli")]
 #[test]
 fn the_cli_backend_fills_slots_through_a_spawned_program() {
     let repo = materialize("simple");
     let outside = tempfile::tempdir().unwrap();
-    let spec = fake_cli(
+    let spec = common::fake_cli(
         outside.path(),
         r#"{"type":"result","subtype":"success","is_error":false,
             "structured_output":{"answers":[
@@ -984,7 +942,7 @@ fn the_cli_backend_fills_slots_through_a_spawned_program() {
 fn the_child_gets_no_credential_no_unrelated_variable_and_no_repository() {
     let repo = materialize("simple");
     let outside = tempfile::tempdir().unwrap();
-    let spec = fake_cli(
+    let spec = common::fake_cli(
         outside.path(),
         r#"{"type":"result","subtype":"success","is_error":false,
             "structured_output":{"answers":[]}}"#,
@@ -992,7 +950,7 @@ fn the_child_gets_no_credential_no_unrelated_variable_and_no_repository() {
     );
 
     scan_with_secrets(repo.path(), &spec).success();
-    let lines = record_lines(outside.path());
+    let lines = common::record_lines(outside.path());
     let field = |name: &str| {
         lines
             .iter()
@@ -1032,7 +990,7 @@ fn the_child_gets_no_credential_no_unrelated_variable_and_no_repository() {
 fn the_child_is_invoked_as_a_locked_down_one_shot_completion() {
     let repo = materialize("simple");
     let outside = tempfile::tempdir().unwrap();
-    let spec = fake_cli(
+    let spec = common::fake_cli(
         outside.path(),
         r#"{"type":"result","subtype":"success","is_error":false,
             "structured_output":{"answers":[]}}"#,
@@ -1040,7 +998,7 @@ fn the_child_is_invoked_as_a_locked_down_one_shot_completion() {
     );
 
     scan_with_secrets(repo.path(), &spec).success();
-    let args: Vec<String> = record_lines(outside.path())
+    let args: Vec<String> = common::record_lines(outside.path())
         .iter()
         .filter_map(|l| l.strip_prefix("arg=").map(str::to_string))
         .collect();
@@ -1084,15 +1042,15 @@ fn every_way_the_child_can_fail_leaves_the_structural_map_intact() {
         ),
         (
             "a non-zero exit",
-            fake_cli(&outside.path().join("exit"), "", 1),
+            common::fake_cli(&outside.path().join("exit"), "", 1),
         ),
         (
             "output that is not JSON",
-            fake_cli(&outside.path().join("garbage"), "not json at all", 0),
+            common::fake_cli(&outside.path().join("garbage"), "not json at all", 0),
         ),
         (
             "an error envelope",
-            fake_cli(
+            common::fake_cli(
                 &outside.path().join("errored"),
                 r#"{"type":"result","subtype":"error_during_execution","is_error":true,
                     "result":"the session failed"}"#,

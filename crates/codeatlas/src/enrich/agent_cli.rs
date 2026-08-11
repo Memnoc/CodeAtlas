@@ -61,8 +61,7 @@ use std::process::{Command, Output};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::prompt;
-use super::{EnrichmentProvider, EnrichmentRequest, EnrichmentResponse};
+use super::{EnrichmentProvider, EnrichmentRequest, EnrichmentResponse, ask, prompt};
 
 /// The one program this backend will run. Not configurable: a general
 /// `cli:<program>` spec would make "CodeAtlas executes whatever you name it"
@@ -131,16 +130,29 @@ impl CliProvider {
             program: program.into(),
         }
     }
+
+    /// One locked-down, schema-constrained completion. Both trait methods go
+    /// through here so the lockdown flags, the `--` fence and the envelope
+    /// checks exist once: a second copy of the argv construction is a second
+    /// place for the swallowed-prompt bug to come back, and it would come
+    /// back silently.
+    fn complete(&self, completion: &prompt::Completion) -> Result<serde_json::Value> {
+        // A fresh empty directory per call, removed when `scratch` drops —
+        // the child's whole view of the filesystem.
+        let scratch = ScratchDir::new()?;
+        let args = build_args(completion, self.model.as_deref());
+        let output = run(&self.program, &args, scratch.path())?;
+        structured_output(&self.program, &output)
+    }
 }
 
 impl EnrichmentProvider for CliProvider {
     fn enrich(&self, request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
-        // A fresh empty directory per call, removed when `scratch` drops —
-        // the child's whole view of the filesystem.
-        let scratch = ScratchDir::new()?;
-        let args = build_args(request, self.model.as_deref());
-        let output = run(&self.program, &args, scratch.path())?;
-        parse_output(&self.program, &output)
+        prompt::parse_answers(self.complete(&prompt::for_enrichment(request))?)
+    }
+
+    fn ask(&self, question: &ask::Question) -> Result<ask::Answer> {
+        prompt::parse_ask_answer(self.complete(&prompt::for_question(question))?)
     }
 }
 
@@ -204,10 +216,17 @@ impl Drop for ScratchDir {
 
 /// The argv after the program name. Pure, so seam 3 can assert every part of
 /// it without spawning anything.
-fn build_args(request: &EnrichmentRequest, model: Option<&str>) -> Vec<String> {
+///
+/// Takes a [`prompt::Completion`] rather than an enrichment request:
+/// enrichment and questions differ in what is asked and in nothing about how
+/// the child is run, so the lockdown below applies to both by construction.
+fn build_args(completion: &prompt::Completion, model: Option<&str>) -> Vec<String> {
     let mut args: Vec<String> = LOCKDOWN.iter().map(|flag| (*flag).to_string()).collect();
-    args.push(format!("--json-schema={}", prompt::answers_schema()));
-    args.push(format!("--append-system-prompt={}", prompt::SYSTEM_PROMPT));
+    args.push(format!("--json-schema={}", completion.schema));
+    args.push(format!(
+        "--append-system-prompt={}",
+        completion.system_prompt
+    ));
     if let Some(model) = model {
         args.push(format!("--model={model}"));
     }
@@ -216,7 +235,7 @@ fn build_args(request: &EnrichmentRequest, model: Option<&str>) -> Vec<String> {
     // its own values — leaving the model with no prompt at all and this
     // backend with no way to notice.
     args.push("--".to_string());
-    args.push(prompt::user_message(request));
+    args.push(completion.user_message.clone());
     args
 }
 
@@ -247,7 +266,7 @@ fn run(program: &str, args: &[String], cwd: &Path) -> Result<Output> {
             anyhow!(
                 "could not run `{program}`: {err}. The {SPEC} backend needs \
                  the Claude CLI on PATH and logged in (`claude` then \
-                 `/login`); the structural map was written without enrichment"
+                 `/login`)"
             )
         })
 }
@@ -270,11 +289,14 @@ struct CliResult {
     result: Option<String>,
 }
 
-/// Turns a finished process into typed answers. Like the API backend there is
-/// no repair path: a non-zero exit, an error envelope, or a missing
-/// `structured_output` is an ordinary provider error, which leaves the
-/// structural map intact (spec story 14).
-fn parse_output(program: &str, output: &Output) -> Result<EnrichmentResponse> {
+/// The schema-constrained payload inside a finished process. Like the API
+/// backend there is no repair path: a non-zero exit, an error envelope, or a
+/// missing `structured_output` is an ordinary provider error, which leaves
+/// the structural map intact (spec story 14).
+///
+/// Shared by both request kinds, which differ in the schema they demanded,
+/// not in how the CLI reports having satisfied it.
+fn structured_output(program: &str, output: &Output) -> Result<serde_json::Value> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -308,13 +330,12 @@ fn parse_output(program: &str, output: &Output) -> Result<EnrichmentResponse> {
                 }),
         );
     }
-    let structured = result.structured_output.ok_or_else(|| {
+    result.structured_output.ok_or_else(|| {
         anyhow!(
             "`{program}` completed without structured output; the response \
              did not satisfy the requested schema"
         )
-    })?;
-    prompt::parse_answers(structured)
+    })
 }
 
 /// Diagnostics from another program can be arbitrarily long; one line of it
@@ -356,8 +377,37 @@ mod tests {
         }
     }
 
+    fn question() -> ask::Question {
+        ask::Question {
+            project: "demo".into(),
+            text: "what runs first?".into(),
+            context: vec![ask::NodeContext {
+                id: "file:src/main.ts".into(),
+                kind: NodeKind::File,
+                name: "main.ts".into(),
+                path: "src/main.ts".into(),
+                summary: "TypeScript file, 3 lines".into(),
+            }],
+        }
+    }
+
+    fn enrich_args(model: Option<&str>) -> Vec<String> {
+        build_args(&prompt::for_enrichment(&request()), model)
+    }
+
+    fn ask_args(model: Option<&str>) -> Vec<String> {
+        build_args(&prompt::for_question(&question()), model)
+    }
+
     fn args() -> Vec<String> {
-        build_args(&request(), None)
+        enrich_args(None)
+    }
+
+    /// Envelope handling plus the enrichment schema — the pairing the
+    /// `enrich` method performs, so these tests read as they did before the
+    /// envelope step was shared with the question path.
+    fn parse_output(program: &str, output: &Output) -> Result<EnrichmentResponse> {
+        prompt::parse_answers(structured_output(program, output)?)
     }
 
     /// The value of a `--flag=value` argument. Only the `=` form is
@@ -397,14 +447,28 @@ mod tests {
     /// the prompt.
     #[test]
     fn no_flag_can_swallow_the_prompt() {
-        for args in [args(), build_args(&request(), Some("claude-sonnet-5"))] {
+        // Both request kinds, because both go out as a trailing positional
+        // and either would be swallowed alone.
+        let expected = [
+            (enrich_args(None), prompt::user_message(&request())),
+            (
+                enrich_args(Some("claude-sonnet-5")),
+                prompt::user_message(&request()),
+            ),
+            (ask_args(None), prompt::ask_user_message(&question())),
+            (
+                ask_args(Some("claude-sonnet-5")),
+                prompt::ask_user_message(&question()),
+            ),
+        ];
+        for (args, message) in expected {
             let (prompt_arg, rest) = args.split_last().expect("there are arguments");
             assert_eq!(
                 rest.last().map(String::as_str),
                 Some("--"),
                 "the prompt must be fenced off from option parsing: {args:?}"
             );
-            assert_eq!(prompt_arg, &prompt::user_message(&request()));
+            assert_eq!(prompt_arg, &message);
 
             // Every flag before the fence carries its value itself. A bare
             // `--flag value` pair is the shape that eats the next argument.
@@ -484,6 +548,36 @@ mod tests {
         );
     }
 
+    /// The lockdown is a property of the child, not of what it is asked.
+    /// A question answered by a `claude` process with its tools enabled
+    /// could read the repository, which is precisely what ADR-0009's "from
+    /// the map alone" cannot survive — and questions arrive from a network
+    /// route, unlike enrichment.
+    #[test]
+    fn a_question_is_locked_down_exactly_as_an_enrichment_call_is() {
+        let args = ask_args(None);
+
+        for flag in LOCKDOWN {
+            assert!(
+                args.contains(&(*flag).to_string()),
+                "the question path dropped {flag}: {args:?}"
+            );
+        }
+        assert!(!args.iter().any(|a| a == "--add-dir"), "{args:?}");
+
+        let schema = value_of(&args, "--json-schema").expect("a schema is passed");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&schema).unwrap(),
+            prompt::ask_answer_schema(),
+            "a question must be constrained by the answer schema, not the \
+             enrichment one"
+        );
+        assert_eq!(
+            value_of(&args, "--append-system-prompt").as_deref(),
+            Some(prompt::ASK_SYSTEM_PROMPT),
+        );
+    }
+
     #[test]
     fn the_model_is_the_cli_s_own_unless_one_is_asked_for() {
         // Asserted on the provider as well as on the argv, because the two
@@ -504,7 +598,7 @@ mod tests {
             CliProvider::new(Some("claude-sonnet-5")).model.as_deref(),
             Some("claude-sonnet-5")
         );
-        let chosen = build_args(&request(), Some("claude-sonnet-5"));
+        let chosen = enrich_args(Some("claude-sonnet-5"));
         assert_eq!(
             value_of(&chosen, "--model").as_deref(),
             Some("claude-sonnet-5")

@@ -10,7 +10,39 @@ pub mod share;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+
+/// Which enrichment backend to use, and which model within it.
+///
+/// Flattened into both `scan` and `serve`: they select a backend the same
+/// way through the same env var, and two copies of these definitions is two
+/// places for the help text — which is built from what the binary compiled
+/// in — to drift.
+///
+/// Both depend on the flag that turns the feature on, and that flag differs
+/// (`--enrich`, `--ask`). Each carries the clap id `backend` so one
+/// `requires` here resolves correctly in either subcommand; the ids are
+/// internal, so the flags a reader types are still their own.
+#[derive(Args)]
+struct BackendArgs {
+    /// Model for the enrichment backend. Like --provider, the help is built
+    /// from what this binary compiled in.
+    #[arg(long, requires = "backend", long_help = enrich::model_help())]
+    model: Option<String>,
+    /// Enrichment backend. Help text is built from the specs this build
+    /// compiled in, so it never offers one the binary cannot select.
+    #[arg(long, requires = "backend", long_help = enrich::provider_help())]
+    provider: Option<String>,
+}
+
+impl BackendArgs {
+    fn choice(&self) -> enrich::ProviderChoice<'_> {
+        enrich::ProviderChoice {
+            spec: self.provider.as_deref(),
+            model: self.model.as_deref(),
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -32,16 +64,10 @@ enum Command {
         /// After the structural scan, fill prose slots through an enrichment
         /// provider (ADR-0004). Which backends exist depends on how this
         /// binary was compiled — see --provider.
-        #[arg(long)]
+        #[arg(long, id = "backend")]
         enrich: bool,
-        /// Model for the enrichment provider. Like --provider, the help is
-        /// built from what this binary compiled in.
-        #[arg(long, requires = "enrich", long_help = enrich::model_help())]
-        model: Option<String>,
-        /// Enrichment backend. Help text is built from the specs this build
-        /// compiled in, so it never offers one the binary cannot select.
-        #[arg(long, requires = "enrich", long_help = enrich::provider_help())]
-        provider: Option<String>,
+        #[command(flatten)]
+        backend: BackendArgs,
     },
     /// Overlay a git diff's impact on the map: changed nodes and their
     /// one-hop blast radius, written to .codeatlas/diff-overlay.json.
@@ -73,6 +99,13 @@ enum Command {
         /// (ADR-0006).
         #[arg(long, default_value_t = 4173)]
         port: u16,
+        /// Answer questions about the map at POST /api/ask (ADR-0009).
+        /// Off by default: without it the server reaches nothing but
+        /// loopback and local disk.
+        #[arg(long, id = "backend", long_help = enrich::ask_help())]
+        ask: bool,
+        #[command(flatten)]
+        backend: BackendArgs,
     },
 }
 
@@ -81,8 +114,7 @@ pub fn run() -> ExitCode {
         Command::Scan {
             path,
             enrich,
-            model,
-            provider,
+            backend,
         } => {
             let root = path.unwrap_or_else(|| PathBuf::from("."));
             // The structural map is always built and saved first — with
@@ -101,15 +133,22 @@ pub fn run() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             };
-            eprintln!("mapped {} files", graph.nodes.len());
+            // File nodes, not all nodes: the map holds a node per function
+            // and class too, so `nodes.len()` reported roughly four times
+            // the number of files scanned. Carried across five harden walks
+            // as the only number the CLI states to a reader that is not
+            // true; corrected here because ticket 34 was the next thing to
+            // touch this function.
+            let files = graph
+                .nodes
+                .iter()
+                .filter(|n| n.kind == map::NodeKind::File)
+                .count();
+            eprintln!("mapped {files} files");
             if !enrich {
                 return ExitCode::SUCCESS;
             }
-            let choice = enrich::ProviderChoice {
-                spec: provider.as_deref(),
-                model: model.as_deref(),
-            };
-            match enrich::run(&root, &mut graph, choice) {
+            match enrich::run(&root, &mut graph, backend.choice()) {
                 Ok(enrich::Outcome::NothingToEnrich) => {
                     eprintln!(
                         "nothing to enrich: every slot is already enriched \
@@ -146,9 +185,18 @@ pub fn run() -> ExitCode {
                 }
             }
         }
-        Command::Serve { path, port } => {
+        Command::Serve {
+            path,
+            port,
+            ask,
+            backend,
+        } => {
             let root = path.unwrap_or_else(|| PathBuf::from("."));
-            match serve::serve(&root, port) {
+            let options = serve::ServeOptions {
+                port,
+                ask: ask.then(|| backend.choice()),
+            };
+            match serve::serve(&root, options) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(err) => {
                     eprintln!("error: {err:#}");

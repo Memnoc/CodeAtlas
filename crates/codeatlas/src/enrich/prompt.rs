@@ -19,6 +19,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::json;
 
+use super::ask;
 use super::{EnrichmentRequest, EnrichmentResponse, EnrichmentSlot};
 
 pub const SYSTEM_PROMPT: &str = "You fill labeling slots in a code map. Each slot \
@@ -30,6 +31,20 @@ files under the given directory; 'flow-name' — a short business-domain name \
 for the call flow described by its entry point and steps; 'tour-label' — one \
 engaging sentence narrating this stop on a guided tour of the codebase, \
 grounded in the path and its import fan-in/fan-out.";
+
+/// What the model is told when answering a question about the map
+/// (ADR-0009). The instruction to answer only from the given nodes is not a
+/// security control — the bound is, and it is enforced by
+/// [`ask::select_context`](super::ask::select_context) before this prompt
+/// exists. It is here so a thin slice produces "I cannot tell from the map"
+/// rather than a confident guess.
+pub const ASK_SYSTEM_PROMPT: &str = "You answer questions about a codebase \
+from a map of it. You are given a question and a set of nodes, each with an \
+id, kind, name, path and summary. Answer only from those nodes: you cannot \
+see the source. Cite the ids of the nodes your answer rests on, and cite \
+only ids from the given set. If the nodes do not contain the answer, say so \
+plainly and cite whatever comes closest. Keep the answer to a short \
+paragraph.";
 
 /// One slot as it rides the prompt: its kind, its response key, and the
 /// mechanically summarized topology that slot kind carries — nothing else
@@ -110,6 +125,110 @@ pub fn answers_schema() -> serde_json::Value {
         },
         "required": ["answers"],
         "additionalProperties": false,
+    })
+}
+
+/// The user turn for one question: the project, the question, and the
+/// bounded slice of nodes selected to answer it. Nothing else — in
+/// particular no file contents, which this path has no way to reach.
+pub fn ask_user_message(question: &ask::Question) -> String {
+    let nodes: Vec<serde_json::Value> = question
+        .context
+        .iter()
+        .map(|node| {
+            json!({
+                "id": node.id,
+                "kind": node.kind,
+                "name": node.name,
+                "path": node.path,
+                "summary": node.summary,
+            })
+        })
+        .collect();
+    format!(
+        "Project: {}\n\nQuestion: {}\n\nNodes:\n{}",
+        question.project,
+        question.text,
+        serde_json::to_string_pretty(&nodes).expect("nodes serialize"),
+    )
+}
+
+/// One schema-constrained exchange, in the form every transport needs it.
+///
+/// Enrichment and questions differ in exactly these three values and in
+/// nothing about how a completion is performed, so each backend has one
+/// `complete` and builds it from one of the two constructors below. The
+/// three used to travel as separate parameters, which is the shape that let
+/// a backend be wired to the wrong schema without anything noticing.
+pub struct Completion {
+    pub system_prompt: &'static str,
+    pub schema: serde_json::Value,
+    pub user_message: String,
+}
+
+/// Ask a model to fill enrichment slots.
+pub fn for_enrichment(request: &EnrichmentRequest) -> Completion {
+    Completion {
+        system_prompt: SYSTEM_PROMPT,
+        schema: answers_schema(),
+        user_message: user_message(request),
+    }
+}
+
+/// Ask a model a question about the map (ADR-0009).
+pub fn for_question(question: &ask::Question) -> Completion {
+    Completion {
+        system_prompt: ASK_SYSTEM_PROMPT,
+        schema: ask_answer_schema(),
+        user_message: ask_user_message(question),
+    }
+}
+
+/// The JSON Schema an answer is constrained to: prose plus the node ids it
+/// rests on. Citations are a plain string array — the ids are validated
+/// against what was actually sent, which a schema cannot express.
+///
+/// Named apart from [`answers_schema`] deliberately: the two were one
+/// character apart, and a backend wired to the wrong one survived a
+/// mutation because every assertion about it read the same near-identical
+/// name.
+pub fn ask_answer_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "answer": {
+                "type": "string",
+                "description": "The answer, a short paragraph",
+            },
+            "citations": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "description": "A node id from the given set",
+                },
+            },
+        },
+        "required": ["answer", "citations"],
+        "additionalProperties": false,
+    })
+}
+
+/// The structured-outputs answer shape — mirrors [`ask_answer_schema`].
+#[derive(Deserialize)]
+struct AskAnswer {
+    answer: String,
+    citations: Vec<String>,
+}
+
+/// Reads a structured output into an answer. Shared by both backends for the
+/// same reason [`parse_answers`] is: one wording for a schema violation, and
+/// one place for the shape to be right.
+pub fn parse_ask_answer(structured: serde_json::Value) -> Result<ask::Answer> {
+    let parsed: AskAnswer = serde_json::from_value(structured)
+        .context("the structured output did not match the requested answer schema")?;
+    Ok(ask::Answer {
+        text: parsed.answer,
+        citations: parsed.citations,
     })
 }
 

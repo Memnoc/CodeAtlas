@@ -35,8 +35,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::prompt;
-use super::{EnrichmentProvider, EnrichmentRequest, EnrichmentResponse};
+use super::{EnrichmentProvider, EnrichmentRequest, EnrichmentResponse, ask, prompt};
 
 /// The one URL this binary can ever talk to (ADR-0006). Hardcoded on
 /// purpose: no env var, flag, or config may redirect enrichment traffic —
@@ -75,10 +74,24 @@ impl ClaudeProvider {
 
 impl EnrichmentProvider for ClaudeProvider {
     fn enrich(&self, request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
+        prompt::parse_answers(self.complete(&prompt::for_enrichment(request))?)
+    }
+
+    fn ask(&self, question: &ask::Question) -> Result<ask::Answer> {
+        prompt::parse_ask_answer(self.complete(&prompt::for_question(question))?)
+    }
+}
+
+impl ClaudeProvider {
+    /// One schema-constrained request over HTTPS. Both trait methods go
+    /// through here so credential resolution, the POST and the envelope
+    /// checks exist once — the CLI backend next door has the same shape for
+    /// the same reason.
+    fn complete(&self, completion: &prompt::Completion) -> Result<serde_json::Value> {
         let credentials = resolve_credentials()?;
-        let body = build_request_body(&self.model, request);
+        let body = build_request_body(&self.model, completion);
         let raw = post(&body, &credentials)?;
-        parse_response(&raw)
+        structured_output(&raw)
     }
 }
 
@@ -129,23 +142,22 @@ fn auth_headers(credentials: &Credentials) -> Vec<(&'static str, String)> {
     }
 }
 
-/// Builds the Messages API request body for one batch: the slots being
-/// enriched and the project name — nothing else (spec: bounded prompts).
-/// `output_config.format` carries [`prompt::answers_schema`], the same
-/// schema the CLI backend constrains its own response with.
-fn build_request_body(model: &str, request: &EnrichmentRequest) -> serde_json::Value {
+/// Builds the Messages API request body for one completion — whichever kind
+/// it is. `output_config.format` carries the completion's schema, so a
+/// successful response is guaranteed to deserialize (ADR-0004).
+fn build_request_body(model: &str, completion: &prompt::Completion) -> serde_json::Value {
     json!({
         "model": model,
         "max_tokens": MAX_TOKENS,
-        "system": prompt::SYSTEM_PROMPT,
+        "system": completion.system_prompt,
         "messages": [{
             "role": "user",
-            "content": prompt::user_message(request),
+            "content": completion.user_message,
         }],
         "output_config": {
             "format": {
                 "type": "json_schema",
-                "schema": prompt::answers_schema(),
+                "schema": completion.schema,
             },
         },
     })
@@ -168,12 +180,15 @@ struct ContentBlock {
     text: String,
 }
 
-/// Turns a successful (HTTP 2xx) Messages API response into a typed
-/// [`EnrichmentResponse`]. Structured outputs guarantee the text block is
-/// schema-valid JSON, so this parses exactly once; anything else — a
-/// refusal or truncation `stop_reason`, a missing text block, text that
-/// does not deserialize — is an error, never a repair attempt.
-fn parse_response(raw: &str) -> Result<EnrichmentResponse> {
+/// The structured payload inside a successful (HTTP 2xx) Messages API
+/// response. Structured outputs guarantee the text block is schema-valid
+/// JSON, so this parses exactly once; anything else — a refusal or
+/// truncation `stop_reason`, a missing text block, text that is not JSON —
+/// is an error, never a repair attempt.
+///
+/// Shared by both request kinds: enrichment and questions differ in the
+/// schema they demand, not in how a Messages API response is read.
+fn structured_output(raw: &str) -> Result<serde_json::Value> {
     let message: ApiMessage =
         serde_json::from_str(raw).context("malformed Claude Messages API response")?;
     if let Some(reason) = message.stop_reason.as_deref()
@@ -190,9 +205,7 @@ fn parse_response(raw: &str) -> Result<EnrichmentResponse> {
         .find(|block| block.kind == "text" && !block.text.is_empty())
         .map(|block| block.text.as_str())
         .ok_or_else(|| anyhow!("the Claude API response carries no text content"))?;
-    let structured: serde_json::Value =
-        serde_json::from_str(text).context("the structured output was not JSON")?;
-    prompt::parse_answers(structured)
+    serde_json::from_str(text).context("the structured output was not JSON")
 }
 
 /// The single network call in the binary (ADR-0006): one blocking POST to
@@ -259,6 +272,13 @@ mod tests {
     use crate::map::{NodeId, NodeKind};
     use std::collections::BTreeMap;
 
+    /// Envelope handling plus the enrichment schema — the pairing the
+    /// `enrich` method performs, named so these tests read as before the
+    /// envelope step was shared with the question path.
+    fn parse_response(raw: &str) -> Result<EnrichmentResponse> {
+        prompt::parse_answers(structured_output(raw)?)
+    }
+
     fn request() -> EnrichmentRequest {
         EnrichmentRequest {
             project: "demo".into(),
@@ -311,7 +331,7 @@ mod tests {
 
     #[test]
     fn the_request_carries_typed_slots_and_demands_schema_valid_output() {
-        let body = build_request_body(DEFAULT_MODEL, &request());
+        let body = build_request_body(DEFAULT_MODEL, &prompt::for_enrichment(&request()));
 
         assert_eq!(body["model"], "claude-opus-5");
         assert_eq!(body["max_tokens"], MAX_TOKENS);
@@ -423,6 +443,60 @@ mod tests {
         .to_string();
         let err = parse_response(&raw).unwrap_err();
         assert!(err.to_string().contains("schema"), "{err}");
+    }
+
+    /// The question path over this transport: the same bounded-prompt claim
+    /// as enrichment, plus the schema that makes citations parseable.
+    #[test]
+    fn a_question_rides_with_its_nodes_and_demands_a_cited_answer() {
+        let question = ask::Question {
+            project: "demo".into(),
+            text: "where are sessions validated?".into(),
+            context: vec![ask::NodeContext {
+                id: "file:src/auth/session.ts".into(),
+                kind: NodeKind::File,
+                name: "session.ts".into(),
+                path: "src/auth/session.ts".into(),
+                summary: "Issues and validates login sessions.".into(),
+            }],
+        };
+        let body = build_request_body(DEFAULT_MODEL, &prompt::for_question(&question));
+
+        let format = &body["output_config"]["format"];
+        assert_eq!(format["type"], "json_schema");
+        assert_eq!(
+            format["schema"]["required"],
+            json!(["answer", "citations"]),
+            "an answer without citations is not an answer (ADR-0009)"
+        );
+
+        let content = body["messages"][0]["content"].as_str().unwrap();
+        assert!(content.contains("where are sessions validated?"));
+        assert!(content.contains("file:src/auth/session.ts"));
+        assert!(content.contains("Issues and validates login sessions."));
+        // The map's prose and topology, never the file behind it.
+        for forbidden in ["\"edges\"", "\"source\"", "\"target\"", "\"content\""] {
+            assert!(
+                !content.contains(forbidden),
+                "a question must never carry the graph or a file: {forbidden:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_answer_and_its_citations_are_read_from_the_structured_output() {
+        let raw = json!({
+            "content": [{"type": "text", "text": r#"{
+                "answer": "Sessions are validated in session.ts.",
+                "citations": ["file:src/auth/session.ts"]
+            }"#}],
+            "stop_reason": "end_turn",
+        })
+        .to_string();
+
+        let answer = prompt::parse_ask_answer(structured_output(&raw).unwrap()).unwrap();
+        assert_eq!(answer.text, "Sessions are validated in session.ts.");
+        assert_eq!(answer.citations, vec!["file:src/auth/session.ts"]);
     }
 
     #[test]
