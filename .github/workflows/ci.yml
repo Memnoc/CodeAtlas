@@ -36,9 +36,36 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-  sealed:
-    name: Sealed build + tests (--no-default-features)
+  # The two non-default Rust configurations. Everything but the feature string
+  # and the sealed leg's probe steps was two hand-maintained copies of the same
+  # nine steps, which is how copies drift; the matrix leaves the difference
+  # where it belongs, in `features`.
+  #
+  # `name:` is set from the matrix rather than left to GitHub's default so each
+  # leg keeps the exact check name it had as a separate job, and `fail-fast` is
+  # off because these are guards — one configuration failing must not cancel
+  # the other's verdict.
+  feature-configuration:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Sealed build + tests (--no-default-features)
+            features: --no-default-features
+            # This leg alone produces ADR-0006's audit artifact and probes
+            # it — see the three steps guarded on `matrix.probe`.
+            probe: true
+          # The third configuration, and the posture ADR-0008 exists to make
+          # expressible: an organisation that forbids outbound HTTP from
+          # tooling but has already approved Claude Code. Two orthogonal
+          # features are what allow it, and until something compiles and runs
+          # it, it is a claim rather than a guarantee — a two-configuration
+          # matrix could not tell a broken combination from an unused one.
+          - name: CLI backend, no HTTP client (--no-default-features --features agent-cli)
+            features: --no-default-features --features agent-cli
+            probe: false
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -46,7 +73,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       # build.rs embeds the dashboard in every configuration (serve/share are
-      # not feature-gated), so the sealed build needs the npm toolchain too.
+      # not feature-gated), so these builds need the npm toolchain too.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -55,66 +82,39 @@ jobs:
       - name: Install dashboard toolchain (build.rs embeds the dashboard)
         run: npm ci
         working-directory: dashboard
-      # tests/sealed.rs runs `cargo tree --locked --offline` for BOTH feature
-      # configurations; fetch the full lockfile up front so the offline tree
-      # walk always has every package's manifest, even before any
-      # default-features build has run in this job.
+      # tests/sealed.rs runs `cargo tree --locked --offline` for feature
+      # configurations other than this job's own; fetch the full lockfile up
+      # front so the offline tree walk always has every package's manifest,
+      # however this leg's build resolved.
       - name: Fetch locked dependencies (offline cargo tree probes)
         run: cargo fetch --locked
-      - name: Clippy (sealed configuration)
-        run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets ${{ matrix.features }} -- -D warnings
+      - name: Build
+        run: cargo build --workspace ${{ matrix.features }}
       # The genuinely sealed artifact: no default features AND no
-      # dev-dependencies (cargo test builds always carry `test-provider`
-      # via the self dev-dependency, so no test binary is this artifact).
-      - name: Build the sealed binary (ADR-0006 audit artifact)
-        run: |
-          cargo build --workspace --no-default-features
-          cp target/debug/codeatlas "$RUNNER_TEMP/codeatlas-sealed"
-      - name: Test (sealed configuration)
-        # Includes tests/sealed.rs (dependency-tree probe) and, on this
+      # dev-dependencies (cargo test builds always carry `test-provider` via
+      # the self dev-dependency, so no test binary is this artifact). Copied
+      # aside immediately, because the control build below overwrites
+      # target/debug/codeatlas.
+      - name: Preserve the sealed binary (ADR-0006 audit artifact)
+        if: matrix.probe
+        run: cp target/debug/codeatlas "$RUNNER_TEMP/codeatlas-sealed"
+      - name: Test
+        # Includes tests/sealed.rs (dependency-tree probes) and, on this
         # runner (unprivileged user namespaces available on ubuntu-latest),
         # the netns egress suite in tests/egress.rs.
-        run: cargo test --workspace --no-default-features
-      - name: Build the default binary (byte-probe control)
+        run: cargo test --workspace ${{ matrix.features }}
+      - name: Build the default binary (probe control)
+        if: matrix.probe
         run: cargo build --workspace
-      - name: Sealed binary byte probe (no API host, no HTTP client, --enrich refuses)
+      # Byte scan (no API host, no HTTP client, no CLI program string),
+      # `--enrich` and `cli:claude` refusals, the `--provider` and `--ask`
+      # help paragraphs, and `serve --ask` refusing at startup — each with the
+      # default binary as its live control.
+      - name: Sealed binary probe (bytes, refusals, provider selection, serve --ask)
+        if: matrix.probe
         run: scripts/sealed-probe.sh "$RUNNER_TEMP/codeatlas-sealed" target/debug/codeatlas
-
-  agent-cli:
-    name: CLI backend, no HTTP client (--no-default-features --features agent-cli)
-    runs-on: ubuntu-latest
-    # The third configuration, and the posture ADR-0008 exists to make
-    # expressible: an organisation that forbids outbound HTTP from tooling but
-    # has already approved Claude Code. Two orthogonal features are what allow
-    # it, and until something compiles and runs it, it is a claim rather than a
-    # guarantee — the two-job matrix could not tell a broken combination from
-    # an unused one.
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      # build.rs embeds the dashboard in every configuration.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: dashboard/package-lock.json
-      - name: Install dashboard toolchain (build.rs embeds the dashboard)
-        run: npm ci
-        working-directory: dashboard
-      # tests/sealed.rs walks the dependency tree for all three feature
-      # configurations with `--locked --offline`; fetch the full lockfile first
-      # so every manifest is present however this job's own build resolved.
-      - name: Fetch locked dependencies (offline cargo tree probes)
-        run: cargo fetch --locked
-      - name: Clippy (agent-cli configuration)
-        run: cargo clippy --workspace --all-targets --no-default-features --features agent-cli -- -D warnings
-      - name: Build
-        run: cargo build --workspace --no-default-features --features agent-cli
-      - name: Test (agent-cli configuration)
-        run: cargo test --workspace --no-default-features --features agent-cli
 
   contract:
     name: Contract drift + TS typecheck

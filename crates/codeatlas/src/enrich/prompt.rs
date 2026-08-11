@@ -313,6 +313,51 @@ mod tests {
         assert!(!message.contains("imports"), "{message}");
     }
 
+    /// The question path's counterpart, and the reason it exists separately:
+    /// `docs/SECURITY.md` states per-node what a question carries, which is
+    /// a claim about the nodes and says nothing about what surrounds them.
+    /// The message also carries the project name and the reader's question,
+    /// and a third thing appearing beside them would make the document's
+    /// "and nothing else" false without any per-node assertion noticing.
+    #[test]
+    fn a_question_carries_the_project_the_question_and_its_nodes_and_no_more() {
+        let question = ask::Question {
+            project: "demo".into(),
+            text: "where does the program start?".into(),
+            context: vec![ask::NodeContext {
+                id: "file:src/main.ts".into(),
+                kind: NodeKind::File,
+                name: "main.ts".into(),
+                path: "src/main.ts".into(),
+                summary: "TypeScript file, 3 lines".into(),
+            }],
+        };
+
+        let message = ask_user_message(&question);
+
+        // Everything outside the node slice, asserted whole rather than by
+        // `contains`: an extra sentence carrying anything else would survive
+        // a contains-check and not this.
+        let (preamble, nodes) = message
+            .split_once("Nodes:\n")
+            .expect("the message has a nodes section");
+        assert_eq!(
+            preamble, "Project: demo\n\nQuestion: where does the program start?\n\n",
+            "the message carries the project and the question and nothing else"
+        );
+
+        let nodes: serde_json::Value = serde_json::from_str(nodes).expect("the nodes are JSON");
+        let fields: Vec<&str> = nodes[0].as_object().unwrap().keys().map(|k| &**k).collect();
+        assert_eq!(
+            fields,
+            ["id", "kind", "name", "path", "summary"],
+            "the documented set of per-node fields, and nothing else"
+        );
+        // Never the graph and never the repository (ADR-0009).
+        assert!(!message.contains("edges"), "{message}");
+        assert!(!message.contains("imports"), "{message}");
+    }
+
     #[test]
     fn answers_parse_once_and_never_get_repaired() {
         let good = serde_json::json!({

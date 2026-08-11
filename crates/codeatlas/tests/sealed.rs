@@ -88,21 +88,33 @@ fn matches_family(crate_name: &str, probe: &str) -> bool {
             .is_some_and(|r| r.starts_with('-'))
 }
 
-#[test]
-fn sealed_dependency_tree_links_no_networking_crates() {
-    let crates = dependency_tree(&["--no-default-features"]);
+/// Every crate in the tree for `feature_flags` that belongs to a
+/// [`NETWORKING_CRATES`] family — the whole of what both no-networking
+/// assertions below do, so the two differ in the flags they pass and the
+/// sentence they fail with, and in nothing that could make one of them
+/// quietly stop looking.
+///
+/// The empty-tree guard lives here too: `cargo tree` returning nothing would
+/// otherwise satisfy "no offenders" perfectly.
+fn networking_crates_linked_by(feature_flags: &[&str]) -> Vec<String> {
+    let crates = dependency_tree(feature_flags);
     assert!(
         !crates.is_empty(),
-        "cargo tree returned an empty dependency tree"
+        "cargo tree returned an empty dependency tree for {feature_flags:?}"
     );
-    let offenders: Vec<&String> = crates
-        .iter()
+    crates
+        .into_iter()
         .filter(|c| {
             NETWORKING_CRATES
                 .iter()
                 .any(|probe| matches_family(c, probe))
         })
-        .collect();
+        .collect()
+}
+
+#[test]
+fn sealed_dependency_tree_links_no_networking_crates() {
+    let offenders = networking_crates_linked_by(&["--no-default-features"]);
     assert!(
         offenders.is_empty(),
         "the sealed (--no-default-features) build links networking crates \
@@ -124,19 +136,8 @@ fn sealed_dependency_tree_links_no_networking_crates() {
 /// (`src/enrich.rs`) and the byte probe in `scripts/sealed-probe.sh`.
 #[test]
 fn the_agent_cli_configuration_links_no_networking_crates_either() {
-    let crates = dependency_tree(&["--no-default-features", "--features", "agent-cli"]);
-    assert!(
-        !crates.is_empty(),
-        "cargo tree returned an empty dependency tree"
-    );
-    let offenders: Vec<&String> = crates
-        .iter()
-        .filter(|c| {
-            NETWORKING_CRATES
-                .iter()
-                .any(|probe| matches_family(c, probe))
-        })
-        .collect();
+    let offenders =
+        networking_crates_linked_by(&["--no-default-features", "--features", "agent-cli"]);
     assert!(
         offenders.is_empty(),
         "the agent-cli configuration links networking crates, so ADR-0008's \

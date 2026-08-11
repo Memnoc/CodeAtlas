@@ -182,16 +182,21 @@ fn share_succeeds_with_no_network_beyond_loopback() {
     );
 }
 
-/// The serve script run inside the namespace: bring loopback up (the one
-/// piece of network the namespace allows), start the server, and speak
-/// HTTP/1.1 to it over bash's /dev/tcp — no curl dependency. Asserts the
-/// printed URL is loopback and /api/map answers 200 with the map.
-const SERVE_SCRIPT: &str = r#"
+/// The half of a serve script that is the same whatever is being asserted:
+/// bring loopback up (the one piece of network the namespace allows), start
+/// the server with `$SERVE_FLAGS`, wait for its URL, check that URL is
+/// loopback, and leave `$port` and `$pid` set for the tail that follows.
+///
+/// Shared rather than copied because it is setup, not assertion. Every
+/// discriminating check lives in the tails below, and a prelude that broke
+/// would fail both tests loudly ("serve printed no URL") rather than quietly
+/// making either pass.
+const SERVE_PRELUDE: &str = r#"
 set -eu
 ip_bin=$(command -v ip || true)
 [ -n "$ip_bin" ] || ip_bin=/usr/sbin/ip
 "$ip_bin" link set lo up
-"$BIN" serve --port 0 . >"$OUT" 2>/dev/null &
+"$BIN" serve --port 0 $SERVE_FLAGS . >"$OUT" 2>/dev/null &
 pid=$!
 url=""
 for _ in $(seq 1 200); do
@@ -199,13 +204,19 @@ for _ in $(seq 1 200); do
   [ -n "$url" ] && break
   sleep 0.05
 done
-[ -n "$url" ] || { echo "serve printed no URL" >&2; kill "$pid"; exit 1; }
+[ -n "$url" ] || { echo "serve $SERVE_FLAGS printed no URL" >&2; kill "$pid" 2>/dev/null; exit 1; }
 case "$url" in
   http://127.0.0.1:*) ;;
-  *) echo "serve bound a non-loopback address: $url" >&2; kill "$pid"; exit 1 ;;
+  *) echo "serve bound a non-loopback address: $url" >&2; kill "$pid" 2>/dev/null; exit 1 ;;
 esac
 port=${url##*:}
 port=${port%%/*}
+"#;
+
+/// Plain `serve`: speak HTTP/1.1 to it over bash's /dev/tcp — no curl
+/// dependency — and require `GET /` and `GET /api/map` to answer with no
+/// network in existence beyond lo.
+const SERVE_TAIL: &str = r#"
 exec 3<>"/dev/tcp/127.0.0.1/$port"
 printf 'GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n' >&3
 index=$(cat <&3)
@@ -224,11 +235,11 @@ case "$resp" in
 esac
 "#;
 
-#[test]
-fn serve_binds_loopback_and_answers_with_no_network_beyond_loopback() {
-    if netns_unavailable() {
-        return;
-    }
+/// Runs [`SERVE_PRELUDE`] plus `tail` inside a fresh network namespace,
+/// against a scanned copy of the `simple` fixture, with `serve_flags` handed
+/// to the server. The script's exit status is the assertion; its stderr is
+/// what a failure has to say.
+fn serve_in_netns(serve_flags: &str, tail: &str, envs: &[(&str, &str)], what: &str) {
     let repo = materialize("simple");
     // The map can exist before the namespace does; serve is what is under
     // egress observation here (scan has its own netns test).
@@ -239,49 +250,44 @@ fn serve_binds_loopback_and_answers_with_no_network_beyond_loopback() {
         .assert()
         .success();
 
-    let out_file = repo.path().join("serve-stdout.txt");
-    let output = Command::new("unshare")
-        .args(["-r", "-n", "--", "bash", "-c", SERVE_SCRIPT])
+    let mut cmd = Command::new("unshare");
+    cmd.args(["-r", "-n", "--", "bash", "-c"])
+        .arg(format!("{SERVE_PRELUDE}{tail}"))
         .current_dir(repo.path())
         .env("BIN", env!("CARGO_BIN_EXE_codeatlas"))
-        .env("OUT", &out_file)
-        .output()
-        .expect("unshare runs");
+        .env("OUT", repo.path().join("serve-stdout.txt"))
+        .env("SERVE_FLAGS", serve_flags);
+    for (key, value) in envs {
+        cmd.env(key, value);
+    }
+    let output = cmd.output().expect("unshare runs");
     assert!(
         output.status.success(),
-        "serve-in-netns script failed: {}",
+        "{what} failed inside the network namespace: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
 
-/// The `serve --ask` script: the same namespace, the same server, two
-/// requests. `POST /api/ask` must fail with no route off the host, and
-/// `GET /api/map` immediately afterwards must succeed — the live control
-/// without which a 502 would be evidence of nothing (a server that never
-/// started, a port never bound, a namespace that broke loopback would all
-/// produce one just as readily). The control also doubles as story 14's rule
-/// for a route: a backend that cannot answer must not take the server down.
+#[test]
+fn serve_binds_loopback_and_answers_with_no_network_beyond_loopback() {
+    if netns_unavailable() {
+        return;
+    }
+    serve_in_netns("", SERVE_TAIL, &[], "the serve-in-netns script");
+}
+
+/// The `serve --ask` tail: the same namespace, the same server, two requests.
+/// `POST /api/ask` must fail with no route off the host, and `GET /api/map`
+/// immediately afterwards must succeed — the live control without which a 502
+/// would be evidence of nothing (a server that never started, a port never
+/// bound, a namespace that broke loopback would all produce one just as
+/// readily). The control also doubles as story 14's rule for a route: a
+/// backend that cannot answer must not take the server down.
 ///
 /// Gated with its test: the only backend safe to point at here is the API
 /// one, so a build without `network` has nothing to run this against.
 #[cfg(feature = "network")]
-const SERVE_ASK_SCRIPT: &str = r#"
-set -eu
-ip_bin=$(command -v ip || true)
-[ -n "$ip_bin" ] || ip_bin=/usr/sbin/ip
-"$ip_bin" link set lo up
-"$BIN" serve --port 0 --ask . >"$OUT" 2>/dev/null &
-pid=$!
-url=""
-for _ in $(seq 1 200); do
-  url=$(grep -o 'http://[0-9.:]*' "$OUT" | head -n1 || true)
-  [ -n "$url" ] && break
-  sleep 0.05
-done
-[ -n "$url" ] || { echo "serve --ask printed no URL" >&2; kill "$pid" 2>/dev/null; exit 1; }
-port=${url##*:}
-port=${port%%/*}
-
+const SERVE_ASK_TAIL: &str = r#"
 body='{"question":"where does the program start?"}'
 exec 3<>"/dev/tcp/127.0.0.1/$port"
 printf 'POST /api/ask HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "${#body}" "$body" >&3
@@ -323,31 +329,17 @@ fn serve_ask_needs_egress_and_says_so_without_taking_the_server_down() {
     if netns_unavailable() {
         return;
     }
-    let repo = materialize("simple");
-    assert_cmd::Command::cargo_bin("codeatlas")
-        .unwrap()
-        .arg("scan")
-        .current_dir(repo.path())
-        .assert()
-        .success();
-
-    let out_file = repo.path().join("serve-ask-stdout.txt");
-    let output = Command::new("unshare")
-        .args(["-r", "-n", "--", "bash", "-c", SERVE_ASK_SCRIPT])
-        .current_dir(repo.path())
-        .env("BIN", env!("CARGO_BIN_EXE_codeatlas"))
-        .env("OUT", &out_file)
-        // The test binary carries test-provider, which removes the default
-        // provider; name the real Claude provider explicitly, exactly as the
-        // `--enrich` counter-test below does.
-        .env("CODEATLAS_ENRICH_PROVIDER", "claude")
-        .env("ANTHROPIC_API_KEY", "dummy-key-for-egress-test")
-        .output()
-        .expect("unshare runs");
-    assert!(
-        output.status.success(),
-        "serve --ask-in-netns script failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+    serve_in_netns(
+        "--ask",
+        SERVE_ASK_TAIL,
+        &[
+            // The test binary carries test-provider, which removes the
+            // default provider; name the real Claude provider explicitly,
+            // exactly as the `--enrich` counter-test below does.
+            ("CODEATLAS_ENRICH_PROVIDER", "claude"),
+            ("ANTHROPIC_API_KEY", "dummy-key-for-egress-test"),
+        ],
+        "the serve --ask-in-netns script",
     );
 }
 

@@ -67,10 +67,10 @@ paths to fail in the same conditions:
 (`crates/codeatlas/src/serve.rs`); there is no `--host` flag, so the
 listener cannot be pointed at a routable interface.
 
-**CI:** the `rust` job (default features), the `sealed` job
-(`--no-default-features`) and the `agent-cli` job all run this suite on
-`ubuntu-latest`. The counter-tests need the API backend, so they compile only
-under `network`.
+**CI:** the `rust` job (default features) and both legs of the
+`feature-configuration` matrix — sealed, and `agent-cli` without `network` —
+run this suite on `ubuntu-latest`. The counter-tests need the API backend, so
+they compile only under `network`.
 
 ### 2. There are exactly two ways to reach a model, each behind its own feature
 
@@ -83,12 +83,21 @@ transport cannot be steered elsewhere either.
 **The subprocess route.** The second way to reach a model links no HTTP
 client at all: it spawns the reader's already-authenticated `claude` CLI
 ([ADR-0008], `crates/codeatlas/src/enrich/agent_cli.rs`), so CodeAtlas never
-handles a credential. It is the only program CodeAtlas will run for this
-purpose — `agent_cli::PROGRAM`, not configurable, and a `cli:` spec naming
-anything else is refused by name. The child is a completion and not an agent:
-no tools, no MCP servers, no hooks, a fresh empty working directory outside
-the repository, and an allowlisted environment (`PATH`, `HOME`, `XDG_*`)
-that deliberately excludes `ANTHROPIC_API_KEY`.
+handles a credential. It is the only program a *shipped* binary will run for
+this purpose — `agent_cli::PROGRAM`, not configurable there, and a `cli:` spec
+naming anything else is refused by name. One spec does run an arbitrary
+program, and it is named here rather than left for a reader to find:
+`cli-exec:<path>` (`crates/codeatlas/src/enrich.rs`) spawns whatever it is
+pointed at, and compiles only under the `test-provider` feature — seam 3's
+injection point, so the spawn can be asserted against a stand-in executable
+without spending the reader's subscription. `test-provider` is not in the
+default feature set and is reachable only through the crate's own
+dev-dependency on itself, so no released build carries it.
+
+The child is a completion and not an agent: no tools, no MCP servers, no
+hooks, a fresh empty working directory outside the repository, and an
+allowlisted environment (`PATH`, `HOME`, `XDG_*`) that deliberately excludes
+`ANTHROPIC_API_KEY`.
 
 This is the clause [ADR-0006] had to correct on 2026-08-11. Its Decision once
 named the enrichment provider as the only network code, which was a true
@@ -138,6 +147,13 @@ summary the map already holds** — mechanical or enriched — and nothing else.
 Never file contents: the selection is a projection of the graph, and the
 module that performs it opens no file and takes no repository root.
 
+Around that slice the message carries two further things and no others: the
+**project name**, as the enrichment message does, and the **reader's own
+question**, which is the point of the request. Both are stated here because
+"per node, and nothing else" is a claim about the nodes and would otherwise
+read as a claim about the whole message
+(`crates/codeatlas/src/enrich/prompt.rs`, `ask_user_message`).
+
 Three limits bound it, all in `crates/codeatlas/src/enrich/ask.rs`:
 
 - **`ask::CONTEXT_NODES`** — the most nodes that may accompany a question.
@@ -161,6 +177,10 @@ list above, asserted as a whole value rather than field by field),
 `the_provider_never_sees_more_than_the_bound` (at the provider seam, on what
 a backend was actually handed), and
 `a_blank_or_oversized_question_is_refused_before_any_provider_is_asked`.
+`a_question_carries_the_project_the_question_and_its_nodes_and_no_more`
+(`crates/codeatlas/src/enrich/prompt.rs`) holds the paragraph above it — the
+message *around* the nodes, asserted whole rather than by substring, because
+a per-node claim cannot see a third thing added beside them.
 `a_question_reaches_a_spawned_cli_locked_down_and_correctly_framed`
 (`crates/codeatlas/tests/serve.rs`) carries the same claim end to end, from
 an HTTP request to the argv a real child received.
@@ -202,10 +222,26 @@ backend were compiled in — a guard that cannot fail.
 
 - `scripts/sealed-probe.sh` — byte-scans the genuinely sealed binary for the
   `claude` program string and finds none, with the default binary as a live
-  control that must contain it. Only the `agent-cli` feature emits that
-  string (`agent_cli::PROGRAM` and `SPEC`, and the help text that renders
-  them). Measured on release builds of all three configurations: 0
-  occurrences sealed, 6 default, 2 with `agent-cli` and no `network`
+  control. Counted with `grep -c -a` on release builds of all four
+  configurations:
+
+  | build | `claude` | `api.anthropic.com` | `ureq` |
+  | --- | --- | --- | --- |
+  | sealed (`--no-default-features`) | 0 | 0 | 0 |
+  | `network` only | 4 | 1 | 22 |
+  | `agent-cli` only | 2 | 0 | 0 |
+  | default (both features) | 6 | 1 | 25 |
+
+  `claude` is **not** an `agent-cli`-only string, and the table is its own
+  disproof: 6 is 4 + 2. Under `agent-cli` it is `agent_cli::PROGRAM` and
+  `SPEC` plus the help that names them; under `network` it is
+  `DEFAULT_MODEL = "claude-opus-5"`
+  (`crates/codeatlas/src/enrich/claude.rs`) and the `"claude"` spec literals
+  (`crates/codeatlas/src/enrich.rs`). That breadth is right for the sealed
+  *subject*, which must contain neither route — but it is useless in the
+  *control*, so the control asks for `cli:claude` (`agent_cli::SPEC`), which
+  only `agent-cli` emits and which contains `claude`: one check proving the
+  scan reads real data and the backend it scans for is present
 - the same script's behavioural half: the sealed binary answers
   `--provider cli:claude` with `unknown enrichment provider`, meaning it does
   not know the spec at all rather than declining to run it. Its control is
@@ -260,8 +296,8 @@ The artifact also self-discloses which fields were redacted and how often.
 | Job | What it gates |
 | --- | --- |
 | `rust` | fmt, clippy, build, full test suite with default features — includes the egress netns suite, the redaction exhaustiveness gate, and the dependency-tree probes |
-| `sealed` | clippy, build, and the full test suite `--no-default-features`, then `scripts/sealed-probe.sh` against the genuinely sealed binary (dev-dep-free) with the default binary as probe control |
-| `agent-cli` | clippy, build, and the full test suite `--no-default-features --features agent-cli` — the third configuration, and the one [ADR-0008] exists to make expressible. Untested it is a claim rather than a guarantee, and a two-job matrix cannot tell a broken feature combination from an unused one |
+| `feature-configuration`, sealed leg | clippy, build, and the full test suite `--no-default-features`, then `scripts/sealed-probe.sh` against the genuinely sealed binary (dev-dep-free) with the default binary as probe control |
+| `feature-configuration`, `agent-cli` leg | clippy, build, and the full test suite `--no-default-features --features agent-cli` — the third configuration, and the one [ADR-0008] exists to make expressible. Untested it is a claim rather than a guarantee, and two configurations could not tell a broken feature combination from an unused one. This leg runs no byte probe; see the limitations below |
 | `contract` | map contract drift: regenerates the JSON Schema and TypeScript types and fails on any diff against the committed artifacts |
 | `dashboard` | dashboard tests (including the zero-egress scan of the production build) and production build |
 
@@ -276,14 +312,29 @@ The artifact also self-discloses which fields were redacted and how often.
   two it has no dependency-tree probe standing behind it, because a
   subprocess adds no dependency, so for that route the byte scan and the
   behavioural refusal are the whole of the evidence.
-- **The `claude` probe's control is broader than the thing it controls.**
-  The default binary contains `claude` for several reasons — the CLI
-  backend's program name, and the API backend's default model
-  `claude-opus-5`. So the control proves the byte scan reads real data, which
-  is its job, but it would still pass if the CLI backend alone were removed
-  from the default feature set. What discriminates is the pair of
-  configurations: the `agent-cli`-without-`network` build carries the string
-  and no HTTP client, the sealed build carries neither.
+- **The `claude` byte scan is broader than the CLI backend.** The default
+  binary contains `claude` for several reasons — the CLI backend's program
+  name and spec, and the API backend's default model `claude-opus-5` with the
+  `"claude"` spec literals beside it, which is `network`'s four occurrences in
+  the table above. That breadth is correct for the sealed subject and wrong
+  for a control, so the control does not use it: section 0 of
+  `scripts/sealed-probe.sh` requires the control binary to contain
+  `cli:claude`, which only `agent-cli` emits. Section 2b is the second,
+  differently-shaped control on the same question — the control binary must
+  refuse `--provider cli:nonsense` *by naming* `cli:claude`, which only a
+  build holding the backend can do. Either one fails if `agent-cli` is
+  dropped from the default feature set.
+- **No CI job byte-scans the `agent-cli`-without-`network` binary.** The
+  `agent-cli` leg of the `feature-configuration` matrix runs clippy, build and
+  test in that configuration and nothing else; `scripts/sealed-probe.sh` is
+  invoked only by the sealed leg, and only ever against the sealed binary
+  with the *default* binary as its control — the control half asks for
+  `api.anthropic.com` and `ureq`, which the third configuration is defined by
+  not having. So the byte-level evidence for that configuration is the
+  measurement in the table above, taken by hand and recorded, not a committed
+  check. What CI does enforce there is the dependency tree
+  (`the_agent_cli_configuration_links_no_networking_crates_either`, which
+  runs in every configuration) and the whole test suite.
 - **Netns skip conditions.** The egress tests need unprivileged user
   namespaces (`unshare -r -n`). Where that is unavailable — common inside
   containers and sandboxes — they SKIP with an explicit message rather than

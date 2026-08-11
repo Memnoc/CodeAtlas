@@ -5,9 +5,10 @@ Map a codebase: its structure, and the relationships between its parts.
 CodeAtlas scans a repository and emits a knowledge graph — files, functions,
 classes, and the import/export/call edges between them — then renders it as an
 interactive map you can search, walk, and share. It runs offline by default:
-scanning, serving, diffing, and sharing never open a non-loopback socket
-unless you ask for a model by name, and a sealed build exists in which egress
-is not a forbidden action but a compile error.
+scanning, serving, diffing, and sharing never open a non-loopback socket. Two
+flags are the only exceptions — `scan --enrich` and `serve --ask` — and a
+sealed build exists in which egress is not a forbidden action but a compile
+error.
 
 Scanning CodeAtlas itself produces 598 nodes and 1096 edges in about 60 ms.
 

@@ -181,3 +181,134 @@ notice if one drifts. A doc-scanning test would be a new pattern in this
 repository — no test reads a Markdown file today except as scan fixture input
 — and the honest place for that decision is the ticket that wants it, not this
 one.
+
+## What `/crosscheck` found
+
+**Two of the documents said something false about the very string the ticket
+exists to look for.** `scripts/sealed-probe.sh` and `docs/SECURITY.md`
+guarantee 3 both claimed that only the `agent-cli` feature emits `claude`,
+naming `agent_cli::PROGRAM`, `SPEC` and the help that renders them. The
+`network` feature emits it four times on its own — `DEFAULT_MODEL =
+"claude-opus-5"` in `src/enrich/claude.rs` and the `"claude"` spec literals in
+`src/enrich.rs` — and each document printed the disproof one line below the
+claim: 6 in the default build is 4 + 2, not 2. Both now carry the four-way
+measurement rather than the three-way one, `grep -c -a` on release builds:
+
+| build | `claude` | `api.anthropic.com` | `ureq` |
+| --- | --- | --- | --- |
+| sealed (`--no-default-features`) | 0 | 0 | 0 |
+| `network` only | 4 | 1 | 22 |
+| `agent-cli` only | 2 | 0 | 0 |
+| default (both) | 6 | 1 | 25 |
+
+The `network`-only row is the one the three-configuration table could not
+show, and it is the whole of the correction. Removing false security claims is
+what this ticket is for, so this came first.
+
+**The byte probe's section-0 control passed for a reason that was not the
+reason it gave.** It required the control binary to contain `claude` and
+reported that as "the CLI program name", which `claude-opus-5` satisfies by
+itself; a default build that had lost `agent-cli` entirely would still have
+passed it. The control needle is now `cli:claude` — `agent_cli::SPEC`, which
+only that feature puts in a binary, and which contains `claude` as a
+substring, so one check proves the section-1 scan reads real data *and* proves
+the backend it scans for is present. `ureq` joined the same loop, because the
+comment above it promised the control covered every string the sealed binary
+must lack and it covered two of three. Section 1 keeps the broad `claude`
+needle deliberately: the sealed subject must contain neither route, so a
+needle matching both is the right one there.
+
+**The recorded limitation named evidence that does not exist.**
+`docs/SECURITY.md` said what discriminates a dropped `agent-cli` is the pair
+of configurations, the `agent-cli`-without-`network` build carrying the string
+and no HTTP client. Nothing byte-scans that binary: its CI leg runs clippy,
+build and test and never invokes the probe script, whose control half asks for
+`api.anthropic.com` and `ureq` — precisely what that configuration is defined
+by not having. What actually catches the drop is section 0's new needle and
+section 2b's `cli:nonsense` control, and the limitation now names those and
+states plainly that the third configuration's byte-level evidence is a
+recorded hand measurement rather than a committed check.
+
+**Guarantee 2 said the spawned program is "not configurable".** True of any
+shipped binary and false of the repository, because `cli-exec:<path>` runs
+whatever it is pointed at under `test-provider`. That seam is now named in the
+document beside the guarantee it qualifies, with the reason it exists and the
+reason no released build carries it, rather than left for a reader to find in
+`src/enrich.rs` and wonder about.
+
+**`README.md`'s opening sentence made the opt-in the model name.** It promised
+no non-loopback socket "unless you ask for a model by name", but a default
+build reaches the API from `scan --enrich` with no `--provider` at all —
+`default_provider` picks one, which is right for a shipped binary and makes
+the sentence wrong. The opt-in is the flag, so the sentence now names the two
+flags.
+
+**The question-path paragraph was accurate per node and incomplete as a
+message.** It listed id/kind/name/path/summary "and nothing else", which is a
+claim about the nodes; the message also carries the project name and the
+reader's question. Both are now stated. Because the document holds every claim
+to a committed test and none covered the message *around* the nodes,
+`a_question_carries_the_project_the_question_and_its_nodes_and_no_more` was
+added beside the enrichment path's equivalent in `src/enrich/prompt.rs`. It
+asserts the preamble whole rather than by `contains`, since a third section
+appearing beside the project and the question is exactly what a substring
+check cannot see.
+
+**A CI step name described a script two tickets out of date.** It still said
+"no API host, no HTTP client, `--enrich` refuses" for a script that also scans
+for `claude`, exercises `cli:claude` and `cli:nonsense`, reads two help
+paragraphs and checks `serve --ask`.
+
+### The duplication, and what was left alone
+
+The `sealed` and `agent-cli` jobs were two hand-maintained copies of nine
+steps differing in a feature string, which is how copies drift. They are one
+`feature-configuration` matrix; `name:` is set from the matrix rather than
+left to GitHub's default so each leg keeps the exact check name it had as a
+job, and `fail-fast` is off because one configuration failing must not cancel
+the other's verdict. The three probe steps are guarded on `matrix.probe`.
+
+`tests/sealed.rs`'s two no-networking assertions shared a filter and an
+empty-tree guard by copy; they now share `networking_crates_linked_by` and
+differ in the flags they pass and the sentence they fail with. The empty-tree
+guard moved into the helper, where it belongs: `cargo tree` returning nothing
+satisfies "no offenders" perfectly.
+
+`tests/egress.rs` had two serve scripts whose first twenty lines were the
+same. The setup half is `SERVE_PRELUDE` and the two assertion halves stay
+verbatim literals — `SERVE_TAIL` and `SERVE_ASK_TAIL` — because the setup is
+where nothing discriminates and the tails are where everything does. The
+shared prelude also gained the plain test's loopback-address check for the ask
+test, which had not had it. The two near-identical Rust wrappers became
+`serve_in_netns`.
+
+`scripts/sealed-probe.sh` built its one-file repository three times; it is
+`fixture_repo`, which also carries the reason each check needs its own — a map
+with every slot filled reports "nothing to enrich" and returns before a
+provider is resolved.
+
+### Ten tampers
+
+Every guard touched was watched failing. The probe's section 0 was run with
+the `network`-only binary as control (*lacks 'cli:claude' — the byte-probe is
+vacuous*, which is the same invocation that used to reach 2b before failing)
+and with the `agent-cli`-only binary as control (*lacks
+'api.anthropic.com'*). Section 1 was run with the `agent-cli`-only binary as
+the sealed subject and tripped on `claude` alone, the other two needles being
+absent there. `fixture_repo` was stripped of its `mkdir` and the script died
+on the `printf`, which is the proof it is load-bearing rather than decorative.
+
+Both callers of `networking_crates_linked_by` were pointed at the default
+tree in turn and each named all nine offenders under its own message. The
+egress prelude's loopback check was made to demand `http://10.0.0.1` and
+*both* serve tests failed with *serve bound a non-loopback address*, which is
+what proves one shared prelude still guards two tests; `SERVE_TAIL`'s first
+request was pointed at a route that 404s; the ask test's flags were emptied so
+the POST landed on the 405 branch; and its control was pointed at
+`/api/nope`, producing *the control failed … so the 502 above proves
+nothing*. The new prompt test was tampered twice — a sixth field on a node,
+and a `Repo root:` line beside the project — and caught each.
+
+Test counts moved 176 → 177 default and 166 → 167 `agent-cli`, the new prompt
+test in both; sealed stays 148, because `prompt` compiles only where a backend
+that needs it does.

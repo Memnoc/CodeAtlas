@@ -22,14 +22,32 @@ fail() {
   exit 1
 }
 
+# A throwaway one-file repository under $tmp, by name. Every caller needs its
+# own: a map with every slot already filled reports "nothing to enrich" and
+# returns before a provider is resolved at all, so a second check reusing the
+# first one's repository would pass without selecting anything.
+fixture_repo() {
+  mkdir "$tmp/$1"
+  printf 'export const answer = 42;\n' > "$tmp/$1/x.ts"
+}
+
 # --- 0. Probe control: the default binary must contain every string the
 # sealed binary must lack, or the byte-scan below proves nothing.
+#
+# The third needle is `cli:claude` and not the bare `claude` that section 1
+# scans for, because bare `claude` does not discriminate: BOTH features emit
+# it (see the table in section 1), so a control satisfied by `claude` alone
+# would still pass against a build that had lost the CLI backend entirely —
+# `claude-opus-5` on its own satisfies it. `cli:claude` is `agent_cli::SPEC`,
+# which only the `agent-cli` feature puts in a binary, and it contains
+# `claude` as a substring: finding it proves the section-1 scan reads real
+# data *and* proves the backend it is scanning for is present, in one check.
 if [ -n "$control" ]; then
-  for needle in "api.anthropic.com" "claude"; do
+  for needle in "api.anthropic.com" "ureq" "cli:claude"; do
     grep -q -a "$needle" "$control" \
       || fail "control binary $control lacks '$needle' — the byte-probe is vacuous"
   done
-  echo "ok: control binary contains the API host and the CLI program name (probe is live)"
+  echo "ok: control binary contains the API host, the HTTP client and the CLI backend's own spec (probe is live)"
 fi
 
 # --- 1. Byte probe: the sealed binary must contain no string belonging to
@@ -42,10 +60,22 @@ fi
 # `claude` is the third string and the one ADR-0008 made necessary: a
 # subprocess links no crate, so `tests/sealed.rs`'s dependency-tree probe is
 # blind to that backend in both directions. The program name is what is left
-# to look for, and only the `agent-cli` feature emits it — `agent_cli::PROGRAM`
-# and `SPEC`, plus the model help that names them. Measured on release builds
-# of all three configurations: 0 occurrences sealed, 6 default, 2 with
-# `agent-cli` and no `network`.
+# to look for, and it is deliberately the broad needle — both features emit
+# it, and a sealed binary carrying either route is a failure here. Counted
+# with `grep -c -a` on release builds of all four configurations:
+#
+#   build                             claude  api.anthropic.com  ureq
+#   sealed (--no-default-features)         0                  0     0
+#   network only                           4                  1    22
+#   agent-cli only                         2                  0     0
+#   default (both features)                6                  1    25
+#
+# The `network only` row is the one to read twice: 6 is 4 + 2, not 2. Under
+# `agent-cli` the string is `agent_cli::PROGRAM` and `SPEC` plus the help
+# that names them; under `network` it is `DEFAULT_MODEL = "claude-opus-5"`
+# (src/enrich/claude.rs) and the `"claude"` spec literals (src/enrich.rs),
+# which have nothing to do with the CLI backend. That is why section 0's
+# control asks for `cli:claude` instead.
 for needle in "api.anthropic.com" "ureq" "claude"; do
   if grep -q -a "$needle" "$sealed"; then
     fail "sealed binary contains '$needle'"
@@ -57,8 +87,7 @@ echo "ok: sealed binary contains no API host, no HTTP client and no CLI program 
 # build's own message while still writing the structural map (story 14).
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-mkdir "$tmp/repo"
-printf 'export const answer = 42;\n' > "$tmp/repo/x.ts"
+fixture_repo repo
 
 set +e
 out="$("$sealed" scan --enrich "$tmp/repo" 2>&1)"
@@ -85,11 +114,8 @@ echo "ok: sealed --enrich refuses with the sealed message and the map survives"
 # binary passed by mistake as "$sealed" cannot spawn the reader's real CLI
 # from inside an audit script.
 #
-# A fresh repository, because a map with every slot already filled reports
-# "nothing to enrich" and returns before a provider is resolved at all — which
-# would make both checks below pass without selecting anything.
-mkdir "$tmp/repo2"
-printf 'export const answer = 42;\n' > "$tmp/repo2/x.ts"
+# A fresh repository, for the reason `fixture_repo` records.
+fixture_repo repo2
 
 set +e
 out="$("$sealed" scan --enrich --provider cli:claude "$tmp/repo2" 2>&1)"
@@ -114,8 +140,7 @@ echo "ok: sealed build does not recognise cli:claude, and the map survives"
 # evidence of an absent backend rather than of a binary that refuses
 # everything.
 if [ -n "$control" ]; then
-  mkdir "$tmp/repo3"
-  printf 'export const answer = 42;\n' > "$tmp/repo3/x.ts"
+  fixture_repo repo3
   set +e
   out="$("$control" scan --enrich --provider cli:nonsense "$tmp/repo3" 2>&1)"
   set -e
