@@ -51,11 +51,13 @@ new probe.
 - [x] Every row either passes, or is **filed as its own ticket** and listed
       here with its number. This ticket is complete when the table is complete
       and every failing row has somewhere to live — not when every convention
-      in six languages works. Two cells fail — Go's two qualified-call
-      conventions — and both are **ticket 37**. The table asserts the gap is
-      still there, so closing 37 fails this file rather than letting the table
-      go stale, and it asserts the ticket exists on disk, so the hatch cannot
-      be used without using it.
+      in six languages works. Six Go cells are **ticket 37** after
+      `/crosscheck`: three filed outright (both qualified-call rows and the
+      unqualified-call row, which is a dot import) and three vacuous (the
+      whole-module row and the two non-edge rows, which hold but cannot fail
+      until 37 lands). The table asserts the gap is still there, so closing 37
+      fails this file rather than letting the table go stale, and it asserts
+      the ticket exists on disk, so the hatch cannot be used without using it.
 
 ## Notes
 
@@ -110,6 +112,12 @@ in `crates/codeatlas/tests/conventions.rs`; this is what it renders.
 | NON-EDGE: an import resolving to no file in the repo | pass | pass | pass | pass | pass | pass |
 
 59 pass, 23 not-applicable, 2 filed.
+
+**Superseded.** `/crosscheck` reclassified four of these cells and the counts
+with them; everything below this line in this section is the record of what
+the original work found, not of what the table says now. The current table,
+and the mutations that prove the amended cells can fail, are at the end of
+this file.
 
 ### The rows that failed, and where they live
 
@@ -228,3 +236,135 @@ so the shape cannot rot. And a `Filed` cell asserts its ticket **exists on
 disk** and that the gap is **still present**, so the escape hatch is a
 commitment in both directions: a row cannot be filed against a ticket nobody
 wrote, and a fix cannot land while the table still calls the row broken.
+
+## What `/crosscheck` found
+
+**Two of the eighteen non-edge cells rendered as `pass` while asserting
+nothing, and the ticket said so only in prose.** `go.rs` keeps a call only
+when the callee node is an `identifier`, so `util.Format(…)` — a
+`selector_expression` — records no call at all, and the two Go non-edge cells
+forbade an edge nothing in the system could produce. The section above admits
+that. The table is the deliverable, though, and a reader looking at the table
+saw green beside sixteen cells that mean something. Prose in the ticket is not
+a substitute for the cell being honest.
+
+`Verdict` gained a fourth arm, `Vacuous`, for exactly this: the convention
+exists in this language, the guard really does hold, and nothing could make it
+fail. It carries the guard — still asserted, because a cell that runs nothing
+is worth less than one that runs something unfalsifiable — plus
+`vacuous_until`, an expectation that does *not* hold today and whose arrival
+is what gives the row something to say. The runner asserts both directions, so
+the day ticket 37 records selector calls, all three vacuous cells fail with
+*this cell is no longer vacuous — ticket 37 looks to have landed* rather than
+sliding into a silent pass. That is the property the escape hatch already had
+for `Filed` cells, extended to the cells that were quietly worse than filed.
+
+**The value-receiver decoy was unreachable, and fixing the verdict would not
+have fixed that.** `goproj/value.go` contained no import statement, so even
+after ticket 37 binds package names that file's module map would be empty and
+the decoy would stay out of reach. It now imports the `util` package and then
+shadows the name with the `Logger` parameter, which is the shape that actually
+tempts a resolver: the name really is bound to a module, and only the call
+site's shadowing says otherwise. Measured against a sketch of ticket 37 the
+guard fabricates `function:value.go:onValue -> function:util/util.go:Format`,
+which it could not have done before. The external-package decoy needs the
+sketch plus an unresolved-receiver fallback; with both, it fabricates the same
+edge. Ticket 37 carries the measurements.
+
+**Go's unqualified-call cell was not-applicable on a false reason.** It said a
+package member is always written package-qualified. `import . "pkg"` binds
+every exported name unqualified and is legal Go, which the file already knew
+two rows above. A not-applicable cell contradicted by its own table is a
+wrongly classified cell, not an inapplicable one, so it is now filed against
+ticket 37 on a new fixture, `goproj/dot.go`. Ticket 37's dot-import criterion
+names the cell and says what closing it owes: if the decision is to decline
+dot imports, the decision goes in the cell's text and the cell is
+reclassified — a row cannot stay filed against a closed ticket.
+
+**Go's whole-module import passed on the plain-import cell's evidence.** The
+two cells asserted the same edge byte for byte, so no mutation could fail one
+and not the other, and the table rendered two independent passes for one
+piece of evidence. Go has one import statement and it genuinely is both forms,
+so the row is not not-applicable; what separates it from the plain form is the
+qualifier binding, which is a qualified call, which is ticket 37. It is
+`Vacuous` on the same grounds as the two non-edge cells.
+
+**Rust's named-import cell did not test "named".** It asserted only
+`imports file:tests/it.rs -> file:src/util.rs`, which `use root_lib::util;`
+produces just as well — the member form and the module form were
+indistinguishable. `rustroot/tests/it.rs` now binds `helper()` to a local
+before asserting on it, because a call written inside `assert_eq!` sits in a
+macro token tree and is recorded as no call at all, and the cell asserts that
+call edge. Teaching `rust.rs` to bind no names now fails the row; before, it
+did not.
+
+**`cargo test` hard-panicked on a directory this repo documents as
+disposable.** The shape test read `.scratch/codeatlas-v1` with an
+`unwrap_or_else` panic, and CLAUDE.md says that directory goes away once the
+feature ships — so the day someone tidies up, the suite reddens and blames a
+missing scratch directory rather than a code fault. An absent directory is now
+a shipped repository and passes. A directory that is *there* and lacks the
+named ticket still fails, which is the half worth keeping: while the tickets
+exist, the escape hatch has to point at one.
+
+**`has_edge` was a third copy.** `tests/common/mod.rs` exists to stop exactly
+that, and says why. It is hoisted; `scan.rs` and `conventions.rs` share it.
+
+**`external_go_modules_with_colliding_package_suffixes_produce_no_edge` is
+retired.** Both halves of it are in the table strictly more strongly: the Go
+resolves-nowhere cell pins the *whole set* of import edges out of
+`external.go` as empty and preflights `util/util.go` and `util/extra.go`, so
+the collision stays a temptation rather than becoming true by the decoy
+disappearing, and the plain-import and package-import cells pin `main.go` the
+same way. A comment where it stood records the redirect. The other two
+consolidation candidates the ticket predicted are **kept**, with a doc comment
+each saying why: the Rust one asserts `self::util::helper()` and a whole-source
+negative the table has no row for, and the Python one asserts namespace
+packages, script-style imports and the bind-module-and-symbol statement. An
+original that asserts more than the cell is not a duplicate.
+
+**Two nits.** The `unreachable!` in `Cell::check` said "filtered out above" and
+nothing filters — the early return on `fixture()` being `None` is what makes it
+unreachable, and it says so. And `map_of` held the maps mutex across
+`materialize` and a `cargo_bin` subprocess spawn, serialising every fixture in
+the binary behind whichever one a test asked for first; the global lock now
+covers only handing out a per-fixture `OnceLock`.
+
+### The corrected table
+
+`pass` / `n/a` / `ticket NN` / `vacuous NN`, rows × languages.
+
+| Convention | TypeScript | Rust | Python | Go | C | C++ |
+|---|---|---|---|---|---|---|
+| a plain module import | pass | pass | pass | pass | pass | pass |
+| a named/member import | pass | pass | pass | n/a | n/a | n/a |
+| an aliased import | pass | pass | pass | pass | n/a | n/a |
+| a namespace or whole-module import | pass | pass | pass | **vacuous 37** | n/a | n/a |
+| a relative import | pass | pass | pass | n/a | pass | pass |
+| a package/directory import through an initialiser or index | pass | pass | pass | pass | n/a | n/a |
+| a header/source pairing (C/C++ only) | n/a | n/a | n/a | n/a | pass | pass |
+| an unqualified call to an imported name | pass | pass | pass | **37** | pass | pass |
+| a qualified call through an imported module | pass | pass | pass | **37** | n/a | n/a |
+| a qualified call through an aliased module | pass | pass | pass | **37** | n/a | n/a |
+| a qualified call through a nested module path | n/a | pass | pass | n/a | n/a | n/a |
+| NON-EDGE: receiver is a value, not a module | pass | pass | pass | **vacuous 37** | pass | pass |
+| NON-EDGE: a call into a package outside the repo | pass | pass | pass | **vacuous 37** | pass | pass |
+| NON-EDGE: an import resolving to no file in the repo | pass | pass | pass | pass | pass | pass |
+
+56 pass, 22 not-applicable, 3 filed, 3 vacuous. Every one of the six Go cells
+that is not a plain pass is ticket 37, which is the honest shape of it: Go's
+package qualifier is one missing binding, and it is load-bearing for six of
+the fourteen rows.
+
+### How the amended cells were proved able to fail
+
+| Mutation | What it printed |
+|---|---|
+| `rust.rs`: a `use` binds no names | Rust named import — *no calls edge `function:tests/it.rs:helps -> function:src/util.rs:helper`*, with the import edge still present, which is the discrimination the cell was missing |
+| `go.rs`: bind package qualifiers and record selector calls (a ticket-37 sketch) | both filed qualified-call cells — *this row now PASSES*; Go whole-module and Go outside-package — *this cell is no longer vacuous*; Go receiver-is-a-value — *fabricated calls edge `function:value.go:onValue -> function:util/util.go:Format`: the resolver reached the decoy* |
+| the sketch **plus** an unresolved receiver falling back to any file exporting the callee | Go outside-package guard — *fabricated calls edge `function:external.go:external -> function:util/util.go:Format`* |
+| an unresolved *callee* falls back to any file exporting it | Go unqualified call — *this row now PASSES* |
+| `go.rs`: the import statement makes no edge | Go whole-module guard — *no imports edge `file:main.go -> file:util/util.go`* |
+| `goproj/dot.go`: the decoy is renamed | the preflight — *the fixture no longer holds `function:dot.go:viaDot`, so this cell asserts nothing* |
+| ticket 37 removed from `.scratch/codeatlas-v1` | the shape test — *waits on ticket 37, and no such ticket exists in …* |
+| the whole of `.scratch/codeatlas-v1` moved aside | nothing: 15 passed, which is the point |

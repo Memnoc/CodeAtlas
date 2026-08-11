@@ -6,7 +6,7 @@ mod common;
 use std::fs;
 use std::path::Path;
 
-use common::{materialize, read_map};
+use common::{has_edge, materialize, read_map};
 
 fn scan(repo: &Path) {
     assert_cmd::Command::cargo_bin("codeatlas")
@@ -67,14 +67,6 @@ fn cited(label: &str, key: &str) -> u64 {
     digits
         .parse()
         .unwrap_or_else(|_| panic!("no number after `{key}`: {label}"))
-}
-
-fn has_edge(map: &serde_json::Value, kind: &str, source: &str, target: &str) -> bool {
-    map["edges"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|e| e["kind"] == kind && e["source"] == source && e["target"] == target)
 }
 
 #[test]
@@ -1600,28 +1592,18 @@ fn cpp_files_yield_classes_methods_includes_and_calls() {
     );
 }
 
-#[test]
-fn external_go_modules_with_colliding_package_suffixes_produce_no_edge() {
-    let repo = materialize("goproj");
-    scan(repo.path());
-    let map = read_map(repo.path());
-    let edges = map["edges"].as_array().unwrap();
-
-    // external.go imports github.com/external/lib/util — an external module
-    // whose trailing segment collides with the in-repo util/ package. The
-    // go.mod module line (example.com/demo) says it is not ours: no edge.
-    assert!(
-        !edges
-            .iter()
-            .any(|e| e["kind"] == "imports" && e["source"] == "file:external.go"),
-        "external module import leaked into the map: {edges:?}"
-    );
-    // The genuine module-path import still resolves.
-    assert!(
-        has_edge(&map, "imports", "file:main.go", "file:util/util.go"),
-        "edges: {edges:?}"
-    );
-}
+// `external_go_modules_with_colliding_package_suffixes_produce_no_edge` used
+// to sit here. It asserted that `github.com/external/lib/util` — an external
+// module whose trailing segment collides with the in-repo `util/` package —
+// makes no import edge out of `external.go`, and that the genuine module-path
+// import still resolves. `tests/conventions.rs` now says both, strictly more
+// strongly: the Go resolves-nowhere cell pins the whole set of import edges
+// out of `external.go` as empty *and* preflights `util/util.go` and
+// `util/extra.go`, so the collision stays a real temptation rather than
+// becoming true by the decoy quietly disappearing; the Go plain-import and
+// package-import cells pin `main.go`'s edges the same way. Retired rather than
+// left as a second home for one fact, which is how two assertions about the
+// same behaviour start disagreeing.
 
 #[test]
 fn markdown_relative_links_become_edges_between_file_nodes() {
@@ -1868,6 +1850,10 @@ fn scanning_a_polyglot_repo_twice_is_byte_identical() {
 // of them is not evidence for the rest.
 // ---------------------------------------------------------------------------
 
+/// Overlaps `tests/conventions.rs` and is deliberately kept: the table has no
+/// row for `self::util::helper()`, and its outside-crate cell names one decoy
+/// where this asserts that `src/lib.rs:external` makes no call edge *at all*.
+/// Retiring it would lose both.
 #[test]
 fn rust_qualified_calls_resolve_through_the_module_that_holds_them() {
     let repo = materialize("rustroot");
@@ -1929,6 +1915,11 @@ fn rust_qualified_calls_resolve_through_the_module_that_holds_them() {
     );
 }
 
+/// Overlaps `tests/conventions.rs` and is deliberately kept: namespace
+/// packages, the script-style `from local import render`, and the statement
+/// that binds a module and a symbol at once are all shapes the checklist has
+/// no row for, and the two negatives here are whole-source ones rather than
+/// the table's single named decoy.
 #[test]
 fn python_qualified_calls_resolve_through_the_module_that_holds_them() {
     let repo = materialize("pypkgs");

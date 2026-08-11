@@ -32,16 +32,18 @@ call edges: 3
 a *domain-flow root* — a function nothing calls — in a repository where the
 entry point calls it directly.
 
-Both halves of the convention fail together:
+Both halves of the convention fail together, and ticket 33's `/crosscheck`
+added a third form that fails with them:
 
 | Form | Fixture | Edge? |
 |---|---|---|
 | `import "example.com/demo/util"` → `util.Format(…)` | `goproj/main.go` | **no** |
 | `import u "example.com/demo/util"` → `u.Format(…)` | `goproj/alias.go` | **no** |
+| `import . "example.com/demo/util"` → `Format(…)` | `goproj/dot.go` | **no** |
 
-The *import* edges are present and correct in both cases, including the alias.
-This is purely the call-binding step, exactly as ticket 21 found for Rust,
-Python and TypeScript.
+The *import* edges are present and correct in all three cases, including the
+alias and the dot import. This is purely the call-binding step, exactly as
+ticket 21 found for Rust, Python and TypeScript.
 
 ## Why it was left
 
@@ -75,22 +77,43 @@ defines it, wherever in the package directory that is.
       receiver names a directory, so answering with the anchor file alone is
       the wrong shape however well it scores on `util.go`.
 - [ ] A dot import (`import . "p"`) either resolves its unqualified callees or
-      is declined explicitly with a reason; it must not be an accident.
-- [ ] **The two Go non-edge rows are re-proved, not assumed.** Both pass today
-      *vacuously*, because no selector call is recorded at all, and this ticket
-      is what makes them mean something:
+      is declined explicitly with a reason; it must not be an accident. The
+      fixture is `goproj/dot.go`, and ticket 33's `/crosscheck` files the
+      checklist's Go **unqualified-call** row against this ticket on it. That
+      cell used to read not-applicable on the reason "a package member is
+      always written package-qualified", which is false — a dot import is
+      legal Go and binds every exported name unqualified. If the decision here
+      is to decline, the decision has to be written into the cell and the cell
+      reclassified: a row cannot stay filed against a closed ticket.
+- [ ] **The two Go non-edge rows are re-proved, not assumed.** They no longer
+      read as passes: `/crosscheck` gave them `Verdict::Vacuous`, which
+      asserts the guard *and* asserts that no Go selector call is recorded
+      anywhere, so both cells fail the moment this ticket lands and demand the
+      re-proof instead of quietly continuing to assert nothing.
       - `goproj/value.go:onValue` calls `util.Format(…)` where `util` is a
-        parameter holding a `Logger` — a value, not a package. No edge to
-        `function:util/util.go:Format`.
+        parameter holding a `Logger` — a value, not a package. The file now
+        **imports the util package** too, which is what makes it a decoy at
+        all: it had no import statement when ticket 33 wrote it, so nothing
+        could bind `util` and no over-eager resolver could reach the decoy
+        however tempting the call site looked. Measured against a sketch of
+        this ticket — package names bound, selector calls recorded — the guard
+        fabricates `function:value.go:onValue -> function:util/util.go:Format`.
+        So the binding step has to ask whether the call site shadowed the name.
       - `goproj/external.go:external` calls `util.Format(…)` where `util` is
-        `github.com/external/lib/util`, outside the module. No edge to
-        `function:util/util.go:Format`.
-      Both decoys are already in the fixture. Ticket 21 shipped a
-      fabricated-edge bug that seven mutations missed for want of exactly
+        `github.com/external/lib/util`, outside the module. That one needs the
+        sketch *plus* an unresolved-receiver fallback to trip; the two together
+        fabricate the same edge.
+      No edge to `function:util/util.go:Format` from either. Ticket 21 shipped
+      a fabricated-edge bug that seven mutations missed for want of exactly
       these, so a mutation that makes the resolver over-eager must fail both.
-- [ ] `tests/conventions.rs` moves the two Go cells from `Verdict::Filed` to
-      `Verdict::Holds`. That file asserts the gap is *still there*, so it fails
-      the moment this lands — which is the point.
+- [ ] `tests/conventions.rs` is updated in both directions. **Three** cells
+      move from `Verdict::Filed` to `Verdict::Holds` — the two qualified-call
+      rows and the unqualified-call row above — and **three** move off
+      `Verdict::Vacuous`: the two non-edge rows, re-proved by tamper, and the
+      whole-module import row, which is vacuous only because the qualifier
+      binding is the single piece of evidence separating it from the plain
+      import. That file asserts the gap is *still there*, so it fails the
+      moment this lands — which is the point.
 - [ ] No measurable scan-time regression on the C family; measure before and
       after on a synthetic tree, as tickets 20 and 21 did. Package resolution
       that reads a directory per receiver is where the cost would come from.

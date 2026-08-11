@@ -8,7 +8,7 @@
 //! with one cell per convention per language.
 //!
 //! [`CHECKLIST`] is the table. Every one of the 6 × 14 cells is present, and
-//! each says one of three things:
+//! each says one of four things:
 //!
 //! - **[`Verdict::Holds`]** — this fixture, and these edges must be in its map.
 //! - **[`Verdict::NotApplicable`]** — the language has no such convention, and
@@ -17,6 +17,13 @@
 //! - **[`Verdict::Filed`]** — the row genuinely fails, and the named ticket
 //!   owns it. The runner asserts the gap is *still there*, so closing the
 //!   ticket fails this file rather than leaving the table quietly stale.
+//! - **[`Verdict::Vacuous`]** — the convention exists here and the cell cannot
+//!   currently fail, because the language support that would let it fail is
+//!   not written yet. The expectation is still asserted, but the cell does not
+//!   render as a pass: a claim nothing can falsify must not sit in the table
+//!   looking like one that can. The runner asserts the *reason* it is vacuous
+//!   is still true, so the ticket that removes the reason forces the cell to
+//!   be re-proved rather than letting it drift into a silent pass.
 //!
 //! One test per convention, so a failure names the row. Assertions are at
 //! seam 1 — run the binary over a committed fixture, read the emitted map —
@@ -35,9 +42,9 @@ mod common;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use common::{materialize, read_map};
+use common::{has_edge, materialize, read_map};
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
@@ -177,6 +184,24 @@ enum Verdict {
         fixture: &'static str,
         want: Expect,
     },
+    /// The convention exists in this language, `guard` really does hold of the
+    /// map, and **nothing could make it fail**. Either no mutation of the
+    /// pipeline can violate the guard, or the only evidence the row has is
+    /// another cell's — so a reader who saw `pass` here would be reading a
+    /// claim beside sixteen real ones that nobody actually makes.
+    ///
+    /// `vacuous_until` is what makes it so: an expectation that does *not*
+    /// hold today and whose arrival is exactly what gives the row something to
+    /// say. The runner asserts `guard` holds **and** that `vacuous_until`
+    /// still does not, so the day `ticket` lands this cell fails and has to be
+    /// re-proved by tamper instead of sliding quietly into a pass.
+    Vacuous {
+        ticket: &'static str,
+        fixture: &'static str,
+        guard: Expect,
+        vacuous_until: Expect,
+        because: &'static str,
+    },
 }
 
 enum Expect {
@@ -306,10 +331,23 @@ const CHECKLIST: &[Cell] = &[
     Cell {
         language: Language::Rust,
         convention: Convention::NamedImport,
-        form: "use root_lib::util::helper;",
+        form: "use root_lib::util::helper; helper()",
         verdict: Verdict::Holds {
             fixture: "rustroot",
-            expect: Expect::Edges(&[("imports", "file:tests/it.rs", "file:src/util.rs")]),
+            expect: Expect::Edges(&[
+                ("imports", "file:tests/it.rs", "file:src/util.rs"),
+                // The file edge alone does not test "named": `use
+                // root_lib::util;` produces the identical one. Only the member
+                // form *binds* `helper`, so the bare call is the assertion
+                // that tells the two apart — the same argument
+                // `rust_qualified_calls_resolve_through_the_module_that_holds_them`
+                // records for `from_bound_name`.
+                (
+                    "calls",
+                    "function:tests/it.rs:helps",
+                    "function:src/util.rs:helper",
+                ),
+            ]),
         },
     },
     Cell {
@@ -330,7 +368,9 @@ const CHECKLIST: &[Cell] = &[
         form: "—",
         verdict: Verdict::NotApplicable {
             because: "an import path names a package and nothing inside it; Go has no \
-                      member-import form (`import . \"p\"` selects no name either)",
+                      member-import form. `import . \"p\"` binds every exported name at \
+                      once rather than selecting one, which is the unqualified-call row \
+                      rather than this one",
         },
     },
     Cell {
@@ -478,15 +518,23 @@ const CHECKLIST: &[Cell] = &[
     Cell {
         language: Language::Go,
         convention: Convention::WholeModuleImport,
-        // Go's single import form is also its whole-module form: the statement
-        // that makes the file edge is the statement that binds `util` as a
-        // qualifier. The edge is therefore the same one the plain-import row
-        // asserts; what the *binding* is worth is the qualified-call row,
-        // which is filed as ticket 37.
         form: "import \"example.com/demo/util\" — the same statement as the plain form",
-        verdict: Verdict::Holds {
+        verdict: Verdict::Vacuous {
+            ticket: "37",
             fixture: "goproj",
-            expect: Expect::Edges(&[("imports", "file:main.go", "file:util/util.go")]),
+            guard: Expect::Edges(&[("imports", "file:main.go", "file:util/util.go")]),
+            vacuous_until: Expect::Edges(&[(
+                "calls",
+                "function:main.go:main",
+                "function:util/util.go:Format",
+            )]),
+            because: "Go has one import statement and it is both forms at once: the \
+                      statement that makes the file edge is the statement that binds \
+                      `util` as a qualifier. The edge is therefore byte-for-byte the \
+                      plain-import cell's, so no mutation can fail one and not the other \
+                      and the table must not claim two independent passes for it. The \
+                      only evidence that tells the rows apart is the qualifier binding, \
+                      which is a qualified call, which is ticket 37",
         },
     },
     Cell {
@@ -769,11 +817,22 @@ const CHECKLIST: &[Cell] = &[
     Cell {
         language: Language::Go,
         convention: Convention::UnqualifiedCall,
-        form: "—",
-        verdict: Verdict::NotApplicable {
-            because: "a package member is always written package-qualified; the only \
-                      unqualified cross-file call in Go is a same-package one, which \
-                      needs no import at all",
+        // Not inapplicable, though it read that way until /crosscheck: a dot
+        // import binds every exported name of the package unqualified and is
+        // legal Go, so `Format("dot")` in `goproj/dot.go` really is an
+        // unqualified call to an imported name. The parser binds no name for
+        // any Go import, so it resolves to nothing — the same root cause as
+        // the two qualified-call cells, and ticket 37 already carries dot
+        // imports as a criterion.
+        form: "import . \"example.com/demo/util\"; Format(\"dot\")",
+        verdict: Verdict::Filed {
+            ticket: "37",
+            fixture: "goproj",
+            want: Expect::Edges(&[(
+                "calls",
+                "function:dot.go:viaDot",
+                "function:util/util.go:Format",
+            )]),
         },
     },
     Cell {
@@ -1058,14 +1117,29 @@ const CHECKLIST: &[Cell] = &[
     Cell {
         language: Language::Go,
         convention: Convention::ReceiverIsAValue,
-        form: "onValue(util Logger) { util.Format(…) }  // the util package exports Format",
-        verdict: Verdict::Holds {
+        form: "import \"…/util\"; onValue(util Logger) { util.Format(…) }  // shadowed",
+        verdict: Verdict::Vacuous {
+            ticket: "37",
             fixture: "goproj",
-            expect: Expect::NoEdge {
+            guard: Expect::NoEdge {
                 kind: "calls",
                 source: "function:value.go:onValue",
                 decoy: "function:util/util.go:Format",
             },
+            vacuous_until: Expect::Edges(&[(
+                "calls",
+                "function:main.go:main",
+                "function:util/util.go:Format",
+            )]),
+            because: "`go.rs` keeps a call only when the callee node is an `identifier`, \
+                      and `util.Format(…)` is a `selector_expression` — so no Go selector \
+                      call is recorded at all and no mutation of the resolver can \
+                      fabricate this edge. The decoy is a real temptation now rather than \
+                      a pose: `value.go` imports the `util` package and then shadows the \
+                      name with a parameter holding a Logger, which is precisely what a \
+                      resolver that binds package qualifiers without checking for \
+                      shadowing would get wrong. It cannot get it wrong until ticket 37 \
+                      records selector calls",
         },
     },
     Cell {
@@ -1138,13 +1212,24 @@ const CHECKLIST: &[Cell] = &[
         language: Language::Go,
         convention: Convention::CallIntoOutsidePackage,
         form: "import \"github.com/external/lib/util\"; util.Format(…)",
-        verdict: Verdict::Holds {
+        verdict: Verdict::Vacuous {
+            ticket: "37",
             fixture: "goproj",
-            expect: Expect::NoEdge {
+            guard: Expect::NoEdge {
                 kind: "calls",
                 source: "function:external.go:external",
                 decoy: "function:util/util.go:Format",
             },
+            vacuous_until: Expect::Edges(&[(
+                "calls",
+                "function:main.go:main",
+                "function:util/util.go:Format",
+            )]),
+            because: "the same reason as the value-receiver cell above: no Go selector \
+                      call is recorded, so there is no call for an over-eager resolver \
+                      to mis-target. The import half of this guard is real and asserted \
+                      by the resolves-nowhere cell, which pins the whole edge set out of \
+                      `external.go` as empty; the call half waits on ticket 37",
         },
     },
     Cell {
@@ -1271,30 +1356,30 @@ const CHECKLIST: &[Cell] = &[
 /// The map a fixture scans to, computed once per test binary. Fourteen tests
 /// over nine fixtures would otherwise re-run the binary eighty-odd times for
 /// byte-identical output.
+///
+/// The global lock is held only long enough to hand out the slot for one
+/// fixture; the scan itself runs under that fixture's own `OnceLock`. Holding
+/// the global lock across `materialize` and a subprocess spawn would serialise
+/// every fixture in the binary behind whichever one a test happened to ask for
+/// first, for no gain — two different fixtures share nothing.
 fn map_of(fixture: &str) -> Value {
-    static MAPS: OnceLock<Mutex<HashMap<String, Value>>> = OnceLock::new();
+    static MAPS: OnceLock<Mutex<HashMap<String, Arc<OnceLock<Value>>>>> = OnceLock::new();
     let cache = MAPS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut maps = cache.lock().unwrap();
-    maps.entry(fixture.to_string())
-        .or_insert_with(|| {
-            let repo = materialize(fixture);
-            assert_cmd::Command::cargo_bin("codeatlas")
-                .unwrap()
-                .arg("scan")
-                .current_dir(repo.path())
-                .assert()
-                .success();
-            read_map(repo.path())
-        })
-        .clone()
-}
-
-fn has_edge(map: &Value, kind: &str, source: &str, target: &str) -> bool {
-    map["edges"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|e| e["kind"] == kind && e["source"] == source && e["target"] == target)
+    let slot = {
+        let mut maps = cache.lock().unwrap();
+        Arc::clone(maps.entry(fixture.to_string()).or_default())
+    };
+    slot.get_or_init(|| {
+        let repo = materialize(fixture);
+        assert_cmd::Command::cargo_bin("codeatlas")
+            .unwrap()
+            .arg("scan")
+            .current_dir(repo.path())
+            .assert()
+            .success();
+        read_map(repo.path())
+    })
+    .clone()
 }
 
 fn has_node(map: &Value, id: &str) -> bool {
@@ -1361,18 +1446,39 @@ fn holds(map: &Value, expect: &Expect) -> Result<(), String> {
 }
 
 impl Cell {
-    fn expect(&self) -> Option<&Expect> {
+    /// Every expectation the cell names: the one it asserts, plus — for a
+    /// vacuous cell — the one whose *absence* is why it cannot fail. Both are
+    /// preflighted, because a vacuous cell's honesty depends on the second
+    /// expectation still naming nodes that exist.
+    fn expectations(&self) -> Vec<&Expect> {
         match &self.verdict {
-            Verdict::Holds { expect, .. } => Some(expect),
-            Verdict::Filed { want, .. } => Some(want),
-            Verdict::NotApplicable { .. } => None,
+            Verdict::Holds { expect, .. } => vec![expect],
+            Verdict::Filed { want, .. } => vec![want],
+            Verdict::Vacuous {
+                guard,
+                vacuous_until,
+                ..
+            } => vec![guard, vacuous_until],
+            Verdict::NotApplicable { .. } => Vec::new(),
         }
     }
 
     fn fixture(&self) -> Option<&'static str> {
         match &self.verdict {
-            Verdict::Holds { fixture, .. } | Verdict::Filed { fixture, .. } => Some(fixture),
+            Verdict::Holds { fixture, .. }
+            | Verdict::Filed { fixture, .. }
+            | Verdict::Vacuous { fixture, .. } => Some(fixture),
             Verdict::NotApplicable { .. } => None,
+        }
+    }
+
+    /// The ticket this cell is waiting on, if any — filed or vacuous alike.
+    /// Both are promises about work that does not exist yet, so both owe the
+    /// reader a ticket that does.
+    fn ticket(&self) -> Option<&'static str> {
+        match &self.verdict {
+            Verdict::Filed { ticket, .. } | Verdict::Vacuous { ticket, .. } => Some(ticket),
+            Verdict::Holds { .. } | Verdict::NotApplicable { .. } => None,
         }
     }
 
@@ -1382,10 +1488,7 @@ impl Cell {
     /// so "no edge to it" keeps meaning something, and a filed row's gap is
     /// the missing *edge* rather than a fixture that never had the pieces.
     fn preflight(&self, map: &Value) {
-        let Some(expect) = self.expect() else {
-            return;
-        };
-        for id in expect.nodes() {
+        for id in self.expectations().iter().flat_map(|e| e.nodes()) {
             assert!(
                 has_node(map, id),
                 "{} / {}: the fixture no longer holds {id}, so this cell asserts nothing",
@@ -1395,30 +1498,60 @@ impl Cell {
         }
     }
 
+    /// A failure message that names the row, the source form and the fixture,
+    /// so a red row can be read without opening this file.
+    fn blame(&self, fixture: &str, why: &str) -> String {
+        format!(
+            "{} — `{}` in fixture `{fixture}`: {why}",
+            self.language.label(),
+            self.form,
+        )
+    }
+
     fn check(&self) -> Result<(), String> {
         let Some(fixture) = self.fixture() else {
-            return Ok(()); // not-applicable: nothing to run
+            return Ok(()); // not-applicable: no fixture, so nothing to run
         };
         let map = map_of(fixture);
         self.preflight(&map);
-        let expect = self
-            .expect()
-            .expect("a fixture cell carries an expectation");
-        match (&self.verdict, holds(&map, expect)) {
-            (Verdict::Holds { .. }, Ok(())) => Ok(()),
-            (Verdict::Holds { .. }, Err(why)) => Err(format!(
-                "{} — `{}` in fixture `{fixture}`: {why}",
-                self.language.label(),
-                self.form,
-            )),
-            (Verdict::Filed { .. }, Err(_)) => Ok(()), // the gap is still there
-            (Verdict::Filed { ticket, .. }, Ok(())) => Err(format!(
-                "{} — `{}` in fixture `{fixture}`: this row now PASSES. Close ticket {ticket} \
-                 and move the cell to Verdict::Holds.",
-                self.language.label(),
-                self.form,
-            )),
-            (Verdict::NotApplicable { .. }, _) => unreachable!("filtered out above"),
+        match &self.verdict {
+            Verdict::Holds { expect, .. } => {
+                holds(&map, expect).map_err(|why| self.blame(fixture, &why))
+            }
+            Verdict::Filed { ticket, want, .. } => match holds(&map, want) {
+                Err(_) => Ok(()), // the gap is still there
+                Ok(()) => Err(self.blame(
+                    fixture,
+                    &format!(
+                        "this row now PASSES. Close ticket {ticket} and move the cell to \
+                         Verdict::Holds."
+                    ),
+                )),
+            },
+            Verdict::Vacuous {
+                ticket,
+                guard,
+                vacuous_until,
+                ..
+            } => {
+                // The guard is asserted anyway — a cell that runs nothing is
+                // worth less than one that runs something unfalsifiable.
+                holds(&map, guard).map_err(|why| self.blame(fixture, &why))?;
+                match holds(&map, vacuous_until) {
+                    Err(_) => Ok(()), // still nothing that could trip the guard
+                    Ok(()) => Err(self.blame(
+                        fixture,
+                        &format!(
+                            "this cell is no longer vacuous — ticket {ticket} looks to have \
+                             landed. Re-prove the guard by tampering, then move the cell to \
+                             Verdict::Holds."
+                        ),
+                    )),
+                }
+            }
+            // `fixture()` answers `None` for a not-applicable cell, so the
+            // early return above has already taken it.
+            Verdict::NotApplicable { .. } => unreachable!("a not-applicable cell names no fixture"),
         }
     }
 
@@ -1428,6 +1561,7 @@ impl Cell {
             Verdict::Holds { .. } => "pass".to_string(),
             Verdict::NotApplicable { .. } => "n/a".to_string(),
             Verdict::Filed { ticket, .. } => format!("ticket {ticket}"),
+            Verdict::Vacuous { ticket, .. } => format!("vacuous ({ticket})"),
         }
     }
 }
@@ -1566,12 +1700,19 @@ fn the_table_holds_one_reasoned_cell_for_every_convention_in_every_language() {
         LANGUAGES.len()
     );
 
+    // `.scratch/<spec-slug>/` holds the tickets and CLAUDE.md calls it
+    // disposable once the feature ships, so its absence is a shipped
+    // repository rather than a defect — and `cargo test` must not turn tidying
+    // up into a red suite that names a missing scratch directory instead of a
+    // code fault. A directory that *is* there and lacks the named ticket still
+    // fails: while the tickets exist, the escape hatch has to point at one.
     let tickets = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.scratch/codeatlas-v1");
-    let filed: HashSet<String> = std::fs::read_dir(&tickets)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", tickets.display()))
-        .filter_map(|entry| entry.ok())
-        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
-        .collect();
+    let filed: Option<HashSet<String>> = std::fs::read_dir(&tickets).ok().map(|entries| {
+        entries
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+            .collect()
+    });
     for cell in CHECKLIST {
         match &cell.verdict {
             Verdict::NotApplicable { because } => assert!(
@@ -1580,16 +1721,24 @@ fn the_table_holds_one_reasoned_cell_for_every_convention_in_every_language() {
                 cell.language.label(),
                 cell.convention.label()
             ),
-            Verdict::Filed { ticket, .. } => assert!(
+            Verdict::Vacuous { because, .. } => assert!(
+                !because.is_empty(),
+                "{} / {} cannot fail and does not say why",
+                cell.language.label(),
+                cell.convention.label()
+            ),
+            Verdict::Holds { .. } | Verdict::Filed { .. } => {}
+        }
+        if let (Some(ticket), Some(filed)) = (cell.ticket(), &filed) {
+            assert!(
                 filed
                     .iter()
                     .any(|name| name.starts_with(&format!("{ticket}-"))),
-                "{} / {} is filed as ticket {ticket}, and no such ticket exists in {}",
+                "{} / {} waits on ticket {ticket}, and no such ticket exists in {}",
                 cell.language.label(),
                 cell.convention.label(),
                 tickets.display()
-            ),
-            Verdict::Holds { .. } => {}
+            );
         }
     }
 
@@ -1601,7 +1750,7 @@ fn the_table_holds_one_reasoned_cell_for_every_convention_in_every_language() {
         for language in LANGUAGES {
             let cell = seen[&(convention, language)];
             rendered.push_str(&format!(
-                "  {:<12} {:<10} {}\n",
+                "  {:<12} {:<13} {}\n",
                 language.label(),
                 cell.status(),
                 cell.form

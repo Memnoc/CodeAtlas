@@ -97,6 +97,17 @@ pub fn read_map(repo: &Path) -> serde_json::Value {
     read_json(&repo.join(".codeatlas/knowledge-graph.json"))
 }
 
+/// Whether the map joins `source` to `target` with an edge of this kind. The
+/// question every map-contract suite asks most often, and it was written out
+/// twice before `tests/conventions.rs` made it three times.
+pub fn has_edge(map: &serde_json::Value, kind: &str, source: &str, target: &str) -> bool {
+    map["edges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["kind"] == kind && e["source"] == source && e["target"] == target)
+}
+
 /// The map's node with this id, or a panic naming it.
 pub fn node<'m>(map: &'m serde_json::Value, id: &str) -> &'m serde_json::Value {
     map["nodes"]
