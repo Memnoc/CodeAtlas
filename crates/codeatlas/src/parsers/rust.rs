@@ -44,6 +44,14 @@ impl Parser for Rust {
         &["rs"]
     }
 
+    fn module_path_separator(&self) -> &'static str {
+        "::"
+    }
+
+    fn receiver_is_never_a_value(&self) -> bool {
+        true
+    }
+
     fn parse(&self, source: &str) -> Analysis {
         let mut parser = tree_sitter::Parser::new();
         if parser
@@ -114,7 +122,15 @@ impl Parser for Rust {
             // own library, and neither has one workspace member naming
             // another. Crates outside the scanned tree find nothing here.
             crate_name => {
-                let src = src_dir_of_crate(importer, crate_name, files, root)?;
+                let Some(src) = src_dir_of_crate(importer, crate_name, files, root) else {
+                    // Not a crate in the tree. Before giving up, try the path
+                    // as a *local* child module: `mod util;` beside this file
+                    // makes `use util::helper;` legal, and `resolve_segments`
+                    // answers only if that file is really in the map. A real
+                    // crate of the same name still wins, since this runs only
+                    // once that lookup has failed.
+                    return resolve_segments(&children_dir(importer), &segments, files);
+                };
                 segments.remove(0);
                 if segments.is_empty() {
                     return module_file(&src, files);
@@ -354,26 +370,44 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
             return; // nothing below a use is a symbol or call
         }
         "mod_item" if node.child_by_field_name("body").is_none() => {
-            // `mod foo;` — a file-form child module declaration.
+            // `mod foo;` — a file-form child module declaration. It binds no
+            // namespace here on purpose: `foo::bar()` already resolves,
+            // because a bare receiver falls through to the child-module
+            // lookup in `resolve_import`, which answers identically. The two
+            // differ only when a *scanned crate* is also called `foo`, and
+            // real Rust calls that ambiguous rather than preferring either.
             if let Some(name) = field_text(node, "name", source) {
                 out.imports.push(Import {
                     specifier: format!("{MOD_PREFIX}{name}"),
                     names: Vec::new(),
+                    namespaces: Vec::new(),
                 });
             }
             return;
         }
         "call_expression" => {
-            if let (Some(callee), Some(caller_idx)) = (
-                node.child_by_field_name("function")
-                    .filter(|f| f.kind() == "identifier")
-                    .and_then(|f| f.utf8_text(source).ok()),
-                ctx.enclosing_fn,
-            ) {
-                out.calls.push(Call {
-                    caller: out.symbols[caller_idx].name.clone(),
-                    callee: callee.to_string(),
-                });
+            if let (Some(function), Some(caller_idx)) =
+                (node.child_by_field_name("function"), ctx.enclosing_fn)
+            {
+                // `helper()` is an identifier; `util::helper()` and
+                // `crate::util::helper()` are scoped_identifiers whose path
+                // is the receiver. A method call (`x.f()`, a field_expression)
+                // names no module and is left alone.
+                let call = match function.kind() {
+                    "identifier" => function
+                        .utf8_text(source)
+                        .ok()
+                        .map(|callee| (callee.to_string(), Vec::new())),
+                    "scoped_identifier" => scoped_parts(function, source),
+                    _ => None,
+                };
+                if let Some((callee, receiver)) = call {
+                    out.calls.push(Call {
+                        caller: out.symbols[caller_idx].name.clone(),
+                        callee,
+                        receiver,
+                    });
+                }
             }
         }
         _ => {}
@@ -455,9 +489,14 @@ fn expand_use(node: TsNode, source: &[u8], prefix: &str, out: &mut Analysis) {
             let alias = field_text(node, "alias", source).unwrap_or_default();
             out.imports.push(Import {
                 names: vec![ImportedName {
-                    local: alias,
+                    local: alias.clone(),
                     imported: leaf_of(&full).to_string(),
                 }],
+                // `use crate::util as u` makes `u::helper()` a call into
+                // `util`. When the path named an item rather than a module
+                // the binding is unused, because `h::x()` is not something
+                // valid code writes about a function.
+                namespaces: vec![alias],
                 specifier: full,
             });
         }
@@ -470,6 +509,7 @@ fn expand_use(node: TsNode, source: &[u8], prefix: &str, out: &mut Analysis) {
             out.imports.push(Import {
                 specifier: join_path(prefix, path),
                 names: Vec::new(),
+                namespaces: Vec::new(),
             });
         }
         _ => {
@@ -483,11 +523,42 @@ fn expand_use(node: TsNode, source: &[u8], prefix: &str, out: &mut Analysis) {
                 specifier: full,
                 names: vec![ImportedName {
                     local: leaf.clone(),
-                    imported: leaf,
+                    imported: leaf.clone(),
                 }],
+                // The last segment of a `use` is as likely to be a module as
+                // an item — `use crate::deep::leaf` then `leaf::tip()`. Bound
+                // both ways; whichever the file set says it is, wins.
+                namespaces: vec![leaf],
             });
         }
     }
+}
+
+/// Splits a `scoped_identifier` call target into its final name and the
+/// module path in front of it: `crate::util::helper` becomes
+/// `("helper", ["crate", "util"])`. `None` when the path holds anything that
+/// is not a plain path segment — a generic argument or a `<T as Trait>`
+/// qualifier means the receiver is a type, not a module.
+fn scoped_parts(node: TsNode, source: &[u8]) -> Option<(String, Vec<String>)> {
+    let name = field_text(node, "name", source)?;
+    let mut receiver = Vec::new();
+    let mut path = node.child_by_field_name("path");
+    while let Some(segment) = path {
+        match segment.kind() {
+            "identifier" | "crate" | "self" | "super" | "metavariable" => {
+                receiver.push(segment.utf8_text(source).ok()?.to_string());
+                break;
+            }
+            "scoped_identifier" => {
+                receiver.push(field_text(segment, "name", source)?);
+                path = segment.child_by_field_name("path");
+            }
+            // generic_type, bracketed_type, and anything else: not a module.
+            _ => return None,
+        }
+    }
+    receiver.reverse();
+    Some((name, receiver))
 }
 
 fn join_path(prefix: &str, path: &str) -> String {

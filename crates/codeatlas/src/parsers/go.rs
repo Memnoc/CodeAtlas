@@ -160,10 +160,16 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
             {
                 out.imports.push(Import {
                     specifier: path.trim_matches(['"', '`']).to_string(),
-                    // Package members are reached via selector expressions
-                    // (`util.Format`), which V1 call resolution skips, so no
-                    // name bindings.
+                    // Package members are reached via selector
+                    // expressions (`util.Format`). Ticket 21 taught the
+                    // pipeline to resolve those, but a Go package is a
+                    // *directory* of files while `resolve_import` answers
+                    // with one file, so binding the package name here would
+                    // resolve only the members that happen to live in that
+                    // one file. Left unbound until the resolver can answer
+                    // with a package.
                     names: Vec::new(),
+                    namespaces: Vec::new(),
                 });
             }
             return;
@@ -178,6 +184,7 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
                 out.calls.push(Call {
                     caller: out.symbols[caller_idx].name.clone(),
                     callee: callee.to_string(),
+                    receiver: Vec::new(),
                 });
             }
         }

@@ -169,18 +169,29 @@ struct Ctx<'a> {
 fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
     match node.kind() {
         "import_statement" => {
-            // `import a.b [as c]` binds a module object; member calls through
-            // it are out of scope, so only the file-level edge is recorded.
+            // `import a.b` makes the module reachable as the dotted path
+            // itself, so that whole path is what a call site writes:
+            // `a.b.f()`. `import a.b as c` replaces it with the alias, and
+            // then only `c.f()` is legal. Either way the bound form is the
+            // namespace — unlike `from a import b`, which binds `b` and
+            // leaves `a` unavailable, and so binds no namespace at all.
             let mut cursor = node.walk();
             for child in node.children_by_field_name("name", &mut cursor) {
-                let module = match child.kind() {
-                    "aliased_import" => field_text(child, "name", source),
-                    _ => child.utf8_text(source).ok().map(str::to_string),
+                let (module, bound) = match child.kind() {
+                    "aliased_import" => (
+                        field_text(child, "name", source),
+                        field_text(child, "alias", source),
+                    ),
+                    _ => {
+                        let path = child.utf8_text(source).ok().map(str::to_string);
+                        (path.clone(), path)
+                    }
                 };
                 if let Some(specifier) = module {
                     out.imports.push(Import {
                         specifier,
                         names: Vec::new(),
+                        namespaces: bound.into_iter().collect(),
                     });
                 }
             }
@@ -210,21 +221,37 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
                         }
                     }
                 }
-                out.imports.push(Import { specifier, names });
+                out.imports.push(Import {
+                    specifier,
+                    names,
+                    namespaces: Vec::new(),
+                });
             }
             return;
         }
         "call" => {
-            if let (Some(callee), Some(caller_idx)) = (
-                node.child_by_field_name("function")
-                    .filter(|f| f.kind() == "identifier")
-                    .and_then(|f| f.utf8_text(source).ok()),
-                ctx.enclosing_fn,
-            ) {
-                out.calls.push(Call {
-                    caller: out.symbols[caller_idx].name.clone(),
-                    callee: callee.to_string(),
-                });
+            if let (Some(function), Some(caller_idx)) =
+                (node.child_by_field_name("function"), ctx.enclosing_fn)
+            {
+                // `f()` is an identifier; `util.helper()` and
+                // `pkg.util.other()` are attributes whose object chain is the
+                // receiver. `self.method()` and `obj.method()` are attributes
+                // too — they simply bind to no module and drop.
+                let call = match function.kind() {
+                    "identifier" => function
+                        .utf8_text(source)
+                        .ok()
+                        .map(|callee| (callee.to_string(), Vec::new())),
+                    "attribute" => attribute_parts(function, source),
+                    _ => None,
+                };
+                if let Some((callee, receiver)) = call {
+                    out.calls.push(Call {
+                        caller: out.symbols[caller_idx].name.clone(),
+                        callee,
+                        receiver,
+                    });
+                }
             }
         }
         _ => {}
@@ -275,6 +302,37 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
     for child in node.children(&mut cursor) {
         collect(child, source, child_ctx, out);
     }
+}
+
+/// Splits an `attribute` call target into its final name and the dotted
+/// receiver in front of it: `pkg.util.other` becomes
+/// `("other", ["pkg", "util"])`. `None` when the chain bottoms out in
+/// anything but plain identifiers — `f().g()`, `d["k"].g()`.
+///
+/// A receiver that *is* a plain identifier still comes back here, whether or
+/// not it names a module: `self.g()` yields `("g", ["self"])`, and
+/// `logger.info()` yields `("info", ["logger"])`. Deciding which of those is
+/// a module is resolution's job, not the parser's, and it decides by asking
+/// whether an import bound the name — so a value never resolves to anything.
+fn attribute_parts(node: TsNode, source: &[u8]) -> Option<(String, Vec<String>)> {
+    let name = field_text(node, "attribute", source)?;
+    let mut receiver = Vec::new();
+    let mut object = node.child_by_field_name("object");
+    while let Some(segment) = object {
+        match segment.kind() {
+            "identifier" => {
+                receiver.push(segment.utf8_text(source).ok()?.to_string());
+                break;
+            }
+            "attribute" => {
+                receiver.push(field_text(segment, "attribute", source)?);
+                object = segment.child_by_field_name("object");
+            }
+            _ => return None,
+        }
+    }
+    receiver.reverse();
+    Some((name, receiver))
 }
 
 fn field_text(node: TsNode, field: &str, source: &[u8]) -> Option<String> {

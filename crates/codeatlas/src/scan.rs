@@ -309,9 +309,24 @@ fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>, r
         // works, trying later bindings first (a later import shadows an
         // earlier one, matching source semantics).
         let mut bindings: HashMap<&str, Vec<(String, &str)>> = HashMap::new();
+        // Local name → the file it names as a *module*, for the receiver of a
+        // qualified call. Only populated by bindings that really are modules,
+        // so a language with no module-valued names (the C family, whose
+        // every callee is offered to every include) never pays for it.
+        let mut modules: HashMap<&str, String> = HashMap::new();
         for import in &file.imports {
             // Where the specifier lands; resolved at most once per statement.
             let mut specifier_target = None;
+            for local in &import.namespaces {
+                let specifier = specifier_target
+                    .get_or_insert_with(|| {
+                        parser.resolve_import(&file.path, &import.specifier, &files, root)
+                    })
+                    .clone();
+                if let Some(target) = specifier {
+                    modules.insert(local.as_str(), target);
+                }
+            }
             for name in &import.names {
                 let module = parser.resolve_name_as_module(
                     &file.path,
@@ -320,6 +335,11 @@ fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>, r
                     &files,
                     root,
                 );
+                if let Some(module) = &module {
+                    // `from pkg import util` binds `util` to the module, so
+                    // `util.helper()` reaches into it.
+                    modules.insert(name.local.as_str(), module.clone());
+                }
                 let specifier = specifier_target
                     .get_or_insert_with(|| {
                         parser.resolve_import(&file.path, &import.specifier, &files, root)
@@ -341,8 +361,23 @@ fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>, r
                 }
             }
         }
+        // Receiver path → the file it names, memoized: one file often calls
+        // several functions through the same module.
+        let mut receivers: HashMap<&[String], Option<String>> = HashMap::new();
         for call in &file.calls {
-            let target: Option<(String, String)> = if file.functions.contains(&call.callee) {
+            let target: Option<(String, String)> = if !call.receiver.is_empty() {
+                // A qualified call reaches its callee *through* a module, so
+                // it never falls back to the unqualified paths below: a
+                // same-named local function is a different function, and
+                // binding to it would be an invented edge.
+                receivers
+                    .entry(call.receiver.as_slice())
+                    .or_insert_with(|| {
+                        receiver_module(parser, &file.path, &call.receiver, &modules, &files, root)
+                    })
+                    .clone()
+                    .and_then(|module| resolve_exported(&module, &call.callee))
+            } else if file.functions.contains(&call.callee) {
                 Some((file.path.clone(), call.callee.clone()))
             } else if let Some(sibling) = parser
                 .directory_shares_scope()
@@ -385,6 +420,40 @@ fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>, r
             }
         }
     }
+}
+
+/// The file a qualified call's receiver names as a module, if it names one.
+///
+/// First the receiver is written back out the way source writes a module
+/// path — `["pkg","util"]` → `pkg.util`, `["crate","util"]` → `crate::util` —
+/// and looked up among the modules this file's imports actually bound. That
+/// is the whole answer in a dotted language, because a receiver nobody
+/// imported is a *value*: `logger.info()` is a method call, and following it
+/// into a `logger.py` sitting next door would fabricate an edge between two
+/// files that have no relationship at all.
+///
+/// Only where the syntax rules values out — Rust's `::` — is an unbound
+/// receiver resolved on sight, which is what lets `crate::util::helper()`
+/// work with no `use` statement anywhere.
+///
+/// So this can never invent an edge: it answers only with a file the map
+/// already contains, reached by a name the file itself introduced.
+fn receiver_module(
+    parser: &dyn parsers::Parser,
+    importer: &str,
+    receiver: &[String],
+    modules: &HashMap<&str, String>,
+    files: &HashSet<String>,
+    root: &Path,
+) -> Option<String> {
+    let path = receiver.join(parser.module_path_separator());
+    if let Some(target) = modules.get(path.as_str()) {
+        return Some(target.clone());
+    }
+    parser
+        .receiver_is_never_a_value()
+        .then(|| parser.resolve_import(importer, &path, files, root))
+        .flatten()
 }
 
 fn directory_of(path: &str) -> &str {

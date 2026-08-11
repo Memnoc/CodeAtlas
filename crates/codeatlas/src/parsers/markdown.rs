@@ -44,6 +44,7 @@ impl Parser for Markdown {
                     analysis.imports.push(Import {
                         specifier,
                         names: Vec::new(),
+                        namespaces: Vec::new(),
                     });
                 }
             }

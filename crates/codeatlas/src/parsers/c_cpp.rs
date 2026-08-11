@@ -205,6 +205,10 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
                 out.imports.push(Import {
                     specifier: path.trim_matches('"').to_string(),
                     names: Vec::new(), // filled by bind_includes
+                    // A `::` in C++ names a namespace or a class, never a
+                    // translation unit, so there is no module for a
+                    // qualified callee's receiver to resolve to.
+                    namespaces: Vec::new(),
                 });
             }
             return;
@@ -238,6 +242,7 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
                 out.calls.push(Call {
                     caller: out.symbols[caller_idx].name.clone(),
                     callee: callee.to_string(),
+                    receiver: Vec::new(),
                 });
             }
         }

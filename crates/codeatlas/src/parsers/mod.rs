@@ -63,6 +63,18 @@ pub struct Import {
     pub specifier: String,
     /// Named bindings this import introduces, for call resolution.
     pub names: Vec<ImportedName>,
+    /// Names bound to the *module itself* rather than to something inside
+    /// it: `import * as util`, `use crate::util as u`, `import pkg.util`.
+    /// A qualified call written through one of these — `util.greet()`,
+    /// `u::helper()`, `pkg.util.other()` — lands wherever the specifier does.
+    ///
+    /// Written as the call site writes it, which for `import pkg.util` is the
+    /// whole dotted path rather than its first segment.
+    ///
+    /// Separate from [`names`](Self::names) because the two answer different
+    /// questions: a name is something to look up *inside* a file, a namespace
+    /// *is* the file.
+    pub namespaces: Vec<String>,
 }
 
 /// A named import binding: `import { imported as local }`.
@@ -75,11 +87,20 @@ pub struct ImportedName {
 }
 
 /// A function invocation: `caller` (qualified symbol name) invokes `callee`
-/// (a plain identifier as written; resolution happens later).
+/// (the final identifier as written; resolution happens later).
 #[derive(Debug)]
 pub struct Call {
     pub caller: String,
     pub callee: String,
+    /// The receiver path of a *qualified* call, outermost segment first:
+    /// `pkg.util.other()` gives `["pkg", "util"]` and `crate::util::helper()`
+    /// gives `["crate", "util"]`. Empty for a bare `other()`.
+    ///
+    /// A receiver is only ever resolved as a **module**; a receiver that is
+    /// really a value (`obj.method()`) names no module, resolves to nothing,
+    /// and drops. Structural analysis cannot know a receiver's type, so it
+    /// does not guess — it only follows receivers an import already bound.
+    pub receiver: Vec<String>,
 }
 
 pub trait Parser: Send + Sync {
@@ -125,6 +146,27 @@ pub trait Parser: Send + Sync {
     /// packages): a plain-identifier call may then resolve to a function
     /// defined in a sibling file without any import.
     fn directory_shares_scope(&self) -> bool {
+        false
+    }
+    /// What joins the segments of a module path, so a call receiver can be
+    /// matched against the module names an import bound: `pkg.util.other()`
+    /// asks about `pkg.util`, and `crate::util::helper()` about
+    /// `crate::util`. Dotted is the majority, hence the default; Rust
+    /// overrides it.
+    fn module_path_separator(&self) -> &'static str {
+        "."
+    }
+    /// Whether a call's receiver, written in this language's qualified form,
+    /// is certainly a module rather than a value. Rust's `::` can only ever
+    /// separate path segments, so `util::helper()` names a module and
+    /// nothing else — the path can be resolved on sight.
+    ///
+    /// A dot cannot make that promise: `logger.info()` is overwhelmingly a
+    /// value, and a value whose name happens to match a module beside it is
+    /// an everyday shape. So in dotted languages a receiver is followed only
+    /// when an import in the same file actually bound that name, and a
+    /// receiver nobody introduced resolves to nothing.
+    fn receiver_is_never_a_value(&self) -> bool {
         false
     }
 }

@@ -176,24 +176,40 @@ fn collect(
     {
         let mut names = Vec::new();
         import_bindings(node, source, &mut names);
-        out.imports.push(Import { specifier, names });
+        let mut namespaces = Vec::new();
+        namespace_bindings(node, source, &mut namespaces);
+        out.imports.push(Import {
+            specifier,
+            names,
+            namespaces,
+        });
     }
 
     // A plain-identifier invocation inside a function body is a call the
-    // resolver may connect. Member calls (`obj.method()`) are out of scope
-    // for V1 — their receiver types are unknowable structurally.
+    // resolver may connect. So is a member call whose receiver is a module —
+    // `util.greet()` after `import * as util`. A member call on a *value*
+    // (`obj.method()`) stays out of scope, because its receiver type is
+    // unknowable structurally; it is recorded with its receiver and drops
+    // when that receiver binds to no module.
     if node.kind() == "call_expression"
-        && let (Some(callee), Some(caller_idx)) = (
-            node.child_by_field_name("function")
-                .filter(|f| f.kind() == "identifier")
-                .and_then(|f| f.utf8_text(source).ok()),
-            ctx.enclosing_fn,
-        )
+        && let (Some(function), Some(caller_idx)) =
+            (node.child_by_field_name("function"), ctx.enclosing_fn)
     {
-        out.calls.push(Call {
-            caller: out.symbols[caller_idx].name.clone(),
-            callee: callee.to_string(),
-        });
+        let call = match function.kind() {
+            "identifier" => function
+                .utf8_text(source)
+                .ok()
+                .map(|callee| (callee.to_string(), Vec::new())),
+            "member_expression" => member_parts(function, source),
+            _ => None,
+        };
+        if let Some((callee, receiver)) = call {
+            out.calls.push(Call {
+                caller: out.symbols[caller_idx].name.clone(),
+                callee,
+                receiver,
+            });
+        }
     }
 
     if node.kind() == "export_statement" {
@@ -279,6 +295,9 @@ fn collect_export_clause(
         out.imports.push(Import {
             specifier,
             names: Vec::new(),
+            // `export … from` re-publishes names; it binds nothing in this
+            // file's own scope, so there is no receiver to call through.
+            namespaces: Vec::new(),
         });
     }
     let mut clause_cursor = node.walk();
@@ -314,10 +333,31 @@ fn collect_export_clause(
     }
 }
 
+/// The local names an `import * as util from "./util"` clause binds to the
+/// module as a whole. A call through one of these is a call into that module
+/// — the only member call whose receiver is knowable without types.
+fn namespace_bindings(node: TsNode, source: &[u8], out: &mut Vec<String>) {
+    if node.kind() == "namespace_import" {
+        if let Some(local) = node
+            .named_child(0)
+            .and_then(|n| n.utf8_text(source).ok())
+            .filter(|text| !text.is_empty())
+        {
+            out.push(local.to_string());
+        }
+        return;
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        namespace_bindings(child, source, out);
+    }
+}
+
 /// Collects the named bindings under an import statement:
-/// `import { imported as local }`. Default and namespace imports introduce
-/// bindings the resolver cannot match to a named export, so they are skipped
-/// here — the file-level import edge still gets emitted.
+/// `import { imported as local }`. A default import introduces a binding the
+/// resolver cannot match to a named export, so it is skipped here — the
+/// file-level import edge still gets emitted. A namespace import is not a
+/// named binding either; [`namespace_bindings`] takes that one.
 fn import_bindings(node: TsNode, source: &[u8], out: &mut Vec<ImportedName>) {
     if node.kind() == "import_specifier" {
         if let Some(imported) = node
@@ -339,6 +379,27 @@ fn import_bindings(node: TsNode, source: &[u8], out: &mut Vec<ImportedName>) {
     for child in node.children(&mut cursor) {
         import_bindings(child, source, out);
     }
+}
+
+/// Splits a `member_expression` call target into its final name and the
+/// single identifier receiving it: `util.greet()` becomes
+/// `("greet", ["util"])`.
+///
+/// Only a one-segment receiver, because that is the only shape a module can
+/// take here: `import * as util` binds one identifier, and JavaScript has no
+/// dotted module path for `a.b.c()` to be. Longer chains are property
+/// walks on values (`this.a.b()`, `res.data.get()`), so they are declined
+/// outright rather than resolved and dropped later.
+fn member_parts(node: TsNode, source: &[u8]) -> Option<(String, Vec<String>)> {
+    let property = node.child_by_field_name("property")?;
+    let object = node.child_by_field_name("object")?;
+    if property.kind() != "property_identifier" || object.kind() != "identifier" {
+        return None;
+    }
+    Some((
+        property.utf8_text(source).ok()?.to_string(),
+        vec![object.utf8_text(source).ok()?.to_string()],
+    ))
 }
 
 /// Is this variable declarator initialized with a function value?

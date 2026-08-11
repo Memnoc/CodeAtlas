@@ -1137,6 +1137,9 @@ fn python_from_package_import_module_reaches_the_module() {
         // never by the local alias.
         ("file:uses_alias.py", "file:pkg/util.py"),
         ("file:uses_dotted.py", "file:pkg/util.py"),
+        // `import pkg.util as pu` — the alias changes what a call site may
+        // write, not where the statement points.
+        ("file:uses_dotted_alias.py", "file:pkg/util.py"),
         ("file:uses_module.py", "file:pkg/util.py"),
         ("file:uses_ns.py", "file:ns/parse.py"),
         // Both candidates exist: `pkg/shadow.py` and a `shadow` symbol in
@@ -1842,4 +1845,163 @@ fn scanning_a_polyglot_repo_twice_is_byte_identical() {
     ] {
         assert!(ids.contains(&expected.to_string()), "ids: {ids:?}");
     }
+}
+
+// ---------------------------------------------------------------------------
+// Qualified calls (ticket 21). A call reaching a function *through the module
+// that holds it* — `util.helper()`, `crate::util::helper()` — is the ordinary
+// way most code calls across a file boundary. Every one of these forms used to
+// resolve to nothing, in every language, because the callee was only ever
+// looked up as a bare name bound directly by an import.
+//
+// One test per language, covering every form that language writes, because a
+// language's call conventions are a checklist and the fixture exercising one
+// of them is not evidence for the rest.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rust_qualified_calls_resolve_through_the_module_that_holds_them() {
+    let repo = materialize("rustroot");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let edges = map["edges"].as_array().unwrap();
+
+    let helper = "function:src/util.rs:helper";
+    for (caller, form) in [
+        ("function:src/lib.rs:from_crate_root", "crate::util::helper()"),
+        ("function:src/lib.rs:from_bare_module", "util::helper()"),
+        ("function:src/lib.rs:through_alias", "use crate::util as u; u::helper()"),
+        ("function:src/lib.rs:from_bound_name", "use util::helper; helper()"),
+        ("function:src/lib.rs:from_self", "self::util::helper()"),
+        ("function:src/deep/mod.rs:up_and_across", "super::util::helper()"),
+    ] {
+        assert!(
+            has_edge(&map, "calls", caller, helper),
+            "`{form}` produced no call edge: {edges:?}"
+        );
+    }
+
+    // A qualified call through a module bound by `use crate::deep::leaf`.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:src/lib.rs:tip",
+            "function:src/deep/leaf.rs:tip"
+        ),
+        "`leaf::tip()` produced no call edge: {edges:?}"
+    );
+
+    // Deliberately *not* asserted here: that `use util::helper;` makes the
+    // file edge. `pub mod util;` in the same file already makes it, and Rust
+    // requires that declaration to exist for the `use` to be legal at all —
+    // so the assertion would pass whether or not the bare path resolved, and
+    // prove nothing. What the bare path is needed for is the *binding*, and
+    // `from_bound_name` above is what fails when it is missing.
+
+    // Resolving more must not invent edges. `serde_json` is outside the tree.
+    assert!(
+        !edges.iter().any(|e| {
+            e["kind"] == "calls" && e["source"] == "function:src/lib.rs:external"
+        }),
+        "a call into a crate outside the map produced an edge: {edges:?}"
+    );
+}
+
+#[test]
+fn python_qualified_calls_resolve_through_the_module_that_holds_them() {
+    let repo = materialize("pypkgs");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let edges = map["edges"].as_array().unwrap();
+
+    let helper = "function:pkg/util.py:helper";
+    for (caller, form) in [
+        ("function:uses_module.py:run", "from pkg import util; util.helper()"),
+        ("function:uses_dotted.py:dotted", "import pkg.util; pkg.util.helper()"),
+        ("function:uses_alias.py:aliased", "from pkg import util as u; u.helper()"),
+        ("function:uses_dotted_alias.py:dotted_alias", "import pkg.util as pu; pu.helper()"),
+        ("function:pkg/inside.py:use", "from . import util; util.helper()"),
+        ("function:uses_both.py:both", "one statement binding module and symbol"),
+    ] {
+        assert!(
+            has_edge(&map, "calls", caller, helper),
+            "`{form}` produced no call edge: {edges:?}"
+        );
+    }
+
+    // A namespace package (no `__init__.py`), relative and absolute.
+    for caller in ["function:ns/emit.py:emit", "function:uses_ns.py:run_ns"] {
+        assert!(
+            has_edge(&map, "calls", caller, "function:ns/parse.py:parse_it"),
+            "a namespace-package qualified call produced no edge: {edges:?}"
+        );
+    }
+
+    // Script style: resolved only by trying the name as a module beside the
+    // importer, and the call must follow the import.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:scripts/tool.py:main",
+            "function:scripts/local/render.py:text"
+        ),
+        "`from local import render; render.text()` produced no edge: {edges:?}"
+    );
+
+    // The standard library is outside the map: `os.helper()` invents nothing,
+    // though `helper` is a name this map really does export.
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e["kind"] == "calls" && e["source"] == "function:uses_absent.py:nothing"),
+        "a call into an unmapped module produced an edge: {edges:?}"
+    );
+
+    // The receiver of a dotted call is usually a *value*, and a value that
+    // happens to share a name with a module beside it is an everyday shape —
+    // `logger.info()`, `config.get()`, `parser.parse()`. Following a dotted
+    // receiver that no import introduced turns every one of those into a
+    // fabricated edge between two files with no relationship at all.
+    assert!(
+        !edges.iter().any(
+            |e| e["kind"] == "calls" && e["source"] == "function:pkg/uses_value.py:call_on_a_value"
+        ),
+        "a dotted call on a plain value resolved to the module beside it: {edges:?}"
+    );
+}
+
+#[test]
+fn typescript_namespace_imports_resolve_qualified_calls() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let edges = map["edges"].as_array().unwrap();
+
+    let greet = "function:src/util.ts:greet";
+    for (caller, form) in [
+        ("function:src/namespace.ts:viaNamespace", "import * as util; util.greet()"),
+        ("function:src/namespace.ts:viaAlias", "the same module under another local name"),
+    ] {
+        assert!(
+            has_edge(&map, "calls", caller, greet),
+            "`{form}` produced no call edge: {edges:?}"
+        );
+    }
+
+    // A namespace import still makes the file edge it always did.
+    assert!(
+        has_edge(&map, "imports", "file:src/namespace.ts", "file:src/util.ts"),
+        "`import * as util from \"./util\"` did not resolve: {edges:?}"
+    );
+
+    // `node:util` is outside the map, and `greet` is a name inside it — so a
+    // resolver matching on the callee's name alone would wire this up.
+    assert!(
+        !edges.iter().any(|e| {
+            e["kind"] == "calls" && e["source"] == "function:src/namespace.ts:viaExternal"
+        }),
+        "a call into a builtin package produced an edge: {edges:?}"
+    );
 }
