@@ -215,7 +215,7 @@ boundaries; no test reaches into pipeline internals.
 
 ## Verification
 
-`/harden` has walked all 17 user stories against the assembled system four
+`/harden` has walked all 17 user stories against the assembled system five
 times. The first walk (**2026-08-09**, baseline `0a523da`) found one failure,
 story 6, and filed it as ticket 16. The second walk (**2026-08-10**, baseline
 `be320b1`, after ticket 16 landed) re-walked every story, not just the failed
@@ -229,30 +229,85 @@ and filed it as ticket 18. The fourth walk (**2026-08-10**, baseline
 reason — ticket 18 changed import resolution again — and found story 2 failing
 once more, on a third language. Filed as ticket 20.
 
+The fifth walk (**2026-08-10**, baseline `e68c184`, after ticket 20 and the
+dashboard rework landed) re-walked every story again: ticket 20 changed import
+resolution a third time, and `e68c184` replaced the dashboard wholesale, which
+is stories 3, 6, 7 and 8 in one commit. **Ticket 20's repair holds** — all
+four Python forms it was filed for now resolve. **Story 2 fails a third
+consecutive walk**, this time on an axis no previous walk had probed: not
+import conventions but *call* conventions. Filed as ticket 21.
+
 Stories were driven through the real binaries — a default release build, a
 sealed `--no-default-features` build, and a `test-provider` build for the
 enrichment seam — against real repositories, not by reading code, except
 where noted.
 
-| # | Story | 08-09 `0a523da` | 08-10 `be320b1` | 08-10 `d8b535c` | 08-10 `1614a6a` |
-|---|-------|-----------|-----------|-----------|-----------|
-| 1 | Complete structural map in seconds, no LLM | pass | pass | pass | pass |
-| 2 | Relationships: imports, calls, containment, exports | pass³ | pass³ | **fail** | **fail** |
-| 3 | Interactive local dashboard | pass¹ | pass¹ | pass¹ | pass¹ |
-| 4 | Opt-in enrichment fills prose slots | pass | pass | pass | pass |
-| 5 | Re-runs re-purchase only changed content | pass | pass | pass | pass |
-| 6 | Domain flows and an ordered guided tour | **fail** | **pass¹** | pass¹ | pass¹ |
-| 7 | Diff's changed nodes and one-hop blast radius | pass | pass | pass | pass |
-| 8 | Single self-contained redacted HTML export | pass¹ | pass¹ | pass¹ | pass¹ |
-| 9 | Sealed build with no networking code, plus egress suite | pass | pass | pass | pass |
-| 10 | Shared artifact discloses what was redacted | pass | pass | pass | pass |
-| 11 | Structural graph rebuilt from scratch every run | pass | pass | pass | pass |
-| 12 | Annotations re-attach only on unchanged content hash | pass | pass | pass | pass |
-| 13 | Schema-guaranteed structured output, no repair machinery | pass² | pass² | pass² | pass² |
-| 14 | Enrichment failure leaves a valid structural map | pass | pass | pass | pass |
-| 15 | Unparseable files still appear as nodes | pass | pass | pass | pass |
-| 16 | Published, semver-versioned map schema | pass | pass | pass | pass |
-| 17 | Dashboard consumes only local files, zero external requests | pass | pass | pass | pass |
+| # | Story | 08-09 `0a523da` | 08-10 `be320b1` | 08-10 `d8b535c` | 08-10 `1614a6a` | 08-10 `e68c184` |
+|---|-------|-----------|-----------|-----------|-----------|-----------|
+| 1 | Complete structural map in seconds, no LLM | pass | pass | pass | pass | pass |
+| 2 | Relationships: imports, calls, containment, exports | pass³ | pass³ | **fail** | **fail** | **fail** |
+| 3 | Interactive local dashboard | pass¹ | pass¹ | pass¹ | pass¹ | pass¹ |
+| 4 | Opt-in enrichment fills prose slots | pass | pass | pass | pass | pass |
+| 5 | Re-runs re-purchase only changed content | pass | pass | pass | pass | pass |
+| 6 | Domain flows and an ordered guided tour | **fail** | **pass¹** | pass¹ | pass¹ | pass¹ |
+| 7 | Diff's changed nodes and one-hop blast radius | pass | pass | pass | pass | pass¹ |
+| 8 | Single self-contained redacted HTML export | pass¹ | pass¹ | pass¹ | pass¹ | pass¹ |
+| 9 | Sealed build with no networking code, plus egress suite | pass | pass | pass | pass | pass |
+| 10 | Shared artifact discloses what was redacted | pass | pass | pass | pass | pass |
+| 11 | Structural graph rebuilt from scratch every run | pass | pass | pass | pass | pass |
+| 12 | Annotations re-attach only on unchanged content hash | pass | pass | pass | pass | pass |
+| 13 | Schema-guaranteed structured output, no repair machinery | pass² | pass² | pass² | pass² | pass² |
+| 14 | Enrichment failure leaves a valid structural map | pass | pass | pass | pass | pass |
+| 15 | Unparseable files still appear as nodes | pass | pass | pass | pass | pass |
+| 16 | Published, semver-versioned map schema | pass | pass | pass | pass | pass |
+| 17 | Dashboard consumes only local files, zero external requests | pass | pass | pass | pass | pass |
+
+### The fifth walk: ticket 20 confirmed, and story 2 fails on a new axis
+
+**Ticket 20's repair holds.** All four Python forms it was filed for resolve:
+`from pkg import util` reaches `pkg/util.py`; the same form reaches
+`ns/parse.py` in a PEP 420 namespace package with no `__init__.py`; the
+relative `from .util import helper` inside an initialiser resolves; and
+`from pkg import shadow`, where a module and a symbol share a name, reaches
+the module. No probe lost an edge it previously had.
+
+**The dashboard rework was re-walked in full.** `e68c184` replaced the
+explorer, so stories 3, 6, 7 and 8 were re-driven against the real self-scan
+map through the real components: 8 region cards on the canvas, the grouping
+switch, search selecting `graph.ts` and opening its detail panel with an edge
+list, drilling into `crates` drawing all 134 file cards; the tour walked
+**12 of 12** steps in order with exactly one canvas node selected at each; the
+flows panel opening domain → flow → 5 ordered steps and selecting a step on
+the canvas; the diff overlay marking 1 changed and 8 affected file cards for a
+real `git` edit. The share artifact is one 438 KB file with nothing referenced
+from disk.
+
+**Story 2 fails on call conventions.** A call edge is produced only when the
+callee is an *unqualified name bound directly by an import*. Every qualified
+form — reaching a function through the module holding it — resolves to
+nothing, in every language: Python `util.helper()` and `pkg.util.other()`,
+TypeScript `import * as util` then `util.helper()`, Rust `util::helper()` and
+`crate::util::helper()`, and Rust `use util::helper;` (a bare local-module
+path in a `use`, which the resolver declines even though `mod util;` already
+produced the file edge). The import edges are correct in all of these; it is
+the call-binding step alone.
+
+The cost is not marginal. CodeAtlas's own map holds **7** cross-file Rust call
+edges against 447 same-file ones for a 134-file crate, and `src/lib.rs` — the
+CLI's whole command dispatch — has **zero** outgoing call edges despite
+calling `scan::scan`, `enrich::run`, `diff::run` and `serve::serve`. The map
+cannot trace the program's own top-level control flow. It surfaces in the
+product too: domain flows are projected from call chains, so the dashboard's
+Domain grouping files **134 of 219** files under `No call flow`. Filed as
+**ticket 21**.
+
+This is the fourth iteration of one pattern, and the axis is the news. Walks
+three and four widened the *import*-convention checklist and found a language
+gap each time; this walk kept that checklist green and widened a different
+one. The spec's existing lesson generalises: **a language's call conventions
+are a checklist too, and the fixture that exercises one of them is not
+evidence for the rest.** Whatever the sixth walk probes, it should be an axis
+no earlier walk has touched, not a wider sweep of one already green.
 
 ### The fourth walk: ticket 18 confirmed, and story 2 fails on a third language
 
@@ -427,18 +482,78 @@ tickets 18 and 19 created:
   node ID and no content hash, so no stored annotation could be invalidated
   by it.
 
+The 2026-08-10 (`e68c184`) walk re-ran the seam checks above and added the
+seams ticket 20 and the dashboard rework created:
+
+- **Call conventions across four languages** — the new axis, described above,
+  and the check that found ticket 21.
+- **The `build.rs` `NODE_ENV` fix, tested by tampering.** `2f6894d` exists
+  because vitest's `NODE_ENV=test` propagated through `self-scan.test.tsx` →
+  `cargo` → `build.rs` and planted a development React bundle in `dist/` — an
+  ADR-0006 breach in the shipped binary. Verified rather than assumed: an
+  external URL was appended to a built asset, and `embedded.rs` failed by name
+  (`assets/index-BobAGIlu.js: https://evil.example.com/collect`); then a
+  forced rebuild under `NODE_ENV=test` produced a **production** bundle
+  (2 minified-error markers, 0 development markers) and the suite went green.
+  Both halves of the claim hold: the guard catches tampering, and the fix
+  survives a hostile ambient environment.
+- **The rewritten renderer meeting the share artifact.** The share artifact
+  inlines the same renderer the rework replaced, so it was re-checked end to
+  end on an enriched map: 438 KB, one file, no `src`/`href` to disk, and only
+  the three documented-inert hostnames. All 14 enriched prose strings are
+  absent from the artifact and present in the map — redaction is real, not
+  cosmetic — and the artifact embeds its own redaction record (marker, the
+  four-field policy, per-field counts) behind a rendered disclosure banner.
+- **The egress allowlist re-read as policy, not convenience.** The shipped
+  bundle contains `react.dev` (2), `reactflow.dev` (3) and `w3.org` (31). All
+  are excused by `tests/common::is_inert`, which is a documented allowlist for
+  XML namespace identifiers, React's minified-error decoder text, and React
+  Flow's attribution anchor. The distinction is load-bearing: the development
+  bundle's URLs are *not* on that list, which is why `embedded.rs` caught the
+  breach `2f6894d` fixes. The byte probe of the sealed binary was re-run with
+  `strings` after `grep -c` returned a vacuous zero for both builds — the
+  corrected probe shows `api.anthropic.com` 1/0, `x-api-key` 1/0,
+  `anthropic-version` 1/0, `ureq` 410/0, `rustls` 1091/0 for default/sealed.
+- **Enrichment carry-over at symbol granularity.** Appending one function to a
+  three-function file reverted that file *and all three of its symbols* to
+  structural provenance while untouched files kept their prose, and the next
+  enrich re-purchased **4 of 14** slots. Reverting a whole file's symbols is
+  more conservative than strictly required — `greet` and `format` were
+  textually unchanged — but it errs toward never leaving stale prose, and cost
+  stays proportional to the changed file rather than the repository.
+- **Degenerate repositories, re-run.** An empty repository maps 0 files; three
+  unconnected files give 3 nodes, 0 edges, an empty tour and no flows; a
+  30-file import cycle gives a 12-step tour and zero flows. All three validate
+  against the published schema, as do four other maps produced this walk.
+
 ### Notes on the passes
 
-1. **Stories 3, 6 and 8** — no browser can be driven in this environment
+1. **Stories 3, 6, 7 and 8** — no browser can be driven in this environment
    (headless Firefox fails to map a framebuffer), so neither the dashboard nor
-   the share artifact has been watched painting. All three were driven through
-   their real React components with real user events — 36 dashboard tests,
-   including walking the tour and opening flow chains on CodeAtlas's own
-   self-scan map, and share mode rendering with `globalThis.fetch` deleted
-   outright — and the served dashboard was exercised over HTTP from the binary
-   (`/` 200 html, `/api/map` 200 json, `/api/diff` 200, unknown paths 404,
-   bound to 127.0.0.1 only), with the story-6 affordances confirmed present in
-   the served production bundle. Layout and paint remain unwatched.
+   the share artifact has been watched painting. All were driven through
+   their real React components with real user events — 86 dashboard tests as
+   of `e68c184`, including walking the tour and opening flow chains on
+   CodeAtlas's own self-scan map, and share mode rendering with
+   `globalThis.fetch` deleted outright — and the served dashboard was
+   exercised over HTTP from the binary (`/` 200 html, `/api/map` 200 json,
+   `/api/diff` 200, unknown paths 404, bound to 127.0.0.1 only), with the
+   story-6 affordances confirmed present in the served production bundle.
+   Layout and paint remain unwatched.
+
+   Story 7 carries this footnote from the fifth walk onward: before
+   `e68c184` the overlay was asserted on node marks, which needed no canvas;
+   the reworked explorer rolls the overlay up to the file cards it draws, so
+   the verdict now rests on rendered canvas nodes (1 changed, 8 affected in
+   the `dashboard` region for a real `git` edit) like the other three.
+   The underlying overlay file is still checked directly and remains
+   browser-independent: 17 changed nodes and 14 affected, deterministic.
+
+   Two motion behaviours added in `e68c184` are **unverified** rather than
+   passed: the 140 ms canvas transitions and the 240 ms viewport easing. jsdom
+   does not run CSS transitions and the viewport duration is not observable
+   through the DOM, so both were confirmed only by inspecting the compiled
+   bundle (the transition rule and its `prefers-reduced-motion` override are
+   present in the shipped CSS). Nothing in the story list depends on them.
 2. **Story 13** — verified at the provider seam: correctly addressed answers
    land, while an answer for a nonexistent node, an unprefixed key, a
    nonexistent layer, and a blank answer are all silently ignored rather than
@@ -501,7 +616,10 @@ attribution.
   than "only the code that changed".
 - The "mapped N files" message reports node count, not file count (693 vs.
   187 on CodeAtlas itself; 6000 vs. 3000 on the synthetic repo). Unchanged
-  across four walks.
+  across five walks — 801 vs. 219 at `e68c184`. It has now been carried long
+  enough to be a decision rather than an oversight: it is the only place the
+  CLI states a number to the user that is not true, and it is a one-word fix
+  at `lib.rs:100`.
 - **Referential integrity is not part of the contract.** A dangling edge —
   one whose `source` or `target` names no node — validates against the
   published schema and is accepted by `share`. It matters only for
