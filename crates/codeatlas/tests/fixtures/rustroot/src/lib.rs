@@ -48,3 +48,22 @@ pub fn from_self() -> i32 {
 pub fn external() -> Option<i32> {
     serde_json::from_str("7").ok()
 }
+
+/// A local type whose method shares a name with `util::helper`.
+pub struct Util;
+
+impl Util {
+    pub fn helper(&self) -> i32 {
+        0
+    }
+}
+
+/// The decoy for the value-receiver row, and it has to live *here*: this file
+/// declares `mod util;`, so a bare `util::` written in it really does resolve
+/// to `src/util.rs`. Rust's `::` may be resolved on sight precisely because it
+/// can only ever separate path segments. A `.` promises nothing — `util` below
+/// is a binding holding a value — and following one here would fabricate an
+/// edge the source does not contain.
+pub fn call_on_a_value(util: Util) -> i32 {
+    util.helper()
+}
