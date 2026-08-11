@@ -19,6 +19,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { KnowledgeGraph, Node as MapNode } from "../index.js";
 import { AnswerPanel } from "./AnswerPanel.js";
 import { type AskFn, useAsk } from "./ask.js";
@@ -54,6 +55,12 @@ import {
 } from "./regions.js";
 import { shortestPath } from "./paths.js";
 import { Narrative, TourPanel } from "./TourPanel.js";
+import { motionDuration } from "./motion.js";
+import { Walkthrough } from "./Walkthrough.js";
+import {
+  resolveWalkthroughSteps,
+  type WalkthroughStep,
+} from "./walkthrough.js";
 import "@xyflow/react/dist/style.css";
 import "./styles.css";
 
@@ -62,18 +69,6 @@ type Tab = "info" | "files";
 /** How long the viewport takes to travel, matching the canvas transitions in
  * `styles.css`. One number, so the cards and the camera settle together. */
 const FIT_MS = 240;
-
-/** Zero when the reader has asked their system for less motion. Read at the
- * moment of the move rather than cached, so changing the setting takes effect
- * without a reload, and guarded because a test environment need not implement
- * `matchMedia`. */
-function motionDuration(ms: number): number {
-  const reduced =
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  return reduced ? 0 : ms;
-}
 
 export function MapExplorer({
   map,
@@ -112,6 +107,17 @@ export function MapExplorer({
   const [pathFrom, setPathFrom] = useState<MapNode | null>(null);
   const [pathTo, setPathTo] = useState<MapNode | null>(null);
   const [showOverlay, setShowOverlay] = useState(false);
+  // The codebase tour's position, held here rather than inside its own panel
+  // so that starting the walkthrough of the interface can put it back to its
+  // starting line. Two walks running at once is the collision story 20 was
+  // written to avoid.
+  const [tourIndex, setTourIndex] = useState<number | null>(null);
+  // The steps are resolved when the reader presses the control, not declared
+  // ahead of time: what is on the page is what gets walked, and a page
+  // without a question box or a diff overlay is never told about one.
+  const [walkthrough, setWalkthrough] = useState<WalkthroughStep[] | null>(
+    null,
+  );
   const canvas = useRef<ReactFlowInstance<AppFlowNode, FlowEdge> | null>(null);
 
   const byId = useMemo(() => nodesById(map), [map]);
@@ -190,6 +196,19 @@ export function MapExplorer({
     asking.submit(query);
   };
 
+  // Starting the walkthrough is also a tidying-up. Two things follow from it
+  // being modal: nothing else may be left open underneath — the cascade has
+  // one order, and two layers both claiming to be innermost is how ticket
+  // 22's dead zone was built — and the *other* walk in this product, the
+  // codebase tour behind the Learn switch, must not be left parked mid-step
+  // behind the thing that interrupted it.
+  const startWalkthrough = () => {
+    setSearchDismissed(true);
+    setExportOpen(false);
+    setTourIndex(null);
+    setWalkthrough(resolveWalkthroughSteps());
+  };
+
   // Overview → region → file is a stack, and back means one step up it, never
   // two. The label names the destination because the same word at three
   // depths would mean three different things, and a reader deciding whether
@@ -212,9 +231,15 @@ export function MapExplorer({
   // nothing at all.
   //
   // Order is innermost-first, and it has to be written down because every
-  // layer wants the same key: the search overlay, then the share/export
-  // menu, then the path panel, then the answer to a question, then one step
-  // back up the overview → region → file stack.
+  // layer wants the same key: the walkthrough, then the search overlay, then
+  // the share/export menu, then the path panel, then the answer to a
+  // question, then one step back up the overview → region → file stack.
+  //
+  // The walkthrough goes first because it is the only layer that is modal
+  // over the others rather than beside them — while it runs the rest of the
+  // page is inert, so there is nothing else Escape could sensibly mean, and
+  // anything it did reach would be a control the reader cannot see the
+  // effect of.
   //
   // The answer sits below the two things that pop up *over* the page and
   // above the navigation stack. It is a band the reader deliberately put
@@ -230,6 +255,10 @@ export function MapExplorer({
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") {
+        return;
+      }
+      if (walkthrough !== null) {
+        setWalkthrough(null);
         return;
       }
       if (searchShown) {
@@ -458,7 +487,12 @@ export function MapExplorer({
   ]);
 
   return (
-    <div className="explorer">
+    /* `inert` while the walkthrough runs, which is the browser-level
+       statement of "this is behind a modal": not focusable, not clickable,
+       out of the accessibility tree. The walkthrough itself is portalled to
+       the document body for exactly that reason — a dialog inside the thing
+       it disables is a dialog nobody can reach. */
+    <div className="explorer" inert={walkthrough !== null}>
       <Header
         map={map}
         mode={mode}
@@ -473,9 +507,11 @@ export function MapExplorer({
         shared={shared}
         exportOpen={exportOpen}
         onExportOpen={setExportOpen}
+        walkthroughOpen={walkthrough !== null}
+        onStartWalkthrough={startWalkthrough}
       />
 
-      <div className="searchrow" ref={searchRow}>
+      <div className="searchrow" ref={searchRow} data-walkthrough="search">
         <span className="search-glyph" aria-hidden="true">
           ⌕
         </span>
@@ -512,6 +548,7 @@ export function MapExplorer({
           <button
             type="button"
             className="ask-button"
+            data-walkthrough="ask"
             // Disabled while one question is in flight, so pressing again
             // reads as refused rather than as ignored. The refusal itself is
             // `useAsk.submit`'s — every way of asking meets it there, which
@@ -548,7 +585,7 @@ export function MapExplorer({
         onDismiss={asking.dismiss}
       />
 
-      <div className="chiprow">
+      <div className="chiprow" data-walkthrough="regions">
         <span className="chiprow-total">
           {regions.length} {regions.length === 1 ? "region" : "regions"}
         </span>
@@ -567,7 +604,7 @@ export function MapExplorer({
           </button>
         ))}
         {overlay && (
-          <label className="overlay-toggle">
+          <label className="overlay-toggle" data-walkthrough="diff">
             <input
               type="checkbox"
               aria-label="Diff overlay"
@@ -588,7 +625,7 @@ export function MapExplorer({
 
       <div className="workspace">
 
-        <aside className="rightpanel">
+        <aside className="rightpanel" data-walkthrough="panel">
           <div className="tabs" role="tablist" aria-label="Detail">
             {(["info", "files"] as const).map((t) => (
               <button
@@ -629,7 +666,12 @@ export function MapExplorer({
             <FilesPanel map={map} regions={regions} onSelectNode={reveal} />
           ) : mode === "learn" ? (
             <>
-              <TourPanel map={map} onSelect={reveal} />
+              <TourPanel
+                map={map}
+                onSelect={reveal}
+                index={tourIndex}
+                onIndex={setTourIndex}
+              />
               <FlowsPanel map={map} onSelect={reveal} />
             </>
           ) : (
@@ -643,7 +685,7 @@ export function MapExplorer({
           )}
         </aside>
 
-        <main className="canvas">
+        <main className="canvas" data-walkthrough="canvas">
           <nav className="breadcrumb" aria-label="Canvas scope">
             {/* Beside the trail rather than instead of it: the breadcrumb
                 says where you are, and this says how to leave. Both still
@@ -713,6 +755,15 @@ export function MapExplorer({
           </ReactFlow>
         </main>
       </div>
+
+      {walkthrough !== null &&
+        createPortal(
+          <Walkthrough
+            steps={walkthrough}
+            onClose={() => setWalkthrough(null)}
+          />,
+          document.body,
+        )}
     </div>
   );
 }

@@ -121,7 +121,7 @@ describe("CodeAtlas's own self-scan map", () => {
 
     // And the walk is reachable: the newcomer switches to Learn and starts.
     await openLearn(user);
-    const panel = within(screen.getByLabelText("Guided tour"));
+    const panel = within(screen.getByLabelText("Codebase tour"));
     await user.click(panel.getByRole("button", { name: /start tour/i }));
     expect(panel.getByText(`Step 1 of ${tour.length}`)).toBeInTheDocument();
     const first = paths[0];

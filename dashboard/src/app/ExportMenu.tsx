@@ -126,7 +126,7 @@ export function ExportMenu({
   const enriched = enrichedSlots(map);
 
   return (
-    <div className="export-menu-wrap" ref={wrap}>
+    <div className="export-menu-wrap" ref={wrap} data-walkthrough="export">
       <button
         type="button"
         ref={toggle}

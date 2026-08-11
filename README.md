@@ -10,7 +10,7 @@ flags are the only exceptions — `scan --enrich` and `serve --ask` — and a
 sealed build exists in which egress is not a forbidden action but a compile
 error.
 
-Scanning CodeAtlas itself produces 1126 nodes and 2281 edges in about 130 ms.
+Scanning CodeAtlas itself produces 1224 nodes and 2264 edges in about 150 ms.
 
 ## Quick start
 

@@ -7,7 +7,7 @@ import type userEvent from "@testing-library/user-event";
 
 type User = ReturnType<typeof userEvent.setup>;
 
-/** Switches the right panel to the guided tour. */
+/** Switches the right panel to the codebase tour. */
 export async function openLearn(user: User): Promise<void> {
   await user.click(
     within(screen.getByRole("radiogroup", { name: "View" })).getByRole(

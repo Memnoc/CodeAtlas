@@ -17,15 +17,25 @@ export function SegmentedControl<T extends string>({
   value,
   options,
   onChange,
+  walkthrough,
 }: {
   /** Group name — also the control's accessible name. */
   name: string;
   value: T;
   options: readonly SegmentedOption<T>[];
   onChange: (value: T) => void;
+  /** Which walkthrough step this switch is the subject of. On the group and
+   * not on either button: the reader is being shown a decision, and a
+   * spotlight cut around one half of it describes half a decision. */
+  walkthrough?: string;
 }) {
   return (
-    <div className="segmented" role="radiogroup" aria-label={name}>
+    <div
+      className="segmented"
+      role="radiogroup"
+      aria-label={name}
+      {...(walkthrough === undefined ? {} : { "data-walkthrough": walkthrough })}
+    >
       {options.map((option) => (
         <button
           key={option.value}

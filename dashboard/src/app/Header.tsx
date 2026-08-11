@@ -5,6 +5,7 @@ import { ExportMenu } from "./ExportMenu.js";
 import type { RegionKind } from "./regions.js";
 import { SegmentedControl } from "./SegmentedControl.js";
 import { ThemeToggle } from "./ThemeToggle.js";
+import { WalkthroughLauncher } from "./Walkthrough.js";
 
 /** Overview draws the map; Learn walks the guided tour through it. */
 export type Mode = "overview" | "learn";
@@ -20,6 +21,8 @@ export function Header({
   shared,
   exportOpen,
   onExportOpen,
+  walkthroughOpen,
+  onStartWalkthrough,
 }: {
   map: KnowledgeGraph;
   mode: Mode;
@@ -35,6 +38,10 @@ export function Header({
    * same cascade as everything else that opens (ticket 22). */
   exportOpen: boolean;
   onExportOpen: (open: boolean) => void;
+  /** Owned by the explorer for the same reason, and for a second one: it is
+   * the explorer that goes inert while the walkthrough runs. */
+  walkthroughOpen: boolean;
+  onStartWalkthrough: () => void;
 }) {
   const enriched = map.nodes.filter((n) => n.provenance === "llm").length;
   // Learn holds the tour *and* the flows, so the hint has to speak for both:
@@ -43,14 +50,14 @@ export function Header({
   const flowCount = map.domain_flows?.length ?? 0;
   const learnHint =
     tourLength > 0
-      ? `Walk the ${tourLength}-step guided tour`
+      ? `Walk the ${tourLength}-step codebase tour`
       : flowCount > 0
-        ? `No tour in this map; ${flowCount} call flows to follow`
-        : "This map has no tour and no call flows";
+        ? `No codebase tour in this map; ${flowCount} call flows to follow`
+        : "This map has no codebase tour and no call flows";
 
   return (
     <header className="topbar">
-      <div className="topbar-identity">
+      <div className="topbar-identity" data-walkthrough="identity">
         <h1 className="project-name">{map.project.name}</h1>
         <span className="provenance-tally" data-testid="provenance-tally">
           <strong>{grouping}</strong>
@@ -65,6 +72,7 @@ export function Header({
       <div className="topbar-modes">
         <SegmentedControl
           name="View"
+          walkthrough="view"
           value={mode}
           onChange={onMode}
           options={[
@@ -78,6 +86,7 @@ export function Header({
         />
         <SegmentedControl
           name="Grouping"
+          walkthrough="grouping"
           value={grouping}
           onChange={onGrouping}
           options={[
@@ -106,11 +115,20 @@ export function Header({
           type="button"
           className={`topbar-button${pathOpen ? " topbar-button-on" : ""}`}
           aria-pressed={pathOpen}
+          data-walkthrough="path"
           title="Find the shortest chain of relationships between two nodes"
           onClick={onTogglePath}
         >
           Path
         </button>
+        {/* Named for what it walks. The other walk in this product is the
+            *codebase* tour behind the Learn switch, and two things called a
+            tour would confuse the reader before either of them explained
+            anything. */}
+        <WalkthroughLauncher
+          open={walkthroughOpen}
+          onStart={onStartWalkthrough}
+        />
         <ThemeToggle />
       </div>
     </header>

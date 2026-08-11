@@ -1,9 +1,16 @@
-// The guided tour (spec story 6): the map's ordered walk over the files that
-// carry the architecture, driven one step at a time. The CLI decides which
-// files are on the walk and in what order (crates/codeatlas/src/semantics.rs);
-// this panel only renders that decision and moves the canvas selection along
-// with it.
-import { useMemo, useState } from "react";
+// The tour of the *codebase* (spec story 6): the map's ordered walk over the
+// files that carry the architecture, driven one step at a time. The CLI
+// decides which files are on the walk and in what order
+// (crates/codeatlas/src/semantics.rs); this panel only renders that decision
+// and moves the canvas selection along with it.
+//
+// Named for its subject, because the product has a second walk — the
+// walkthrough of the *interface*, story 20 — and "tour" on its own would not
+// say which one a reader had started. The two must not run at once either,
+// which is why the step index below is the explorer's rather than this
+// panel's: starting the walkthrough puts this walk back to its first step,
+// and a panel holding its own index could not be told to.
+import { useMemo } from "react";
 import type { KnowledgeGraph, Node as MapNode } from "../index.js";
 import { nodesById } from "./graph.js";
 import { enrichmentHint, narrativeOf } from "./labels.js";
@@ -12,10 +19,15 @@ import { ProvenanceBadge } from "./ProvenanceBadge.js";
 export function TourPanel({
   map,
   onSelect,
+  index,
+  onIndex,
 }: {
   map: KnowledgeGraph;
   /** Selects a node on the canvas — the tour's whole effect. */
   onSelect: (id: string) => void;
+  /** Which step the walk is standing on, or `null` before it starts. */
+  index: number | null;
+  onIndex: (index: number | null) => void;
 }) {
   const byId = useMemo(() => nodesById(map), [map]);
   // A step naming a node this map does not contain cannot be pointed at, so
@@ -24,7 +36,6 @@ export function TourPanel({
     const known = nodesById(map);
     return (map.tour ?? []).filter((step) => known.has(step.node));
   }, [map]);
-  const [index, setIndex] = useState<number | null>(null);
 
   if (steps.length === 0) {
     return null;
@@ -35,15 +46,15 @@ export function TourPanel({
     if (step === undefined) {
       return;
     }
-    setIndex(next);
+    onIndex(next);
     onSelect(step.node);
   };
 
   const current = index === null ? undefined : steps[index];
   if (index === null || current === undefined) {
     return (
-      <section className="tour" aria-label="Guided tour">
-        <h2>Guided tour</h2>
+      <section className="tour" aria-label="Codebase tour">
+        <h2>Codebase tour</h2>
         <p className="tour-progress">
           {steps.length} {steps.length === 1 ? "step" : "steps"}
         </p>
@@ -55,8 +66,8 @@ export function TourPanel({
   }
 
   return (
-    <section className="tour" aria-label="Guided tour">
-      <h2>Guided tour</h2>
+    <section className="tour" aria-label="Codebase tour">
+      <h2>Codebase tour</h2>
       <p className="tour-progress">
         Step {index + 1} of {steps.length}
       </p>

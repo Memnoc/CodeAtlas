@@ -194,7 +194,7 @@ describe("the guided tour's way back", () => {
         { name: "Learn" },
       ),
     );
-    const tour = () => within(screen.getByLabelText("Guided tour"));
+    const tour = () => within(screen.getByLabelText("Codebase tour"));
     await user.click(tour().getByRole("button", { name: "Start tour" }));
 
     expect(tour().getByRole("button", { name: "Previous" })).toBeDisabled();
@@ -203,7 +203,7 @@ describe("the guided tour's way back", () => {
 
     // And it really goes back, rather than only lighting up.
     await user.click(tour().getByRole("button", { name: "Previous" }));
-    expect(screen.getByLabelText("Guided tour")).toHaveTextContent(
+    expect(screen.getByLabelText("Codebase tour")).toHaveTextContent(
       /step 1 of 3/i,
     );
   });

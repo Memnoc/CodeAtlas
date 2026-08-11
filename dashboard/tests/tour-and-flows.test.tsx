@@ -22,7 +22,7 @@ describe("guided tour", () => {
     render(<MapExplorer map={map} />);
     await openLearn(user);
 
-    const tour = within(screen.getByLabelText("Guided tour"));
+    const tour = within(screen.getByLabelText("Codebase tour"));
     // Nothing is selected until the newcomer starts walking.
     expect(selectedOnCanvas()).toBeNull();
 
@@ -54,7 +54,7 @@ describe("guided tour", () => {
     render(<MapExplorer map={map} />);
     await openLearn(user);
 
-    const tour = within(screen.getByLabelText("Guided tour"));
+    const tour = within(screen.getByLabelText("Codebase tour"));
     await user.click(tour.getByRole("button", { name: /start tour/i }));
     expect(tour.getByRole("button", { name: "Previous" })).toBeDisabled();
 
@@ -69,7 +69,7 @@ describe("guided tour", () => {
     render(<MapExplorer map={map} />);
     await openLearn(user);
 
-    const tour = within(screen.getByLabelText("Guided tour"));
+    const tour = within(screen.getByLabelText("Codebase tour"));
     await user.click(tour.getByRole("button", { name: /start tour/i }));
     // Step 1 is narrated by enrichment …
     expect(tour.getByTestId("provenance-badge")).toHaveTextContent("llm");
@@ -87,7 +87,7 @@ describe("guided tour", () => {
     await openLearn(user);
 
     // The fixture's fourth step names a node this map does not contain.
-    const tour = within(screen.getByLabelText("Guided tour"));
+    const tour = within(screen.getByLabelText("Codebase tour"));
     expect(map.tour?.length).toBe(4);
     await user.click(tour.getByRole("button", { name: /start tour/i }));
     expect(tour.getByText("Step 1 of 3")).toBeInTheDocument();
@@ -220,7 +220,7 @@ describe("maps without a tour or domain flows", () => {
   // tour anyway.
   async function bothSwitchesTried(user: ReturnType<typeof userEvent.setup>) {
     await openLearn(user);
-    expect(screen.queryByLabelText("Guided tour")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Codebase tour")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Domain flows")).not.toBeInTheDocument();
     // The other switch changes the canvas grouping, never the panel.
     await openDomainGrouping(user);

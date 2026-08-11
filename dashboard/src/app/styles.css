@@ -989,11 +989,16 @@ button.crumb:hover {
 
 /* Asked not to animate, do not animate. The canvas still says everything it
  * said before — the states are colour and weight, and the movement between
- * them was never carrying any of the meaning. */
+ * them was never carrying any of the meaning. The walkthrough's spotlight is
+ * held to the same rule: it still lands on the right control, it just gets
+ * there in one frame. The movements this file cannot express — the viewport's
+ * easing, bringing a walkthrough step into view — read the same query from
+ * `motion.ts`, so the two halves cannot disagree. */
 @media (prefers-reduced-motion: reduce) {
   .entity,
   .region-card,
-  .react-flow__edge-path {
+  .react-flow__edge-path,
+  .walkthrough-spotlight {
     transition: none;
   }
 }
@@ -1826,4 +1831,139 @@ button.crumb:hover {
 .narrative-hint code,
 .narrative code {
   font-size: 11px;
+}
+
+/* ── The walkthrough of the interface (story 20) ───────────────────────────
+ *
+ * A modal over the page with a hole cut in it. One element does the cutting:
+ * the spotlight is a box positioned at the lit control's rectangle, and the
+ * dim is its own outward shadow, so there is no seam between four panels to
+ * mis-align and nothing to keep in step when the rectangle moves.
+ *
+ * The geometry is inline, written from `getBoundingClientRect` — this is the
+ * one place in the dashboard where a position cannot come from the
+ * stylesheet, because it is a position on top of whatever the stylesheet did.
+ */
+.walkthrough {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  /* The shadow is bigger than the viewport by design; without this it paints
+   * a scrollbar onto the page it is explaining. */
+  overflow: hidden;
+}
+
+.walkthrough-spotlight {
+  position: fixed;
+  border-radius: 8px;
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 0 100vmax color-mix(in srgb, var(--bg) 78%, transparent);
+  pointer-events: none;
+  transition:
+    top 180ms ease-out,
+    left 180ms ease-out,
+    width 180ms ease-out,
+    height 180ms ease-out;
+}
+
+/* The lit control keeps its own colours: the point of a spotlight on the
+ * live interface rather than a picture of it is that the reader is looking
+ * at the thing they will use. */
+[data-walkthrough-lit] {
+  position: relative;
+  z-index: 101;
+}
+
+.walkthrough-card {
+  position: fixed;
+  z-index: 102;
+  width: min(360px, calc(100vw - 28px));
+  padding: 14px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 24%);
+}
+
+.walkthrough-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.walkthrough-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.walkthrough-progress {
+  margin: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.walkthrough-dismiss {
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+.walkthrough-dismiss:hover {
+  color: var(--text);
+}
+
+.walkthrough-card h2 {
+  margin: 6px 0 4px;
+  font-size: 14px;
+}
+
+.walkthrough-body {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.walkthrough-controls {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* The offer, made once. `position: relative` on the launcher so the callout
+ * hangs off the control it is about rather than off the header. */
+.walkthrough-launch {
+  position: relative;
+}
+
+.walkthrough-callout {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 30;
+  width: 260px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.walkthrough-callout p {
+  margin: 0 0 8px;
+}
+
+.walkthrough-callout-actions {
+  display: flex;
+  gap: 8px;
 }

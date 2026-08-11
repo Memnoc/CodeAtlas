@@ -96,7 +96,7 @@ describe("share mode", () => {
     // affordances are in the artifact too — showing the marker, not prose,
     // and badging the slot as enriched so the reader knows why.
     await openLearn(user);
-    const tour = within(screen.getByLabelText("Guided tour"));
+    const tour = within(screen.getByLabelText("Codebase tour"));
     await user.click(tour.getByRole("button", { name: /start tour/i }));
     expect(tour.getByText("Step 1 of 1")).toBeInTheDocument();
     expect(tour.getByText(/\[redacted\]/)).toBeVisible();

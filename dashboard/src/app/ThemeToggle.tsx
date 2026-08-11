@@ -26,6 +26,7 @@ export function ThemeToggle() {
     <button
       type="button"
       className="theme-toggle"
+      data-walkthrough="theme"
       aria-label={`Theme: Rosé Pine ${NAME[theme]}. Switch to ${NAME[next]}.`}
       title={`Switch to Rosé Pine ${NAME[next]}`}
       onClick={() => {
