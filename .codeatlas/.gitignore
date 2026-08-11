@@ -1,0 +1,12 @@
+# Written by CodeAtlas, and yours to edit (ADR-0007).
+#
+# Everything in here is rebuilt by every scan and would be pure diff noise in
+# a review — except the annotation store, which is prose somebody paid an LLM
+# for and which is meant to travel with the repository, so that cloning is all
+# a colleague needs to do to get a map that explains itself.
+#
+# CodeAtlas writes this file only when it is missing. Edit it and the edit
+# stands: to keep enriched prose out of git, delete the last line.
+*
+!.gitignore
+!annotations.json

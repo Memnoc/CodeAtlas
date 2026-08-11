@@ -14,6 +14,37 @@ use crate::parsers::{self, SymbolKind};
 /// Where all CodeAtlas artifacts live, under the scanned root.
 pub const OUTPUT_DIR: &str = ".codeatlas";
 
+/// The nested ignore file every scan puts inside [`OUTPUT_DIR`] (ADR-0007).
+pub const IGNORE_FILE: &str = ".gitignore";
+
+/// What [`IGNORE_FILE`] holds: ignore everything CodeAtlas regenerates,
+/// publish the annotation store.
+///
+/// The map is rebuilt from scratch on every run (ADR-0005) and is 791 KB on
+/// this repository, so committing it would be pure diff noise. The annotation
+/// store is the opposite: LLM prose is a per-developer purchase, and without
+/// this file the person who paid for it is the only person who ever sees it
+/// (spec story 18).
+///
+/// `annotations.json` is spelled out rather than interpolated because a
+/// `const` cannot call [`crate::enrich::ANNOTATIONS_FILE`];
+/// `the_ignore_file_publishes_the_store_the_code_actually_writes` fails if the
+/// two ever disagree.
+pub const DEFAULT_IGNORE: &str = "\
+# Written by CodeAtlas, and yours to edit (ADR-0007).
+#
+# Everything in here is rebuilt by every scan and would be pure diff noise in
+# a review — except the annotation store, which is prose somebody paid an LLM
+# for and which is meant to travel with the repository, so that cloning is all
+# a colleague needs to do to get a map that explains itself.
+#
+# CodeAtlas writes this file only when it is missing. Edit it and the edit
+# stands: to keep enriched prose out of git, delete the last line.
+*
+!.gitignore
+!annotations.json
+";
+
 /// Directories never worth mapping, ignored even when no gitignore says so.
 const DEFAULT_EXCLUDES: &[&str] = &["node_modules", "target", ".git", OUTPUT_DIR];
 
@@ -486,12 +517,31 @@ fn plural(word: &str, n: usize) -> String {
     format!("{word}{}", if sibilant { "es" } else { "s" })
 }
 
-/// Writes the map to `.codeatlas/knowledge-graph.json` under the scanned root.
+/// Writes the map to `.codeatlas/knowledge-graph.json` under the scanned root,
+/// alongside the ignore file that decides which of those artifacts a
+/// repository keeps ([`write_ignore_file`]).
 pub fn save(root: &Path, graph: &KnowledgeGraph) -> Result<()> {
     let dir = root.join(OUTPUT_DIR);
     fs::create_dir_all(&dir)?;
     let mut json = serde_json::to_string_pretty(graph)?;
     json.push('\n');
     fs::write(dir.join("knowledge-graph.json"), json)?;
-    Ok(())
+    write_ignore_file(&dir)
+}
+
+/// Puts [`DEFAULT_IGNORE`] in `dir` when nothing is there, and leaves an
+/// existing file alone.
+///
+/// ADR-0007 says every scan writes this file and does not settle what happens
+/// when one already exists; ticket 30 settles it. Someone who edited it —
+/// deciding, say, that their prose is not going into git — made a real
+/// decision, and a tool that silently overwrites a decision every scan is one
+/// people stop trusting with their repository. A file already byte-identical
+/// to the default is left alone too: rewriting it would only churn its mtime.
+fn write_ignore_file(dir: &Path) -> Result<()> {
+    let path = dir.join(IGNORE_FILE);
+    if fs::read(&path).is_ok() {
+        return Ok(());
+    }
+    fs::write(&path, DEFAULT_IGNORE).with_context(|| format!("cannot write {}", path.display()))
 }

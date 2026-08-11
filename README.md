@@ -10,7 +10,7 @@ flags are the only exceptions — `scan --enrich` and `serve --ask` — and a
 sealed build exists in which egress is not a forbidden action but a compile
 error.
 
-Scanning CodeAtlas itself produces 598 nodes and 1096 edges in about 60 ms.
+Scanning CodeAtlas itself produces 1126 nodes and 2281 edges in about 130 ms.
 
 ## Quick start
 
@@ -24,8 +24,16 @@ cargo build --release
 ./target/release/codeatlas serve .    # opens the map on http://127.0.0.1:4173/
 ```
 
-Everything CodeAtlas writes lands in `.codeatlas/` under the scanned root — add
-it to your `.gitignore` and scanning never dirties a worktree.
+Everything CodeAtlas writes lands in `.codeatlas/` under the scanned root, and
+a scan puts a `.gitignore` there so you do not have to: the regenerated map is
+ignored, the annotation store is not. That one exception is deliberate — see
+[Enrichment](#enrichment-optional). The file is written when it is missing and
+never overwritten, so editing it is how you change the arrangement.
+
+If your repository already ignores `.codeatlas/` outright, remove that line or
+narrow it to `.codeatlas/*`: git will not let a nested file re-include
+anything under a directory the parent excluded, so an outright exclusion keeps
+enrichment unpublished no matter what the nested file says.
 
 ## Commands
 
@@ -81,9 +89,18 @@ enrichment relabels reality, it never creates it. If the provider fails, is
 unreachable, or is never configured, you still get a complete, schema-valid
 structural map.
 
-Annotations are cached in `.codeatlas/` keyed by node identity and a content
-hash, so a later scan re-attaches unchanged answers for free and only
-re-purchases the parts of the map that actually changed.
+Annotations are cached in `.codeatlas/annotations.json` keyed by node identity
+and a content hash, so a later scan re-attaches unchanged answers for free and
+only re-purchases the parts of the map that actually changed.
+
+**That store is meant to be committed.** Enrichment is a per-developer
+purchase, so one person enriches, commits, and pushes; everyone else clones
+and runs a plain `codeatlas scan` — no credential, no network, no flags — and
+gets the map with all its prose. The store records which provider, which
+model, and what date produced it, so a reviewer reading the diff can see where
+the prose came from. If you would rather not publish it, delete the
+`!annotations.json` line from `.codeatlas/.gitignore`; scans leave your edit
+alone.
 
 There are two providers, chosen with `--provider` or
 `CODEATLAS_ENRICH_PROVIDER`:

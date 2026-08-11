@@ -7,6 +7,15 @@ approved-by: Memnoc
 
 # ADR-0007: The annotation store is a committed repository artifact
 
+> Refined 2026-08-11 while implementing it (ticket 30). "Every scan writes a
+> `.codeatlas/.gitignore`" below did not settle the case where one already
+> exists; it does now — **a scan writes the file when it is absent and leaves
+> an existing one exactly as it is.** Clobbering would silently discard a
+> deliberate choice: someone who decided *not* to publish their prose made a
+> real decision, and a tool that overwrites a decision on every run is one
+> people stop trusting with their repository. The rest of the decision is
+> unchanged.
+
 ## Context
 
 LLM enrichment is purchased per developer: `.codeatlas/` is git-ignored, so
@@ -51,3 +60,13 @@ The store gains provider, model, and date fields, because prose entering code
 review needs to say what produced it. `knowledge-graph.json` stays ignored —
 it is regenerated every run (791 KB on this repository) and would be pure
 diff noise.
+
+One consequence surfaced on implementation and is worth stating, because it
+is the one way this mechanism silently does nothing: git will not let a nested
+file re-include anything under a directory its parent excluded outright. A
+repository whose own `.gitignore` says `.codeatlas/` therefore publishes
+nothing, however correct the nested file is, and the fix is to ignore the
+directory's *contents* instead — `.codeatlas/*`. This repository's own
+`.gitignore` said the former and was changed. The failure is at least in the
+safe direction: prose stays unpublished rather than being published by
+surprise.

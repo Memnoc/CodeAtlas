@@ -35,13 +35,22 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{EnrichmentProvider, EnrichmentRequest, EnrichmentResponse, ask, prompt};
+use super::{
+    EnrichmentProvider, EnrichmentRequest, EnrichmentResponse, ProviderIdentity, ask, prompt,
+};
 
 /// The one URL this binary can ever talk to (ADR-0006). Hardcoded on
 /// purpose: no env var, flag, or config may redirect enrichment traffic —
 /// which [`agent`] enforces at the transport level too, by refusing to
 /// follow redirects and ignoring proxy env vars.
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
+
+/// The provider spec that selects this backend, and the name it records in a
+/// written annotation store (ADR-0007). A `const` — as `agent_cli::SPEC`
+/// already is — rather than a literal repeated at each site, so the spec a
+/// reader passes, the spec the help offers and the spec the store records
+/// cannot drift apart.
+pub const SPEC: &str = "claude";
 
 /// Spec decision: the default enrichment model, overridable with `--model`.
 pub const DEFAULT_MODEL: &str = "claude-opus-5";
@@ -79,6 +88,16 @@ impl EnrichmentProvider for ClaudeProvider {
 
     fn ask(&self, question: &ask::Question) -> Result<ask::Answer> {
         prompt::parse_ask_answer(self.complete(&prompt::for_question(question))?)
+    }
+
+    /// The model is always known here: [`ClaudeProvider::new`] resolves an
+    /// absent `--model` to [`DEFAULT_MODEL`], so what is recorded is the model
+    /// the request actually carried.
+    fn identity(&self) -> ProviderIdentity {
+        ProviderIdentity {
+            provider: SPEC.to_string(),
+            model: Some(self.model.clone()),
+        }
     }
 }
 

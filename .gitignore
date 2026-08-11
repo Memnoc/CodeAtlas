@@ -1,5 +1,11 @@
 /target
-.codeatlas/
+# The directory's *contents*, not the directory: excluding a directory
+# outright is the one exclusion git will not let a nested file re-include, and
+# `.codeatlas/.gitignore` (ADR-0007) has to be able to publish the annotation
+# store. Everything in here stays ignored by default either way. The `**/`
+# keeps the old pattern's reach — a scan run from a subdirectory leaves a
+# `.codeatlas/` there too.
+**/.codeatlas/*
 node_modules/
 dashboard/dist/
 dashboard/dist-egress/

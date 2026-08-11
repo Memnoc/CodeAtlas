@@ -233,7 +233,9 @@ Spec-level decisions on top of those:
   writes a `.codeatlas/.gitignore` that ignores the regenerated map and
   publishes the annotation store, so the artifact exists without anyone
   remembering a second command. The store gains provider, model, and date
-  fields: prose entering code review has to say what produced it.
+  fields: prose entering code review has to say what produced it. *Refined
+  2026-08-11 during ticket 30, and recorded in ADR-0007: a scan writes that
+  file when it is absent and never overwrites an edited one.*
 - **Committing prose and redacting prose are the same policy, not opposite
   ones.** The line is the trust boundary. A share artifact goes to a recipient
   chosen at send time who does not hold the source, so its prose is redacted;

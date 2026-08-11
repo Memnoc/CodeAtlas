@@ -66,15 +66,20 @@ fi
 #
 #   build                             claude  api.anthropic.com  ureq
 #   sealed (--no-default-features)         0                  0     0
-#   network only                           4                  1    22
+#   network only                           3                  1    23
 #   agent-cli only                         2                  0     0
-#   default (both features)                6                  1    25
+#   default (both features)                5                  1    25
 #
-# The `network only` row is the one to read twice: 6 is 4 + 2, not 2. Under
+# Re-measured 2026-08-11 (ticket 30). These are `grep -c` LINE counts over a
+# binary, so they move with the toolchain and with unrelated code: only the
+# sealed row's zeros and the presence checks above are asserted. What survives
+# re-measurement is the shape — the default row is the sum of the other two.
+#
+# The `network only` row is the one to read twice: 5 is 3 + 2, not 2. Under
 # `agent-cli` the string is `agent_cli::PROGRAM` and `SPEC` plus the help
 # that names them; under `network` it is `DEFAULT_MODEL = "claude-opus-5"`
-# (src/enrich/claude.rs) and the `"claude"` spec literals (src/enrich.rs),
-# which have nothing to do with the CLI backend. That is why section 0's
+# and `SPEC = "claude"` (src/enrich/claude.rs), which have nothing to do with
+# the CLI backend. That is why section 0's
 # control asks for `cli:claude` instead.
 for needle in "api.anthropic.com" "ureq" "claude"; do
   if grep -q -a "$needle" "$sealed"; then

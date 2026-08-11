@@ -61,7 +61,9 @@ use std::process::{Command, Output};
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use super::{EnrichmentProvider, EnrichmentRequest, EnrichmentResponse, ask, prompt};
+use super::{
+    EnrichmentProvider, EnrichmentRequest, EnrichmentResponse, ProviderIdentity, ask, prompt,
+};
 
 /// The one program this backend will run. Not configurable: a general
 /// `cli:<program>` spec would make "CodeAtlas executes whatever you name it"
@@ -131,6 +133,28 @@ impl CliProvider {
         }
     }
 
+    /// The spec that selects this instance, as a written annotation store
+    /// records it (ADR-0007). Always [`SPEC`] in a shipped binary, where
+    /// [`PROGRAM`] is the only program this backend can spawn.
+    #[cfg(not(feature = "test-provider"))]
+    fn spec_name(&self) -> String {
+        SPEC.to_string()
+    }
+
+    /// The test build's version, which must be able to say the stand-in's
+    /// name. A store claiming that a real `claude` seat produced prose a
+    /// shell script echoed would be a record that lies — and the `cli-exec:`
+    /// string is confined to test builds along with the spec itself, so no
+    /// released binary carries a name for a program it cannot run.
+    #[cfg(feature = "test-provider")]
+    fn spec_name(&self) -> String {
+        if self.program == PROGRAM {
+            SPEC.to_string()
+        } else {
+            format!("cli-exec:{}", self.program)
+        }
+    }
+
     /// One locked-down, schema-constrained completion. Both trait methods go
     /// through here so the lockdown flags, the `--` fence and the envelope
     /// checks exist once: a second copy of the argv construction is a second
@@ -153,6 +177,16 @@ impl EnrichmentProvider for CliProvider {
 
     fn ask(&self, question: &ask::Question) -> Result<ask::Answer> {
         prompt::parse_ask_answer(self.complete(&prompt::for_question(question))?)
+    }
+
+    /// The model may be `None`, which is the honest answer: this backend
+    /// leaves an unspecified model to the subscription's own default and
+    /// never learns which one answered.
+    fn identity(&self) -> ProviderIdentity {
+        ProviderIdentity {
+            provider: self.spec_name(),
+            model: self.model.clone(),
+        }
     }
 }
 

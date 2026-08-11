@@ -220,6 +220,20 @@ pub trait EnrichmentProvider {
             "this enrichment backend cannot answer questions about the map"
         ))
     }
+
+    /// How this backend names itself where its prose is recorded (ADR-0007).
+    ///
+    /// The backend answers rather than the selection code, because only the
+    /// backend knows the model actually used: `--model` is optional, and each
+    /// has its own answer to being given none — the API provider pins
+    /// `claude-opus-5`, the CLI provider leaves the choice to the
+    /// subscription. Reconstructing that from the spec would be a guess.
+    ///
+    /// Defaulted for the same reason [`ask`](Self::ask) is: most implementors
+    /// are test doubles that never reach a store.
+    fn identity(&self) -> ProviderIdentity {
+        ProviderIdentity::unnamed()
+    }
 }
 
 /// A provider ready to be shared between the threads of `serve --ask`.
@@ -242,10 +256,17 @@ pub type SharedProvider = std::sync::Arc<dyn EnrichmentProvider + Send + Sync>;
 /// (sorted keys) and versioned so its format can evolve.
 pub const ANNOTATIONS_FILE: &str = "annotations.json";
 
-/// Bumped whenever the store format (including the hash definitions)
-/// changes; a store with another version is ignored, which merely costs a
-/// re-enrichment. 2: added the semantic sections (`layers`, `flows`,
-/// `tour`) keyed by derivation-input hashes.
+/// Bumped whenever the store format changes in a way that *invalidates*
+/// stored data — a hash definition, a key shape, the meaning of a field. A
+/// store with another version is ignored, which costs a re-enrichment, so the
+/// bump is a bill and is only worth sending when the data would otherwise be
+/// wrong. 2: added the semantic sections (`layers`, `flows`, `tour`) keyed by
+/// derivation-input hashes.
+///
+/// Purely additive optional fields do not bump it. [`ProducedBy`] (ADR-0007)
+/// is the first: a store written without it holds annotations that are still
+/// correct, and charging every existing repository a re-enrichment to learn
+/// one date would be a worse outcome than not knowing the date.
 const STORE_VERSION: u32 = 2;
 
 /// The carry-over store (ADR-0005): enrichment prose keyed by identity
@@ -262,6 +283,11 @@ const STORE_VERSION: u32 = 2;
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct AnnotationStore {
     version: u32,
+    /// What produced the prose below (ADR-0007). Optional because a store
+    /// written before ticket 30 has none, and such a store must keep
+    /// re-attaching rather than be discarded over a missing label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    produced_by: Option<ProducedBy>,
     annotations: BTreeMap<String, Annotation>,
     #[serde(default)]
     layers: BTreeMap<String, SemanticAnnotation>,
@@ -269,6 +295,51 @@ pub struct AnnotationStore {
     flows: BTreeMap<String, SemanticAnnotation>,
     #[serde(default)]
     tour: BTreeMap<String, SemanticAnnotation>,
+}
+
+/// Which backend, which model, and when — recorded because a committed store
+/// (ADR-0007) puts LLM prose into code review, and a reviewer reading that
+/// diff is entitled to know what wrote it.
+///
+/// One record for the store rather than one per annotation. The store is
+/// rebuilt wholesale from the enriched graph on every purchasing run, and a
+/// carried-over annotation's original run is not recoverable from the graph —
+/// so per-annotation provenance would be honest only for the slots that run
+/// happened to buy, and quietly wrong for the rest. This says what the last
+/// run to write the store was, which is a claim that stays true.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct ProducedBy {
+    /// The provider spec that produced it, e.g. `claude` or `cli:claude`.
+    provider: String,
+    /// The model within that backend, where the backend names one. A CLI
+    /// backend left on its subscription's own default names none, and
+    /// inventing one here would be a guess presented as a record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    /// UTC calendar date, `YYYY-MM-DD`. A date and not a timestamp: this is
+    /// read by a person in a diff, and a second-resolution clock would churn
+    /// the file on every run that changed nothing else.
+    date: String,
+}
+
+/// How a backend names itself in a written store. Defaulted on the trait, so
+/// the dozen test doubles that will never write one owe nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderIdentity {
+    /// The spec a reader would pass to `--provider` to get this backend.
+    pub provider: String,
+    /// The model it used, where it names one.
+    pub model: Option<String>,
+}
+
+impl ProviderIdentity {
+    /// The identity of a backend that has not said who it is.
+    fn unnamed() -> Self {
+        Self {
+            provider: "unknown".to_string(),
+            model: None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -422,7 +493,10 @@ impl AnnotationStore {
 /// deterministically (sorted keys, pretty, trailing newline). Rebuilding
 /// from the graph is self-pruning: annotations for deleted elements or
 /// no-longer-matching derivations simply cease to exist.
-fn save_store(root: &Path, graph: &KnowledgeGraph) -> Result<()> {
+///
+/// `identity` is the backend this run purchased through; it is recorded with
+/// today's date so the committed store says what wrote it (ADR-0007).
+fn save_store(root: &Path, graph: &KnowledgeGraph, identity: ProviderIdentity) -> Result<()> {
     let mut hashes = HashCache::new(root);
     let annotations: BTreeMap<String, Annotation> = graph
         .nodes
@@ -484,6 +558,11 @@ fn save_store(root: &Path, graph: &KnowledgeGraph) -> Result<()> {
         .collect();
     let store = AnnotationStore {
         version: STORE_VERSION,
+        produced_by: Some(ProducedBy {
+            provider: identity.provider,
+            model: identity.model,
+            date: today_utc(),
+        }),
         annotations,
         layers,
         flows,
@@ -525,6 +604,45 @@ impl<'a> HashCache<'a> {
     }
 }
 
+/// Today's UTC date as `YYYY-MM-DD`, for the store's provenance record.
+///
+/// A clock that cannot be read is not worth failing an enrichment run over,
+/// so an unreadable one yields the epoch — a date obviously wrong to a
+/// reader, rather than a plausible-looking lie.
+fn today_utc() -> String {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs());
+    civil_date(i64::try_from(seconds / 86_400).unwrap_or(0))
+}
+
+/// Days since 1970-01-01 → `YYYY-MM-DD`, by Howard Hinnant's
+/// `civil_from_days`. Hand-rolled because ADR-0006 admits no new dependency
+/// and a calendar crate would be a lot of supply chain for one line of a JSON
+/// file; the algorithm is well known and pinned by
+/// [`the_calendar_survives_leap_years_and_century_boundaries`].
+///
+/// The era arithmetic shifts the year to start in March, which puts the leap
+/// day at the end of a 146097-day (400-year) era and makes every case fall
+/// out of the same expression.
+fn civil_date(days: i64) -> String {
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let march_month = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * march_month + 2) / 5 + 1;
+    let month = if march_month < 10 {
+        march_month + 3
+    } else {
+        march_month - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
 /// FNV-1a 64-bit over the file's bytes. Not cryptographic — this is cache
 /// invalidation, not security — but deterministic across platforms and
 /// dependency-free. The `fnv1a64:` prefix names the algorithm so a future
@@ -563,7 +681,7 @@ pub fn run(root: &Path, graph: &mut KnowledgeGraph, choice: ProviderChoice<'_>) 
     }
     let provider = resolve_provider(choice)?;
     let count = fill_slots(graph, provider.as_ref())?;
-    save_store(root, graph)?;
+    save_store(root, graph, provider.identity())?;
     crate::scan::save(root, graph)?;
     Ok(Outcome::Enriched(count))
 }
@@ -769,7 +887,7 @@ pub fn recognised_specs() -> Vec<&'static str> {
     #[allow(unused_mut)]
     let mut specs: Vec<&'static str> = Vec::new();
     #[cfg(feature = "network")]
-    specs.push("claude");
+    specs.push(claude::SPEC);
     #[cfg(feature = "agent-cli")]
     specs.push(agent_cli::SPEC);
     #[cfg(feature = "test-provider")]
@@ -850,7 +968,7 @@ fn model_aware_specs() -> Vec<&'static str> {
     #[allow(unused_mut)]
     let mut specs: Vec<&'static str> = Vec::new();
     #[cfg(feature = "network")]
-    specs.push("claude");
+    specs.push(claude::SPEC);
     #[cfg(feature = "agent-cli")]
     specs.push(agent_cli::SPEC);
     specs
@@ -923,7 +1041,7 @@ fn provider_from_spec(spec: Option<&str>, model: Option<&str>) -> Result<Selecte
         #[cfg(feature = "test-provider")]
         Some("fail") => Ok(Box::new(test_provider::FailingProvider)),
         #[cfg(feature = "network")]
-        Some("claude") => Ok(Box::new(claude::ClaudeProvider::new(model))),
+        Some(spec) if spec == claude::SPEC => Ok(Box::new(claude::ClaudeProvider::new(model))),
         #[cfg(feature = "agent-cli")]
         Some(spec) if spec == agent_cli::SPEC => Ok(Box::new(agent_cli::CliProvider::new(model))),
         // Seam 3's injection point: a stand-in executable so the spawn can be
@@ -1605,6 +1723,181 @@ mod tests {
         assert_eq!(graph.nodes[2].summary, "Mechanical summary of b.ts");
     }
 
+    /// The store's date is computed here rather than taken from a crate
+    /// (ADR-0006 admits no new dependency), so the calendar is pinned against
+    /// dates checked by hand — the leap day, the year boundary either side of
+    /// it, and the 2000 century leap that the naive `%4` rule gets wrong.
+    #[test]
+    fn the_calendar_survives_leap_years_and_century_boundaries() {
+        for (days, expected) in [
+            (0, "1970-01-01"),
+            (-1, "1969-12-31"),
+            (11_016, "2000-02-29"),
+            (19_723, "2024-01-01"),
+            (19_782, "2024-02-29"),
+            (19_783, "2024-03-01"),
+            (20_678, "2026-08-13"),
+        ] {
+            assert_eq!(civil_date(days), expected, "day {days} since the epoch");
+        }
+    }
+
+    /// The clock is a process-global, so what is assertable here is the shape
+    /// the store commits to — four digits, two, two — and that a real run
+    /// produces a date from this century rather than the epoch fallback.
+    #[test]
+    fn todays_date_is_an_iso_calendar_date() {
+        let today = today_utc();
+        let parts: Vec<&str> = today.split('-').collect();
+        assert_eq!(parts.len(), 3, "not an ISO date: {today}");
+        assert_eq!(
+            (parts[0].len(), parts[1].len(), parts[2].len()),
+            (4, 2, 2),
+            "not zero-padded: {today}"
+        );
+        assert!(
+            today.as_str() > "2025-01-01",
+            "the clock was not read: {today}"
+        );
+    }
+
+    /// Prose committed into a repository (ADR-0007) enters code review, and a
+    /// reviewer is entitled to know what wrote it. The backend answers rather
+    /// than the selection code, because the model is often the backend's own
+    /// default and nothing else knows it.
+    #[test]
+    fn the_written_store_records_the_provider_the_model_and_the_date() {
+        struct Named;
+        impl EnrichmentProvider for Named {
+            fn enrich(&self, _request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
+                Ok(EnrichmentResponse::default())
+            }
+            fn identity(&self) -> ProviderIdentity {
+                ProviderIdentity {
+                    provider: "a-backend".to_string(),
+                    model: Some("a-model".to_string()),
+                }
+            }
+        }
+
+        let root = TempRoot::new("store-provenance");
+        save_store(root.path(), &graph(), Named.identity()).unwrap();
+
+        let written: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(
+                root.path()
+                    .join(crate::scan::OUTPUT_DIR)
+                    .join(ANNOTATIONS_FILE),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(written["produced_by"]["provider"], "a-backend");
+        assert_eq!(written["produced_by"]["model"], "a-model");
+        assert_eq!(written["produced_by"]["date"], today_utc());
+        assert_eq!(
+            written["version"], STORE_VERSION,
+            "the provenance fields are additive; a bump would discard every \
+             store already written"
+        );
+    }
+
+    /// A backend that names no model must not have one invented for it: the
+    /// CLI provider leaves an unasked-for model to the subscription's own
+    /// default and genuinely does not know which one answered.
+    #[test]
+    fn a_backend_with_no_model_records_none_rather_than_a_guess() {
+        struct Modelless;
+        impl EnrichmentProvider for Modelless {
+            fn enrich(&self, _request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
+                Ok(EnrichmentResponse::default())
+            }
+            fn identity(&self) -> ProviderIdentity {
+                ProviderIdentity {
+                    provider: "a-backend".to_string(),
+                    model: None,
+                }
+            }
+        }
+
+        let root = TempRoot::new("store-no-model");
+        save_store(root.path(), &graph(), Modelless.identity()).unwrap();
+
+        let raw = fs::read_to_string(
+            root.path()
+                .join(crate::scan::OUTPUT_DIR)
+                .join(ANNOTATIONS_FILE),
+        )
+        .unwrap();
+        assert!(
+            !raw.contains("model"),
+            "an absent model must be absent, not null: {raw}"
+        );
+    }
+
+    /// A store written before ADR-0007's fields must still load and still
+    /// carry over. Asserted against a store that really lacks them rather
+    /// than against serde's defaults, because what is at stake is a file
+    /// already sitting in somebody's repository.
+    #[test]
+    fn a_store_without_the_provenance_fields_still_loads() {
+        let root = TempRoot::new("store-old-shape");
+        let dir = root.path().join(crate::scan::OUTPUT_DIR);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(root.path().join("src-a.ts"), b"contents").unwrap();
+        let hash = content_hash(b"contents");
+        fs::write(
+            dir.join(ANNOTATIONS_FILE),
+            format!(
+                r#"{{"version": {STORE_VERSION},
+                    "annotations": {{
+                      "file:src-a.ts": {{
+                        "content_hash": "{hash}",
+                        "summary": "Prose from before ticket 30."
+                      }}
+                    }}}}"#
+            ),
+        )
+        .unwrap();
+
+        let mut graph = graph();
+        graph.nodes[0].id = NodeId::file("src-a.ts");
+        graph.nodes[0].path = "src-a.ts".into();
+        AnnotationStore::load(root.path()).reattach(root.path(), &mut graph);
+
+        assert_eq!(graph.nodes[0].summary, "Prose from before ticket 30.");
+        assert_eq!(graph.nodes[0].provenance, Provenance::Llm);
+    }
+
+    /// A scratch directory for the tests that write a store. Hand-rolled for
+    /// the reason `agent_cli::ScratchDir` records: `tempfile` is a
+    /// dev-dependency of the integration tests, and the unit tests here have
+    /// never needed one.
+    struct TempRoot(std::path::PathBuf);
+
+    impl TempRoot {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "codeatlas-{name}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
     fn a_provider_error_propagates_and_leaves_every_slot_untouched() {
         struct Failing;
@@ -1678,6 +1971,16 @@ mod test_provider {
                     .map(|ids| ids.split_whitespace().map(str::to_string).collect())
                     .unwrap_or_default(),
             })
+        }
+
+        /// Names the backend without its `fake:<path>` argument: the path is
+        /// a temp directory that differs every run, and a store recording it
+        /// would differ every run with it.
+        fn identity(&self) -> ProviderIdentity {
+            ProviderIdentity {
+                provider: "fake".to_string(),
+                model: None,
+            }
         }
     }
 
