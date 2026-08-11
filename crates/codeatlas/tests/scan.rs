@@ -1881,12 +1881,24 @@ fn rust_qualified_calls_resolve_through_the_module_that_holds_them() {
 
     let helper = "function:src/util.rs:helper";
     for (caller, form) in [
-        ("function:src/lib.rs:from_crate_root", "crate::util::helper()"),
+        (
+            "function:src/lib.rs:from_crate_root",
+            "crate::util::helper()",
+        ),
         ("function:src/lib.rs:from_bare_module", "util::helper()"),
-        ("function:src/lib.rs:through_alias", "use crate::util as u; u::helper()"),
-        ("function:src/lib.rs:from_bound_name", "use util::helper; helper()"),
+        (
+            "function:src/lib.rs:through_alias",
+            "use crate::util as u; u::helper()",
+        ),
+        (
+            "function:src/lib.rs:from_bound_name",
+            "use util::helper; helper()",
+        ),
         ("function:src/lib.rs:from_self", "self::util::helper()"),
-        ("function:src/deep/mod.rs:up_and_across", "super::util::helper()"),
+        (
+            "function:src/deep/mod.rs:up_and_across",
+            "super::util::helper()",
+        ),
     ] {
         assert!(
             has_edge(&map, "calls", caller, helper),
@@ -1914,9 +1926,9 @@ fn rust_qualified_calls_resolve_through_the_module_that_holds_them() {
 
     // Resolving more must not invent edges. `serde_json` is outside the tree.
     assert!(
-        !edges.iter().any(|e| {
-            e["kind"] == "calls" && e["source"] == "function:src/lib.rs:external"
-        }),
+        !edges
+            .iter()
+            .any(|e| { e["kind"] == "calls" && e["source"] == "function:src/lib.rs:external" }),
         "a call into a crate outside the map produced an edge: {edges:?}"
     );
 }
@@ -1930,12 +1942,30 @@ fn python_qualified_calls_resolve_through_the_module_that_holds_them() {
 
     let helper = "function:pkg/util.py:helper";
     for (caller, form) in [
-        ("function:uses_module.py:run", "from pkg import util; util.helper()"),
-        ("function:uses_dotted.py:dotted", "import pkg.util; pkg.util.helper()"),
-        ("function:uses_alias.py:aliased", "from pkg import util as u; u.helper()"),
-        ("function:uses_dotted_alias.py:dotted_alias", "import pkg.util as pu; pu.helper()"),
-        ("function:pkg/inside.py:use", "from . import util; util.helper()"),
-        ("function:uses_both.py:both", "one statement binding module and symbol"),
+        (
+            "function:uses_module.py:run",
+            "from pkg import util; util.helper()",
+        ),
+        (
+            "function:uses_dotted.py:dotted",
+            "import pkg.util; pkg.util.helper()",
+        ),
+        (
+            "function:uses_alias.py:aliased",
+            "from pkg import util as u; u.helper()",
+        ),
+        (
+            "function:uses_dotted_alias.py:dotted_alias",
+            "import pkg.util as pu; pu.helper()",
+        ),
+        (
+            "function:pkg/inside.py:use",
+            "from . import util; util.helper()",
+        ),
+        (
+            "function:uses_both.py:both",
+            "one statement binding module and symbol",
+        ),
     ] {
         assert!(
             has_edge(&map, "calls", caller, helper),
@@ -1978,9 +2008,10 @@ fn python_qualified_calls_resolve_through_the_module_that_holds_them() {
     // receiver that no import introduced turns every one of those into a
     // fabricated edge between two files with no relationship at all.
     assert!(
-        !edges.iter().any(
-            |e| e["kind"] == "calls" && e["source"] == "function:pkg/uses_value.py:call_on_a_value"
-        ),
+        !edges
+            .iter()
+            .any(|e| e["kind"] == "calls"
+                && e["source"] == "function:pkg/uses_value.py:call_on_a_value"),
         "a dotted call on a plain value resolved to the module beside it: {edges:?}"
     );
 }
@@ -1994,8 +2025,14 @@ fn typescript_namespace_imports_resolve_qualified_calls() {
 
     let greet = "function:src/util.ts:greet";
     for (caller, form) in [
-        ("function:src/namespace.ts:viaNamespace", "import * as util; util.greet()"),
-        ("function:src/namespace.ts:viaAlias", "the same module under another local name"),
+        (
+            "function:src/namespace.ts:viaNamespace",
+            "import * as util; util.greet()",
+        ),
+        (
+            "function:src/namespace.ts:viaAlias",
+            "the same module under another local name",
+        ),
     ] {
         assert!(
             has_edge(&map, "calls", caller, greet),

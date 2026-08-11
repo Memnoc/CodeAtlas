@@ -63,4 +63,37 @@ echo "$out" | grep -q 'network' \
   || fail "sealed --enrich left no structural map behind"
 echo "ok: sealed --enrich refuses with the sealed message and the map survives"
 
+# --- 3. Provider selection tells the truth about a binary with no backend
+# (ticket 29). This is the only place the "recognises none" branch can be
+# exercised at all: every `cargo test` build carries `test-provider`, so
+# `fake:` and `fail` are always selectable there and the list is never empty.
+#
+# The claude check is scoped to --provider's own paragraph on purpose. A
+# page-wide search would trip over --model, which legitimately names the
+# provider in order to say the build does not have it — explaining an absence
+# requires naming the thing that is absent.
+provider_paragraph() {
+  "$1" scan --help 2>&1 | sed -n '/--provider/,/^$/p'
+}
+
+help="$("$sealed" scan --help 2>&1)"
+sealed_provider="$(provider_paragraph "$sealed")"
+if ! echo "$help" | grep -q -- '--provider'; then
+  fail "sealed --help omits --provider; the flag must not vanish: $help"
+fi
+if ! echo "$sealed_provider" | grep -q 'recognises none'; then
+  fail "sealed --provider does not say it has no backend: $sealed_provider"
+fi
+if echo "$sealed_provider" | grep -qi 'claude'; then
+  fail "sealed --provider offers a backend the binary cannot select: $sealed_provider"
+fi
+echo "ok: sealed --provider offers no backend and says why"
+
+if [ -n "$control" ]; then
+  if ! provider_paragraph "$control" | grep -qi 'claude'; then
+    fail "control --provider lacks 'claude' — the help probe above is vacuous"
+  fi
+  echo "ok: control binary offers the Claude backend (help probe is live)"
+fi
+
 echo "sealed probe passed"

@@ -1,11 +1,11 @@
 # Ticket 31 — enrich without ever handling a credential
 
-**Status:** blocked
+**Status:** ready
 **Spec:** docs/specs/2026-08-09-codeatlas-v1.md
 **Story:** 19 — enrich through a Claude CLI I am already logged into, so that
 CodeAtlas never handles a credential
 **Blocks:** 32
-**Blocked by:** 29 (the `--provider` flag)
+**Blocked by:** none — ticket 29 landed the `--provider` flag
 
 ## Problem
 
@@ -74,6 +74,16 @@ provider is for, so do not use it. And the exact envelope `--output-format
 json` wraps the schema-constrained result in has not been confirmed against a
 live run; confirm it at implementation time rather than guessing, since the
 parser depends on it.
+
+**What ticket 29 left for this ticket.** Provider selection is now one
+surface: `--provider` beats `CODEATLAS_ENRICH_PROVIDER` beats the build
+default, and every message that names the alternatives — `--provider` help,
+`--model` help, the unknown-spec error — renders from a single
+`recognised_specs()` list through one shared sentence. **Adding `cli:claude`
+means adding it to that list and nothing else**; no message keys on a feature
+name, precisely so that an `agent-cli`-without-`network` build does not
+describe itself as having no backend. Do not reintroduce a `#[cfg(feature =
+"network")]` in any user-facing string.
 
 The provider's own default model should be left alone rather than pinned to
 `claude-opus-5` like the API provider: a subscription's entitlement varies, and

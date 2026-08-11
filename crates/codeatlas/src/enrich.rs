@@ -10,9 +10,12 @@
 //!
 //! # Provider selection
 //!
-//! The binary resolves its provider from the `CODEATLAS_ENRICH_PROVIDER`
-//! env var; an explicit spec always wins over the default. Recognized
-//! specs and per-build defaults:
+//! The binary resolves its provider from `--provider` if given, else from
+//! the `CODEATLAS_ENRICH_PROVIDER` env var, else from the build's default.
+//! [`recognised_specs`] is the single source for what a build accepts —
+//! every message that names the alternatives renders from it, so none can
+//! offer a spec the binary cannot select. Recognised specs and per-build
+//! defaults:
 //!
 //! - `claude` — the real Claude API provider ([`claude`], `network`
 //!   builds only). This is also the **default** in a shipped `network`
@@ -22,9 +25,9 @@
 //!   self dev-dependency in `Cargo.toml`) — an error: tests must pick a
 //!   backend explicitly, so none can fall through to a provider that
 //!   opens sockets (the no-network-in-tests rule).
-//! - Unset in a **sealed build** (`--no-default-features`, ADR-0006) — a
-//!   clear "enrichment is not available in this build" error; no
-//!   networking code exists to select.
+//! - Unset in a build with no backend compiled in (`--no-default-features`,
+//!   ADR-0006's sealed build) — a clear "enrichment is not available in this
+//!   build" error; there is nothing to select.
 //!
 //! The test backends, compiled in only for test builds:
 //!
@@ -513,11 +516,11 @@ pub enum Outcome {
 /// without even resolving a provider (a repo with everything carried over
 /// must not demand credentials). Any error leaves the saved structural map
 /// untouched.
-pub fn run(root: &Path, graph: &mut KnowledgeGraph, model: Option<&str>) -> Result<Outcome> {
+pub fn run(root: &Path, graph: &mut KnowledgeGraph, choice: ProviderChoice<'_>) -> Result<Outcome> {
     if collect_slots(graph).is_empty() {
         return Ok(Outcome::NothingToEnrich);
     }
-    let provider = resolve_provider(model)?;
+    let provider = resolve_provider(choice)?;
     let count = fill_slots(graph, provider.as_ref())?;
     save_store(root, graph)?;
     crate::scan::save(root, graph)?;
@@ -702,18 +705,118 @@ pub fn fill_slots(graph: &mut KnowledgeGraph, provider: &dyn EnrichmentProvider)
     Ok(count)
 }
 
-/// Resolves the provider the CLI will use, from [`PROVIDER_ENV`]. `model`
-/// is forwarded to the Claude provider (`--model`); the offline test
-/// backends ignore it. Without a usable provider this fails with a clear
-/// message: the structural map has already been written by the time this
-/// runs, so `--enrich` degrades cleanly (spec story 14).
-pub fn resolve_provider(model: Option<&str>) -> Result<Box<dyn EnrichmentProvider>> {
-    provider_from_spec(std::env::var(PROVIDER_ENV).ok().as_deref(), model)
+/// How the caller wants enrichment performed: which backend, and which model
+/// within it. One type rather than two positional `Option<&str>` parameters
+/// of the same type travelling together from the CLI down to
+/// [`resolve_provider`], where a caller swapping them would compile and be
+/// wrong.
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderChoice<'a> {
+    /// An explicit spec from `--provider`. `None` falls back to
+    /// [`PROVIDER_ENV`], and then to the build's default.
+    pub spec: Option<&'a str>,
+    /// Forwarded to the Claude provider (`--model`); other backends ignore
+    /// it.
+    pub model: Option<&'a str>,
 }
 
-/// Provider selection separated from the env read so the precedence rules
-/// are unit-testable. An explicit [`PROVIDER_ENV`] spec always wins; with
-/// no spec the default depends on the build (see [`default_provider`]).
+/// The provider specs this build can select, in the order they are offered
+/// to a reader. Built from the compiled-in set rather than hardcoded,
+/// because each feature adds its own — and naming a spec the binary cannot
+/// select is worse than naming none.
+pub fn recognised_specs() -> Vec<&'static str> {
+    #[allow(unused_mut)]
+    let mut specs: Vec<&'static str> = Vec::new();
+    #[cfg(feature = "network")]
+    specs.push("claude");
+    #[cfg(feature = "test-provider")]
+    {
+        specs.push("fake:<path>");
+        specs.push("fail");
+    }
+    specs
+}
+
+/// The one sentence that describes what this build can select, rendered from
+/// [`recognised_specs`] and shared by every message that has to say it.
+///
+/// **Derived from the list, never from a feature name.** Keying the empty
+/// case on `not(feature = "network")` reads correctly today and becomes a lie
+/// the moment a second backend sits behind a second feature (ADR-0008): a
+/// build with the CLI provider and no HTTP client would announce itself as
+/// having no backend while one was working.
+fn recognised_sentence() -> String {
+    let specs = recognised_specs();
+    if specs.is_empty() {
+        return "This build recognises none: it was compiled without any \
+                enrichment backend (ADR-0006 sealed build)."
+            .to_string();
+    }
+    format!("This build recognises: {}.", specs.join(", "))
+}
+
+/// `--provider`'s help text. A function rather than a literal so the help a
+/// reader sees describes the binary they are holding: a build with no backend
+/// compiled in should say so, which is the whole point of the flag existing
+/// there at all.
+pub fn provider_help() -> String {
+    #[allow(unused_mut)]
+    let mut help = format!(
+        "Enrichment backend, overriding {PROVIDER_ENV}. {}",
+        recognised_sentence()
+    );
+    // The same condition [`default_provider`] uses, so the help cannot claim
+    // a default the binary would not actually pick.
+    #[cfg(all(feature = "network", not(feature = "test-provider")))]
+    help.push_str(
+        " Defaults to `claude`, the Claude API — credentials from \
+         ANTHROPIC_API_KEY, or an `ant auth login` profile.",
+    );
+    help
+}
+
+/// `--model`'s help text. Build-aware for the same reason as
+/// [`provider_help`]: where the Claude provider was not compiled in, this
+/// flag modifies something absent, and a flag whose help describes a thing
+/// that is not there is worse than one that says so.
+pub fn model_help() -> String {
+    if recognised_specs().contains(&"claude") {
+        return "Model for the Claude enrichment provider (default: \
+                claude-opus-5). Ignored by every other backend."
+            .to_string();
+    }
+    format!(
+        "Model for the Claude enrichment provider, which this build did not \
+         compile in — so this flag has nothing to modify. {}",
+        recognised_sentence()
+    )
+}
+
+/// Told a name is wrong, a reader should also be told a right one — not
+/// being told was the failure that kept the second credential path invisible.
+fn unknown_provider(spec: &str) -> anyhow::Error {
+    anyhow!(
+        "unknown enrichment provider {spec:?}. {} The structural map was \
+         written without enrichment.",
+        recognised_sentence()
+    )
+}
+
+/// Resolves the provider the CLI will use. An explicit `--provider` spec
+/// wins; failing that [`PROVIDER_ENV`]; failing that the build's default.
+/// Without a usable provider this fails with a clear message: the structural
+/// map has already been written by the time this runs, so `--enrich`
+/// degrades cleanly (spec story 14).
+pub fn resolve_provider(choice: ProviderChoice<'_>) -> Result<Box<dyn EnrichmentProvider>> {
+    let from_env = std::env::var(PROVIDER_ENV).ok();
+    let spec = choice.spec.or(from_env.as_deref());
+    provider_from_spec(spec, choice.model)
+}
+
+/// Selection by spec, separated from where the spec came from — the flag,
+/// the environment, or nowhere — so it is unit-testable without touching a
+/// process-global. Which surface wins is [`resolve_provider`]'s job; with no
+/// spec at all the default depends on the build (see [`default_provider`]).
 fn provider_from_spec(
     spec: Option<&str>,
     model: Option<&str>,
@@ -729,7 +832,7 @@ fn provider_from_spec(
         Some("fail") => Ok(Box::new(test_provider::FailingProvider)),
         #[cfg(feature = "network")]
         Some("claude") => Ok(Box::new(claude::ClaudeProvider::new(model))),
-        Some(other) => Err(anyhow!("unknown enrichment provider {other:?}")),
+        Some(other) => Err(unknown_provider(other)),
         None => default_provider(model),
     }
 }
@@ -774,9 +877,110 @@ mod tests {
     //! typed responses (or errors), and the assertions are about what
     //! reaches the provider and what lands in the graph's slots.
 
+    use std::cell::RefCell;
+
     use super::*;
     use crate::map::{DomainFlow, Layer, Node, NodeKind, Project, TourStep};
-    use std::cell::RefCell;
+
+    /// The recognised set is what `--provider`'s help offers and what an
+    /// unknown-spec error lists, so it is worth pinning per configuration
+    /// rather than only through the rendered help — clap wraps that at the
+    /// terminal width.
+    #[test]
+    fn the_recognised_specs_are_the_ones_this_build_compiled_in() {
+        let specs = recognised_specs();
+
+        // Always true in a `cargo test` build: the self dev-dependency turns
+        // `test-provider` on for every configuration.
+        assert!(specs.contains(&"fail"), "test backends missing: {specs:?}");
+
+        assert_eq!(
+            specs.contains(&"claude"),
+            cfg!(feature = "network"),
+            "the Claude provider is offered exactly when it is compiled in: \
+             {specs:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_spec_is_reported_with_the_alternatives() {
+        let message = unknown_provider("nope").to_string();
+
+        assert!(
+            message.contains("nope"),
+            "must name the bad spec: {message}"
+        );
+        for spec in recognised_specs() {
+            assert!(
+                message.contains(spec),
+                "must list {spec}, which this build accepts: {message}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unrecognised_spec_never_falls_through_to_the_default() {
+        // Selecting *which* surface a spec came from is `resolve_provider`'s
+        // job and is covered at the CLI boundary, because it reads a
+        // process-global. What is testable here is that a bad spec is an
+        // error rather than a silent fall-through to whatever the build's
+        // default happens to be — which on a shipped binary would open a
+        // socket the reader never asked for.
+        assert!(
+            provider_from_spec(Some("fail"), None).is_ok(),
+            "a recognised spec must be selectable"
+        );
+        assert!(
+            provider_from_spec(Some("definitely-not-a-provider"), None).is_err(),
+            "an unknown spec must not fall through to the default"
+        );
+    }
+
+    /// The list a reader is offered names the Claude backend exactly when the
+    /// build has it. Asserted on the rendered sentence rather than on
+    /// [`recognised_specs`] alone, because a rendering that silently dropped
+    /// the list would leave that test green.
+    #[test]
+    fn the_offered_list_names_claude_exactly_when_it_is_compiled_in() {
+        assert_eq!(
+            recognised_sentence().contains("claude"),
+            cfg!(feature = "network"),
+            "the offered list must match the build: {}",
+            recognised_sentence()
+        );
+    }
+
+    /// Every message that names alternatives renders the one sentence, so a
+    /// build cannot end up describing its backends two different ways — which
+    /// is how `--enrich` and `--model` came to claim a Claude provider that a
+    /// sealed build does not have.
+    #[test]
+    fn every_message_that_lists_backends_renders_the_same_sentence() {
+        let sentence = recognised_sentence();
+        assert!(
+            provider_help().contains(&sentence),
+            "--provider help must render the shared sentence: {}",
+            provider_help()
+        );
+        let error = unknown_provider("nope").to_string();
+        assert!(
+            error.contains(&sentence),
+            "the unknown-spec error must render the shared sentence: {error}"
+        );
+    }
+
+    /// `--model` modifies the Claude provider and nothing else, so where that
+    /// provider was not compiled in the flag has to say so rather than
+    /// describing itself as though it worked.
+    #[test]
+    fn model_help_admits_when_the_claude_provider_is_absent() {
+        assert_eq!(
+            model_help().contains("did not compile in"),
+            !cfg!(feature = "network"),
+            "--model must admit an absent provider, and only then: {}",
+            model_help()
+        );
+    }
 
     fn node(id: NodeId, kind: NodeKind, name: &str, path: &str, provenance: Provenance) -> Node {
         Node {

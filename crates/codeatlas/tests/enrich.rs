@@ -3,8 +3,9 @@
 //! trait (a fake provider returns canned typed responses — see
 //! `src/enrich.rs` unit tests for the in-process side). No test here ever
 //! performs network I/O: the binary under test selects its provider through
-//! the `CODEATLAS_ENRICH_PROVIDER` env var, whose fake/fail backends are
-//! compiled in only for test builds (the `test-provider` feature).
+//! `--provider` or the `CODEATLAS_ENRICH_PROVIDER` env var, whose fake/fail
+//! backends are compiled in only for test builds (the `test-provider`
+//! feature).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -53,6 +54,27 @@ fn scan(repo: &Path, enrich: bool, provider: Option<&str>) -> assert_cmd::assert
     }
     if let Some(spec) = provider {
         cmd.env(PROVIDER_ENV, spec);
+    }
+    cmd.assert()
+}
+
+/// Runs `codeatlas scan --enrich` with the provider chosen through either
+/// surface, or both, so precedence between them is expressible (ticket 29).
+fn scan_selecting(
+    repo: &Path,
+    env: Option<&str>,
+    flag: Option<&str>,
+) -> assert_cmd::assert::Assert {
+    let mut cmd = assert_cmd::Command::cargo_bin("codeatlas").unwrap();
+    cmd.arg("scan")
+        .arg("--enrich")
+        .current_dir(repo)
+        .env_remove(PROVIDER_ENV);
+    if let Some(spec) = env {
+        cmd.env(PROVIDER_ENV, spec);
+    }
+    if let Some(spec) = flag {
+        cmd.args(["--provider", spec]);
     }
     cmd.assert()
 }
@@ -668,4 +690,194 @@ fn enrich_without_a_provider_fails_cleanly_but_writes_the_structural_map() {
     for n in map["nodes"].as_array().unwrap() {
         assert_eq!(n["provenance"], "structural", "no enrichment ran: {n:?}");
     }
+}
+
+// ── Provider selection (ticket 29) ───────────────────────────────────────
+//
+// Until this ticket the only way to choose a backend was an environment
+// variable, which nobody finds — so in practice there was one provider and no
+// way to learn otherwise. These tests are about the selection surface itself,
+// not about what any backend does with the slots it is given.
+
+#[test]
+fn the_provider_flag_selects_a_backend() {
+    let repo = materialize("simple");
+    let outside = tempfile::tempdir().unwrap();
+    let canned = canned_provider(
+        outside.path(),
+        &[("summary:file:src/main.ts", "The entry point.")],
+    );
+
+    scan_selecting(repo.path(), None, Some(&canned)).success();
+
+    let map = read_map(repo.path());
+    assert_eq!(
+        node(&map, "file:src/main.ts")["summary"],
+        "The entry point."
+    );
+    assert_eq!(node(&map, "file:src/main.ts")["provenance"], "llm");
+}
+
+#[test]
+fn the_flag_beats_the_environment_variable() {
+    let repo = materialize("simple");
+    let outside = tempfile::tempdir().unwrap();
+    let canned = canned_provider(
+        outside.path(),
+        &[("summary:file:src/main.ts", "Chosen by flag.")],
+    );
+
+    // The env var names the provider that errors on every call; the flag
+    // names one that answers. If the variable won, this run would fail.
+    scan_selecting(repo.path(), Some("fail"), Some(&canned)).success();
+
+    let map = read_map(repo.path());
+    assert_eq!(node(&map, "file:src/main.ts")["summary"], "Chosen by flag.");
+}
+
+#[test]
+fn the_flag_beats_the_environment_variable_in_the_other_direction_too() {
+    let repo = materialize("simple");
+    let outside = tempfile::tempdir().unwrap();
+    let canned = canned_provider(
+        outside.path(),
+        &[("summary:file:src/main.ts", "Never used.")],
+    );
+
+    // The control for the test above. Without this, "the flag wins" would
+    // also pass if the flag were the *only* surface read and the variable
+    // silently ignored — which is a different, worse behaviour.
+    scan_selecting(repo.path(), Some(&canned), Some("fail")).failure();
+
+    let map = read_map(repo.path());
+    assert_eq!(node(&map, "file:src/main.ts")["provenance"], "structural");
+}
+
+#[test]
+fn the_environment_variable_still_selects_when_no_flag_is_given() {
+    let repo = materialize("simple");
+    let outside = tempfile::tempdir().unwrap();
+    let canned = canned_provider(
+        outside.path(),
+        &[("summary:file:src/main.ts", "Chosen by env.")],
+    );
+
+    scan_selecting(repo.path(), Some(&canned), None).success();
+
+    let map = read_map(repo.path());
+    assert_eq!(node(&map, "file:src/main.ts")["summary"], "Chosen by env.");
+}
+
+#[test]
+fn an_unrecognised_provider_names_the_ones_that_exist() {
+    let repo = materialize("simple");
+    let assert = scan_selecting(repo.path(), None, Some("nope")).failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+
+    assert!(
+        stderr.contains("unknown enrichment provider"),
+        "must say the spec was not recognised: {stderr}"
+    );
+    // Being told a name is wrong without being told any right one is the
+    // failure this ticket exists to stop repeating.
+    assert!(
+        stderr.contains("fake:"),
+        "must list what this build does recognise: {stderr}"
+    );
+
+    // Spec story 14: the structural map survives a selection failure. The
+    // node lookup is load-bearing — a loop over an empty array asserts
+    // nothing, and "the map is intact" is exactly the claim that must not be
+    // vacuous here.
+    let map = read_map(repo.path());
+    assert_schema_valid(&map);
+    node(&map, "file:src/main.ts");
+    for n in map["nodes"].as_array().unwrap() {
+        assert_eq!(n["provenance"], "structural", "no enrichment ran: {n:?}");
+    }
+}
+
+#[test]
+fn the_help_names_the_providers_this_build_recognises() {
+    let assert = assert_cmd::Command::cargo_bin("codeatlas")
+        .unwrap()
+        .args(["scan", "--help"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+
+    assert!(
+        stdout.contains("--provider"),
+        "help must offer it: {stdout}"
+    );
+    // The discriminating assertion: `claude` appears in the help exactly when
+    // the build compiled it in. Asserting only that `fake:` is listed would
+    // pass against a hardcoded string naming every spec that has ever
+    // existed — which is the failure this help text exists to prevent, since
+    // it would offer a sealed build a backend it cannot select.
+    assert_eq!(
+        stdout.contains("claude"),
+        cfg!(feature = "network"),
+        "help offers the Claude backend exactly when it exists: {stdout}"
+    );
+    assert!(
+        stdout.contains("fake:"),
+        "help must name the specs this build accepts: {stdout}"
+    );
+}
+
+#[test]
+fn choosing_a_provider_without_asking_for_enrichment_is_refused() {
+    let assert = assert_cmd::Command::cargo_bin("codeatlas")
+        .unwrap()
+        .args(["scan", "--provider", "fail"])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+
+    assert!(
+        stderr.contains("--enrich"),
+        "must point at the flag it requires: {stderr}"
+    );
+}
+
+/// Sealed builds only. The flag must still exist and explain itself — a
+/// selection surface that vanishes in one build configuration teaches the
+/// reader nothing about why. (As with the sibling sealed test above, a
+/// `cargo test` build carries `test-provider`, so `fake:` is selectable here
+/// and the genuinely sealed binary is CI's subject, not this one.)
+///
+/// What the *recognised list* contains is asserted as a unit test on
+/// `recognised_specs`, not here: clap wraps help text at the terminal width,
+/// so an assertion on the rendered list tests the wrapping as much as the
+/// content.
+#[cfg(not(feature = "network"))]
+#[test]
+fn the_provider_flag_exists_in_sealed_builds_and_refuses_claude() {
+    let help = assert_cmd::Command::cargo_bin("codeatlas")
+        .unwrap()
+        .args(["scan", "--help"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&help.get_output().stdout).into_owned();
+    assert!(
+        stdout.contains("--provider"),
+        "the flag must not silently disappear in a sealed build: {stdout}"
+    );
+    // `--model` must admit it has nothing to modify rather than describing a
+    // provider that is not there. Asserted on the flag's own paragraph, not
+    // on the whole page: `/crosscheck` found that a page-wide search for
+    // "sealed build" was satisfied by `--model` alone, so `--provider`'s
+    // explanation could be deleted entirely and this test would still pass.
+    let model_paragraph = stdout
+        .split("--model")
+        .nth(1)
+        .expect("--model must be in the help");
+    assert!(
+        model_paragraph.contains("did not compile in"),
+        "--model must say it has nothing to modify: {model_paragraph}"
+    );
+
+    let repo = materialize("simple");
+    scan_selecting(repo.path(), None, Some("claude")).failure();
 }

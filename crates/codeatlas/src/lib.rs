@@ -29,16 +29,19 @@ enum Command {
     Scan {
         /// Repository root (defaults to the current directory)
         path: Option<PathBuf>,
-        /// After the structural scan, fill summary slots through the
-        /// enrichment provider (ADR-0004). The default provider is the
-        /// Claude API (credentials: ANTHROPIC_API_KEY, or an `ant auth
-        /// login` profile); CODEATLAS_ENRICH_PROVIDER overrides it.
+        /// After the structural scan, fill prose slots through an enrichment
+        /// provider (ADR-0004). Which backends exist depends on how this
+        /// binary was compiled — see --provider.
         #[arg(long)]
         enrich: bool,
-        /// Model for the Claude enrichment provider (default:
-        /// claude-opus-5). Ignored by non-Claude providers.
-        #[arg(long, requires = "enrich")]
+        /// Model for the enrichment provider. Like --provider, the help is
+        /// built from what this binary compiled in.
+        #[arg(long, requires = "enrich", long_help = enrich::model_help())]
         model: Option<String>,
+        /// Enrichment backend. Help text is built from the specs this build
+        /// compiled in, so it never offers one the binary cannot select.
+        #[arg(long, requires = "enrich", long_help = enrich::provider_help())]
+        provider: Option<String>,
     },
     /// Overlay a git diff's impact on the map: changed nodes and their
     /// one-hop blast radius, written to .codeatlas/diff-overlay.json.
@@ -79,6 +82,7 @@ pub fn run() -> ExitCode {
             path,
             enrich,
             model,
+            provider,
         } => {
             let root = path.unwrap_or_else(|| PathBuf::from("."));
             // The structural map is always built and saved first — with
@@ -101,7 +105,11 @@ pub fn run() -> ExitCode {
             if !enrich {
                 return ExitCode::SUCCESS;
             }
-            match enrich::run(&root, &mut graph, model.as_deref()) {
+            let choice = enrich::ProviderChoice {
+                spec: provider.as_deref(),
+                model: model.as_deref(),
+            };
+            match enrich::run(&root, &mut graph, choice) {
                 Ok(enrich::Outcome::NothingToEnrich) => {
                     eprintln!(
                         "nothing to enrich: every slot is already enriched \
