@@ -1,19 +1,32 @@
-//! Mechanical verification of the sealed build's dependency tree (ticket 15,
+//! Mechanical verification of the build's dependency tree (ticket 15,
 //! ADR-0006): `--no-default-features` must link no networking crates, so that
-//! in the sealed binary sending data anywhere is a compile error.
+//! in the sealed binary sending data anywhere is a compile error — and
+//! neither must `--no-default-features --features agent-cli`, which is
+//! ADR-0008's third configuration (ticket 32).
 //!
 //! The test shells out to `cargo tree` — a metadata resolution, not a build,
 //! so it stays cheap — with `--locked --offline` so it can neither touch the
 //! network nor rewrite `Cargo.lock`. A control test asserts the default
 //! tree DOES contain the HTTP client, proving the probe reads real data and
-//! the sealed assertion cannot pass vacuously.
+//! the sealed assertions cannot pass vacuously.
+//!
+//! # What a tree cannot see
+//!
+//! A subprocess adds no dependency, so nothing here can tell whether the
+//! `agent-cli` backend was compiled in. This file would read exactly the same
+//! if it were — a guard that cannot fail, which is why ADR-0008 called for a
+//! differently-shaped proof. That proof is
+//! `the_cli_backend_is_selectable_exactly_where_it_is_compiled_in`
+//! (`src/enrich.rs`), the sealed refusal in `tests/enrich.rs`, and the byte
+//! probe for the program string in `scripts/sealed-probe.sh`.
 //!
 //! The complementary probe on the sealed binary's *bytes* (no
-//! `api.anthropic.com`, no `ureq` strings; `--enrich` fails with the sealed
-//! build's message) lives in CI (`scripts/sealed-probe.sh`), because it
-//! needs a binary compiled without dev-dependencies — `cargo test` builds
-//! always carry the `test-provider` feature via the self dev-dependency, so
-//! no locally built test binary is the genuinely sealed artifact.
+//! `api.anthropic.com`, no `ureq`, no `claude` strings; `--enrich` fails with
+//! the sealed build's message) lives in CI (`scripts/sealed-probe.sh`),
+//! because it needs a binary compiled without dev-dependencies — `cargo test`
+//! builds always carry the `test-provider` feature via the self
+//! dev-dependency, so no locally built test binary is the genuinely sealed
+//! artifact.
 
 use std::process::Command;
 
@@ -94,6 +107,41 @@ fn sealed_dependency_tree_links_no_networking_crates() {
         offenders.is_empty(),
         "the sealed (--no-default-features) build links networking crates \
          (ADR-0006 forbids any): {offenders:?}"
+    );
+}
+
+/// ADR-0008's third configuration, in the half a dependency tree can see:
+/// with `agent-cli` on and `network` off the binary must still link no HTTP
+/// client. That is the whole posture — *HTTP client absent, approved CLI
+/// permitted* — and the feature adding no dependency is the reason it holds,
+/// which is precisely why it needs asserting rather than assuming: a future
+/// dependency added under `agent-cli` would break it silently, and the
+/// sealed test above would not notice because it never turns that feature on.
+///
+/// The other half — that the CLI backend really is compiled in here — cannot
+/// be seen from a tree at all, for the same reason. It is
+/// `the_cli_backend_is_selectable_exactly_where_it_is_compiled_in`
+/// (`src/enrich.rs`) and the byte probe in `scripts/sealed-probe.sh`.
+#[test]
+fn the_agent_cli_configuration_links_no_networking_crates_either() {
+    let crates = dependency_tree(&["--no-default-features", "--features", "agent-cli"]);
+    assert!(
+        !crates.is_empty(),
+        "cargo tree returned an empty dependency tree"
+    );
+    let offenders: Vec<&String> = crates
+        .iter()
+        .filter(|c| {
+            NETWORKING_CRATES
+                .iter()
+                .any(|probe| matches_family(c, probe))
+        })
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "the agent-cli configuration links networking crates, so ADR-0008's \
+         `HTTP client absent, approved CLI permitted` posture is not what it \
+         claims: {offenders:?}"
     );
 }
 

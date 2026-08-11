@@ -11,10 +11,15 @@
 //! *inside* the namespace and asserts the printed URL is loopback: the
 //! listener works with no network in existence beyond lo.
 //!
-//! An `--enrich` counter-test proves enrichment is the only network-touching
-//! path: pointed at the real Claude provider with dummy credentials inside
-//! the namespace it must FAIL (no route out) — while leaving the structural
-//! map intact (spec story 14).
+//! Two counter-tests pin the other side of the surface. Pointed at the real
+//! Claude provider with dummy credentials inside the namespace, `scan
+//! --enrich` must FAIL (no route out) while leaving the structural map intact
+//! (spec story 14); and `serve --ask` — the second egress route, added by
+//! ADR-0009 — must answer its question route 502 while the same server, in
+//! the same namespace, still answers `/api/map` 200. Together with the tests
+//! above that is spec story 9's sentence as an executable claim: the two ways
+//! to reach a model are `scan --enrich` and `serve --ask`, and nothing else
+//! here needs a route off the host.
 //!
 //! # Honest skip
 //!
@@ -249,14 +254,115 @@ fn serve_binds_loopback_and_answers_with_no_network_beyond_loopback() {
     );
 }
 
-/// The counter-test: `--enrich` against the real Claude provider is the one
-/// path that DOES need egress, so inside the namespace it must fail — and
-/// degrade to an intact structural map (spec story 14). Together with the
-/// tests above this pins the egress surface to exactly `--enrich`.
+/// The `serve --ask` script: the same namespace, the same server, two
+/// requests. `POST /api/ask` must fail with no route off the host, and
+/// `GET /api/map` immediately afterwards must succeed — the live control
+/// without which a 502 would be evidence of nothing (a server that never
+/// started, a port never bound, a namespace that broke loopback would all
+/// produce one just as readily). The control also doubles as story 14's rule
+/// for a route: a backend that cannot answer must not take the server down.
+///
+/// Gated with its test: the only backend safe to point at here is the API
+/// one, so a build without `network` has nothing to run this against.
+#[cfg(feature = "network")]
+const SERVE_ASK_SCRIPT: &str = r#"
+set -eu
+ip_bin=$(command -v ip || true)
+[ -n "$ip_bin" ] || ip_bin=/usr/sbin/ip
+"$ip_bin" link set lo up
+"$BIN" serve --port 0 --ask . >"$OUT" 2>/dev/null &
+pid=$!
+url=""
+for _ in $(seq 1 200); do
+  url=$(grep -o 'http://[0-9.:]*' "$OUT" | head -n1 || true)
+  [ -n "$url" ] && break
+  sleep 0.05
+done
+[ -n "$url" ] || { echo "serve --ask printed no URL" >&2; kill "$pid" 2>/dev/null; exit 1; }
+port=${url##*:}
+port=${port%%/*}
+
+body='{"question":"where does the program start?"}'
+exec 3<>"/dev/tcp/127.0.0.1/$port"
+printf 'POST /api/ask HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' "${#body}" "$body" >&3
+ask=$(cat <&3)
+exec 3<&-
+case "$ask" in
+  *"200 OK"*)
+    echo "POST /api/ask answered 200 with no route off the host: $ask" >&2
+    kill "$pid" 2>/dev/null; exit 1 ;;
+  *"502 Bad Gateway"*) ;;
+  *) echo "unexpected /api/ask response: $ask" >&2; kill "$pid" 2>/dev/null; exit 1 ;;
+esac
+
+exec 3<>"/dev/tcp/127.0.0.1/$port"
+printf 'GET /api/map HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n' >&3
+resp=$(cat <&3)
+exec 3<&-
+kill "$pid" 2>/dev/null || true
+case "$resp" in
+  *"200 OK"*'"nodes"'*) exit 0 ;;
+  *) echo "the control failed: /api/map did not answer inside the namespace, so the 502 above proves nothing: $resp" >&2; exit 1 ;;
+esac
+"#;
+
+/// `serve --ask` is the second egress-capable command (ADR-0009), and story
+/// 9's sentence names it beside `--enrich`. Inside the namespace the question
+/// route must fail for want of a route out, while the plain `serve` test
+/// above keeps succeeding in the same conditions — the two together are what
+/// make "reachable only from `scan --enrich` and `serve --ask`" a tested
+/// claim rather than a described one.
+///
+/// Network builds only, and deliberately never `cli:claude`: that spec spawns
+/// the reader's real Claude CLI, which is their credential and their
+/// subscription. The API backend with a dummy key reaches the same verdict
+/// with nothing at stake.
+#[cfg(feature = "network")]
+#[test]
+fn serve_ask_needs_egress_and_says_so_without_taking_the_server_down() {
+    if netns_unavailable() {
+        return;
+    }
+    let repo = materialize("simple");
+    assert_cmd::Command::cargo_bin("codeatlas")
+        .unwrap()
+        .arg("scan")
+        .current_dir(repo.path())
+        .assert()
+        .success();
+
+    let out_file = repo.path().join("serve-ask-stdout.txt");
+    let output = Command::new("unshare")
+        .args(["-r", "-n", "--", "bash", "-c", SERVE_ASK_SCRIPT])
+        .current_dir(repo.path())
+        .env("BIN", env!("CARGO_BIN_EXE_codeatlas"))
+        .env("OUT", &out_file)
+        // The test binary carries test-provider, which removes the default
+        // provider; name the real Claude provider explicitly, exactly as the
+        // `--enrich` counter-test below does.
+        .env("CODEATLAS_ENRICH_PROVIDER", "claude")
+        .env("ANTHROPIC_API_KEY", "dummy-key-for-egress-test")
+        .output()
+        .expect("unshare runs");
+    assert!(
+        output.status.success(),
+        "serve --ask-in-netns script failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// The first counter-test: `--enrich` against the real Claude provider DOES
+/// need egress, so inside the namespace it must fail — and degrade to an
+/// intact structural map (spec story 14).
+///
+/// Named for what it asserts rather than for "the only path", which it was
+/// called until ADR-0009 gave `serve --ask` the same property and made the
+/// name false. Which paths need egress is pinned by this test and the
+/// `serve --ask` one *together* with the four that succeed in here.
 /// Network builds only: sealed builds have no `claude` provider to name.
 #[cfg(feature = "network")]
 #[test]
-fn enrich_is_the_only_path_that_needs_egress_and_it_degrades_cleanly() {
+fn enrich_needs_egress_and_degrades_cleanly_without_it() {
     if netns_unavailable() {
         return;
     }

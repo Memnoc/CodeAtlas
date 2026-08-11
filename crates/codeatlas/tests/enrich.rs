@@ -674,6 +674,40 @@ fn the_claude_provider_does_not_exist_in_sealed_builds() {
     assert!(!map["nodes"].as_array().unwrap().is_empty());
 }
 
+/// The CLI backend's counterpart to the test above, and the reason ADR-0008
+/// says the sealed build needs a differently-shaped proof (ticket 32):
+/// `tests/sealed.rs` works by asserting no networking crate is linked, and a
+/// subprocess links none, so it passes whether or not this backend was
+/// compiled in.
+///
+/// A build without `agent-cli` must not merely decline to spawn `claude` — it
+/// must not know the spec at all — and the structural map must still ship
+/// (spec story 14). The live control is
+/// `the_cli_backend_is_selectable_exactly_where_it_is_compiled_in` in
+/// `src/enrich.rs`: without it this would also pass in a build that had lost
+/// the ability to select anything. The genuinely sealed *binary* — no
+/// dev-deps, so no `fake:` either — is CI's subject in
+/// `scripts/sealed-probe.sh`, which asserts the same refusal alongside the
+/// byte probe for the program string.
+#[cfg(not(feature = "agent-cli"))]
+#[test]
+fn the_cli_backend_does_not_exist_without_the_agent_cli_feature() {
+    let repo = materialize("simple");
+    let assert = scan_selecting(repo.path(), None, Some("cli:claude")).failure();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    assert!(
+        stderr.contains("unknown enrichment provider"),
+        "a build without the CLI backend must not know cli:claude: {stderr}"
+    );
+
+    let map = read_map(repo.path());
+    assert_schema_valid(&map);
+    node(&map, "file:src/main.ts");
+    for n in map["nodes"].as_array().unwrap() {
+        assert_eq!(n["provenance"], "structural", "no enrichment ran: {n:?}");
+    }
+}
+
 #[test]
 fn enrich_without_a_provider_fails_cleanly_but_writes_the_structural_map() {
     let repo = materialize("simple");

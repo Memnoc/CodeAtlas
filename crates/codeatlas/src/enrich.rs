@@ -1029,6 +1029,35 @@ mod tests {
             "the Claude provider is offered exactly when it is compiled in: \
              {specs:?}"
         );
+        // The literal rather than `agent_cli::SPEC`, which does not exist in
+        // a build without the feature — and that build is half of what this
+        // asserts.
+        assert_eq!(
+            specs.contains(&"cli:claude"),
+            cfg!(feature = "agent-cli"),
+            "the CLI provider is offered exactly when it is compiled in: \
+             {specs:?}"
+        );
+    }
+
+    /// The CLI backend is selectable exactly where it was compiled in.
+    ///
+    /// This is the live control for `tests/enrich.rs`'s sealed refusal of
+    /// `cli:claude`, which on its own would also pass in a build that had
+    /// merely lost the ability to select anything at all. ADR-0008 is why
+    /// the pair has to exist: `tests/sealed.rs` proves the sealed build
+    /// links no networking crate, and a subprocess links none, so that probe
+    /// cannot see this backend in either direction.
+    ///
+    /// Selecting is not spawning — `CliProvider::new` constructs a struct and
+    /// runs nothing, so this reaches no program and no network.
+    #[test]
+    fn the_cli_backend_is_selectable_exactly_where_it_is_compiled_in() {
+        assert_eq!(
+            provider_from_spec(Some("cli:claude"), None).is_ok(),
+            cfg!(feature = "agent-cli"),
+            "cli:claude must resolve exactly where the backend exists"
+        );
     }
 
     #[test]

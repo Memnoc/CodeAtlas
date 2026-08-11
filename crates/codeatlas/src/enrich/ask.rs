@@ -68,10 +68,11 @@ pub const MAX_SUMMARY_CHARS: usize = 400;
 /// One node as it accompanies a question: exactly the fields the enrichment
 /// prompt already sends for a summary slot, and no others.
 ///
-/// This list is what `docs/SECURITY.md` will have to state for the question
-/// path — ticket 32 owns that document, and today it describes only
-/// `scan --enrich`. Until then the field list here and the test beneath it
-/// are the whole of the claim.
+/// This list is what `docs/SECURITY.md` states for the question path, under
+/// guarantee 2's *What a model receives on the question path* — five fields
+/// and no others, bounded by [`CONTEXT_NODES`] and [`MAX_SUMMARY_CHARS`].
+/// Changing the shape of this struct changes that claim, so the document
+/// changes with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeContext {
     pub id: String,

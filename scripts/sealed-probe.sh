@@ -10,8 +10,8 @@
 # Usage: sealed-probe.sh <sealed-binary> [<default-binary>]
 #
 # With a second argument (a DEFAULT-features binary), the script first proves
-# the byte-probe is not vacuous: the default binary must contain the API
-# host string that the sealed binary must lack.
+# the byte-probe is not vacuous: the default binary must contain the strings
+# that the sealed binary must lack.
 set -euo pipefail
 
 sealed="${1:?usage: sealed-probe.sh <sealed-binary> [<default-binary>]}"
@@ -22,26 +22,36 @@ fail() {
   exit 1
 }
 
-# --- 0. Probe control: the default binary must contain the host string, or
-# the byte-scan below proves nothing.
+# --- 0. Probe control: the default binary must contain every string the
+# sealed binary must lack, or the byte-scan below proves nothing.
 if [ -n "$control" ]; then
-  grep -q -a "api.anthropic.com" "$control" \
-    || fail "control binary $control lacks 'api.anthropic.com' — the byte-probe is vacuous"
-  echo "ok: control binary contains the API host (probe is live)"
+  for needle in "api.anthropic.com" "claude"; do
+    grep -q -a "$needle" "$control" \
+      || fail "control binary $control lacks '$needle' — the byte-probe is vacuous"
+  done
+  echo "ok: control binary contains the API host and the CLI program name (probe is live)"
 fi
 
-# --- 1. Byte probe: the sealed binary must contain neither the only egress
-# destination nor the HTTP client's name. (A 4-byte sequence like 'ureq'
+# --- 1. Byte probe: the sealed binary must contain no string belonging to
+# either way of reaching a model — the API destination, the HTTP client's
+# name, or the program the CLI backend spawns. (A 4-byte sequence like 'ureq'
 # could in principle occur by chance in unrelated binary data; see the
 # limitations section of docs/SECURITY.md. It has not in practice, and the
 # API host string is 17 bytes of ASCII that only the network feature emits.)
-if grep -q -a "api.anthropic.com" "$sealed"; then
-  fail "sealed binary contains 'api.anthropic.com'"
-fi
-if grep -q -a "ureq" "$sealed"; then
-  fail "sealed binary contains 'ureq'"
-fi
-echo "ok: sealed binary contains no API host and no HTTP client strings"
+#
+# `claude` is the third string and the one ADR-0008 made necessary: a
+# subprocess links no crate, so `tests/sealed.rs`'s dependency-tree probe is
+# blind to that backend in both directions. The program name is what is left
+# to look for, and only the `agent-cli` feature emits it — `agent_cli::PROGRAM`
+# and `SPEC`, plus the model help that names them. Measured on release builds
+# of all three configurations: 0 occurrences sealed, 6 default, 2 with
+# `agent-cli` and no `network`.
+for needle in "api.anthropic.com" "ureq" "claude"; do
+  if grep -q -a "$needle" "$sealed"; then
+    fail "sealed binary contains '$needle'"
+  fi
+done
+echo "ok: sealed binary contains no API host, no HTTP client and no CLI program strings"
 
 # --- 2. The sealed binary works, and --enrich fails closed with the sealed
 # build's own message while still writing the structural map (story 14).
@@ -66,6 +76,53 @@ echo "$out" | grep -q 'ADR-0006' \
 [ -f "$tmp/repo/.codeatlas/knowledge-graph.json" ] \
   || fail "sealed --enrich left no structural map behind"
 echo "ok: sealed --enrich refuses with the sealed message and the map survives"
+
+# --- 2b. The CLI backend is absent behaviourally as well as in the bytes
+# (ADR-0008): the sealed binary must not know `cli:claude` as a spec at all.
+#
+# Naming `cli:claude` here is safe only because section 1 has already run: a
+# binary containing the program string never reaches this line, so a default
+# binary passed by mistake as "$sealed" cannot spawn the reader's real CLI
+# from inside an audit script.
+#
+# A fresh repository, because a map with every slot already filled reports
+# "nothing to enrich" and returns before a provider is resolved at all — which
+# would make both checks below pass without selecting anything.
+mkdir "$tmp/repo2"
+printf 'export const answer = 42;\n' > "$tmp/repo2/x.ts"
+
+set +e
+out="$("$sealed" scan --enrich --provider cli:claude "$tmp/repo2" 2>&1)"
+code=$?
+set -e
+[ "$code" -ne 0 ] || fail "sealed 'scan --enrich --provider cli:claude' succeeded; it must refuse"
+echo "$out" | grep -q 'unknown enrichment provider' \
+  || fail "sealed build must not recognise cli:claude at all: $out"
+echo "$out" | grep -q 'recognises none' \
+  || fail "sealed cli:claude refusal does not explain the build: $out"
+[ -f "$tmp/repo2/.codeatlas/knowledge-graph.json" ] \
+  || fail "the cli:claude refusal left no structural map behind"
+echo "ok: sealed build does not recognise cli:claude, and the map survives"
+
+# The control for the check above, and it has to be an indirect one. Asking
+# the control binary for `cli:claude` would spawn the reader's real Claude CLI
+# and spend their subscription, so it asks for a `cli:` spec that no build
+# accepts: a binary with the CLI backend refuses it by naming `cli:claude`
+# (the "not a general run-that-program hatch" message, which is gated on the
+# feature), while the sealed binary above did not know the prefix existed.
+# Different answers to the same question is what makes the sealed one
+# evidence of an absent backend rather than of a binary that refuses
+# everything.
+if [ -n "$control" ]; then
+  mkdir "$tmp/repo3"
+  printf 'export const answer = 42;\n' > "$tmp/repo3/x.ts"
+  set +e
+  out="$("$control" scan --enrich --provider cli:nonsense "$tmp/repo3" 2>&1)"
+  set -e
+  echo "$out" | grep -q 'the only CLI backend is' \
+    || fail "control binary does not have the CLI backend — the check above is vacuous: $out"
+  echo "ok: control binary has the CLI backend and refuses any other cli: spec (probe is live)"
+fi
 
 # --- 3. Provider selection tells the truth about a binary with no backend
 # (ticket 29). This is the only place the "recognises none" branch can be

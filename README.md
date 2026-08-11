@@ -5,9 +5,9 @@ Map a codebase: its structure, and the relationships between its parts.
 CodeAtlas scans a repository and emits a knowledge graph — files, functions,
 classes, and the import/export/call edges between them — then renders it as an
 interactive map you can search, walk, and share. It runs offline by default:
-scanning, serving, diffing, and sharing never open a non-loopback socket, and
-a sealed build exists in which egress is not a forbidden action but a
-compile error.
+scanning, serving, diffing, and sharing never open a non-loopback socket
+unless you ask for a model by name, and a sealed build exists in which egress
+is not a forbidden action but a compile error.
 
 Scanning CodeAtlas itself produces 598 nodes and 1096 edges in about 60 ms.
 
@@ -30,8 +30,8 @@ it to your `.gitignore` and scanning never dirties a worktree.
 
 | Command | What it does |
 | --- | --- |
-| `scan [PATH]` | Walk the repo, parse it, write the map to `.codeatlas/knowledge-graph.json`. `--enrich` additionally fills prose slots through an LLM (see below). |
-| `serve [PATH]` | Serve the dashboard and the local map from memory on `127.0.0.1`. `--port` chooses the port; there is deliberately no `--host`. |
+| `scan [PATH]` | Walk the repo, parse it, write the map to `.codeatlas/knowledge-graph.json`. `--enrich` additionally fills prose slots through an LLM (see below); `--provider` chooses which one. |
+| `serve [PATH]` | Serve the dashboard and the local map from memory on `127.0.0.1`. `--port` chooses the port; there is deliberately no `--host`. `--ask` additionally answers questions about the map at `POST /api/ask`, through the same providers `--enrich` uses. |
 | `diff [PATH]` | Project a git diff onto the map: changed nodes plus their one-hop blast radius, written to `.codeatlas/diff-overlay.json`. Pure git and graph traversal — no LLM, no network. |
 | `share [PATH]` | Export one self-contained, redacted HTML file that opens by double-click, with no server and no external requests. |
 | `schema` | Print the JSON Schema of the map contract. |
@@ -74,44 +74,66 @@ reader can always tell a mechanically derived fact from a generated one.
 ## Enrichment (optional)
 
 `scan --enrich` fills the map's prose slots — node summaries, layer names,
-domain-flow names, tour narration — by calling the Claude API. It is entirely
-opt-in, and the mechanical values are always present underneath: enrichment
-relabels reality, it never creates it. If the provider fails, is unreachable,
-or is never configured, you still get a complete, schema-valid structural map.
+domain-flow names, tour narration — through an enrichment provider. It is
+entirely opt-in, and the mechanical values are always present underneath:
+enrichment relabels reality, it never creates it. If the provider fails, is
+unreachable, or is never configured, you still get a complete, schema-valid
+structural map.
 
 Annotations are cached in `.codeatlas/` keyed by node identity and a content
 hash, so a later scan re-attaches unchanged answers for free and only
 re-purchases the parts of the map that actually changed.
 
-Credentials resolve like the official SDKs: `ANTHROPIC_API_KEY` first, then an
-`ant auth login` profile. The default model is `claude-opus-5` (`--model`
-overrides). Prompts are bounded — the model receives the slots being filled and
-summarized topology, never the serialized graph.
+There are two providers, chosen with `--provider` or
+`CODEATLAS_ENRICH_PROVIDER`:
+
+- **`claude`** — the Claude API. Credentials resolve like the official SDKs:
+  `ANTHROPIC_API_KEY` first, then an `ant auth login` profile. The default
+  model is `claude-opus-5` (`--model` overrides).
+- **`cli:claude`** — the Claude CLI you are already logged into, spawned as a
+  one-shot completion with no tools and no MCP servers. CodeAtlas never
+  handles a credential, which is the point: an API key is out of reach in
+  plenty of organisations.
+
+Prompts are bounded on both — the model receives the slots being filled and
+summarized topology, never the serialized graph and never file contents.
+
+`serve --ask` reaches the same providers for a different purpose: a question
+about the map, answered from a bounded slice of the map alone, citing the node
+IDs the answer came from.
 
 ## Security
 
-`--enrich` is the only command capable of egress, and its only possible
-destination is `api.anthropic.com`; redirects and environment proxies are
-disabled at the transport level. Building with `--no-default-features`
-produces a sealed binary containing no networking code at all, where every
-command still works and `--enrich` refuses with a clear message.
+> CodeAtlas has exactly two ways to reach a model — an HTTPS POST to
+> `api.anthropic.com`, and spawning the already-authenticated `claude` CLI.
+> Each sits behind its own Cargo feature; each is reachable only from
+> `scan --enrich` and `serve --ask`. The sealed build has neither.
+
+For the HTTPS route the destination is a hardcoded constant, and redirects
+and environment proxies are disabled at the transport level, so the transport
+cannot be steered elsewhere. Three build configurations are therefore
+auditable: both features, neither, and the CLI without the HTTP client.
+Building with `--no-default-features` produces the sealed binary, in which
+every command still works and both `--enrich` and `--ask` refuse with a clear
+message.
 
 These are tested claims, not documentation. **[docs/SECURITY.md](docs/SECURITY.md)**
 is the audit entry point: it maps each guarantee to the code and the committed
-test that enforces it, names the CI jobs that run them, and states the honest
-limitations.
+test that enforces it, states what a model receives on each path, names the CI
+jobs that run them, and records the honest limitations.
 
 ## Development
 
 ```sh
 cargo test --workspace                        # default build
 cargo test --workspace --no-default-features  # sealed build
+cargo test --workspace --no-default-features --features agent-cli  # CLI, no HTTP client
 cd dashboard && npm test -- --run             # dashboard
 ```
 
-CI runs both Rust configurations, the dashboard suite, and a contract-drift
-check that regenerates the schema and the TypeScript types and fails on any
-diff. If you change a contract struct, regenerate both:
+CI runs all three Rust configurations, the dashboard suite, and a
+contract-drift check that regenerates the schema and the TypeScript types and
+fails on any diff. If you change a contract struct, regenerate both:
 
 ```sh
 cargo run -p codeatlas -- schema > contract/map.schema.json
@@ -127,13 +149,14 @@ explicit message where those are unavailable.
 The decisions behind this design, with their trade-offs, are recorded as ADRs
 in [`docs/adr/`](docs/adr/) — CLI-first rather than prompt orchestration, a
 Rust core with a TypeScript dashboard, Rust types generating the public
-contract, enrichment behind a provider trait, content-hash carry-over, and
-zero egress enforced by a compile-time feature gate. The V1 scope lives in
-[`docs/specs/`](docs/specs/).
+contract, enrichment behind a provider trait, content-hash carry-over, zero
+egress enforced by a compile-time feature gate, a committed annotation store,
+enrichment through an authenticated CLI, and questions answered by the
+serving binary. The V1 scope lives in [`docs/specs/`](docs/specs/).
 
 ## Status
 
-V1 is complete: all fifteen tickets shipped, both build configurations green.
-The known next area is the dashboard at scale — layout currently places nodes
-on a fixed grid within each layer, which reads well for small repositories and
-becomes crowded for large ones.
+V1 is not shipped. The three build configurations are green and the dashboard
+suite with them. The known next area is the dashboard at scale — layout
+currently places nodes on a fixed grid within each layer, which reads well for
+small repositories and becomes crowded for large ones.

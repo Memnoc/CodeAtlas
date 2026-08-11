@@ -80,6 +80,42 @@ jobs:
       - name: Sealed binary byte probe (no API host, no HTTP client, --enrich refuses)
         run: scripts/sealed-probe.sh "$RUNNER_TEMP/codeatlas-sealed" target/debug/codeatlas
 
+  agent-cli:
+    name: CLI backend, no HTTP client (--no-default-features --features agent-cli)
+    runs-on: ubuntu-latest
+    # The third configuration, and the posture ADR-0008 exists to make
+    # expressible: an organisation that forbids outbound HTTP from tooling but
+    # has already approved Claude Code. Two orthogonal features are what allow
+    # it, and until something compiles and runs it, it is a claim rather than a
+    # guarantee — the two-job matrix could not tell a broken combination from
+    # an unused one.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # build.rs embeds the dashboard in every configuration.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install dashboard toolchain (build.rs embeds the dashboard)
+        run: npm ci
+        working-directory: dashboard
+      # tests/sealed.rs walks the dependency tree for all three feature
+      # configurations with `--locked --offline`; fetch the full lockfile first
+      # so every manifest is present however this job's own build resolved.
+      - name: Fetch locked dependencies (offline cargo tree probes)
+        run: cargo fetch --locked
+      - name: Clippy (agent-cli configuration)
+        run: cargo clippy --workspace --all-targets --no-default-features --features agent-cli -- -D warnings
+      - name: Build
+        run: cargo build --workspace --no-default-features --features agent-cli
+      - name: Test (agent-cli configuration)
+        run: cargo test --workspace --no-default-features --features agent-cli
+
   contract:
     name: Contract drift + TS typecheck
     runs-on: ubuntu-latest
