@@ -7,7 +7,9 @@ import { SegmentedControl } from "./SegmentedControl.js";
 import { ThemeToggle } from "./ThemeToggle.js";
 import { WalkthroughLauncher } from "./Walkthrough.js";
 
-/** Overview draws the map; Learn walks the guided tour through it. */
+/** Overview draws the map; Learn is the guided read of it — the codebase tour
+ * and the call flows. Not the *interface* walkthrough, which is a control in
+ * the top bar and belongs to no mode. */
 export type Mode = "overview" | "learn";
 
 export function Header({
@@ -72,7 +74,7 @@ export function Header({
       <div className="topbar-modes">
         <SegmentedControl
           name="View"
-          walkthrough="view"
+          walkthroughStep="view"
           value={mode}
           onChange={onMode}
           options={[
@@ -86,7 +88,7 @@ export function Header({
         />
         <SegmentedControl
           name="Grouping"
-          walkthrough="grouping"
+          walkthroughStep="grouping"
           value={grouping}
           onChange={onGrouping}
           options={[

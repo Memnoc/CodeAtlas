@@ -25,6 +25,7 @@ import {
   WALKTHROUGH_MARKER,
   WALKTHROUGH_SEEN_KEY,
   WALKTHROUGH_STEPS,
+  WALKTHROUGH_TRANSIENT,
 } from "../src/app/walkthrough.js";
 import type { DiffOverlay } from "../src/app/overlay.js";
 import { openLearn } from "./drive.js";
@@ -34,20 +35,39 @@ import smallOverlay from "./fixtures/small-overlay.json";
 const map = tourMap as KnowledgeGraph;
 const overlay = smallOverlay as DiffOverlay;
 
-/** A question backend that is never called: its presence is what puts the Ask
- * control on screen, which is one of the two conditional steps. */
-const neverAsked = async () => ({ answer: "", citations: [] });
+/** A question backend that answers, citing a node this map really has so the
+ * answer band renders its citation as a control. Nothing calls it unless a
+ * test asks something: its mere presence is what puts the Ask button on
+ * screen, which is one of the two conditional steps. */
+const answersOnce = async () => ({
+  answer: "The CLI entry point is run.ts.",
+  citations: ["file:src/main.ts"],
+});
 
 /** The whole interface, every optional control present — the render the two
  * drift guards below measure the step list against. */
 function renderEverything() {
   return render(
-    <MapExplorer map={map} overlay={overlay} onAsk={neverAsked} />,
+    <MapExplorer map={map} overlay={overlay} onAsk={answersOnce} />,
   );
 }
 
 async function startWalkthrough(user: ReturnType<typeof userEvent.setup>) {
   await user.click(screen.getByRole("button", { name: "Walkthrough" }));
+}
+
+/** Puts a question and waits for the answer, because the answer band is the
+ * one part of `.explorer` that is not on screen until the reader has done
+ * something — and it carries controls of its own. A drift guard whose fixture
+ * cannot produce the case it is most likely to be wrong about is measuring a
+ * page that does not exist. */
+async function askAQuestion(user: ReturnType<typeof userEvent.setup>) {
+  await user.type(
+    screen.getByLabelText("Search nodes"),
+    "where does this start",
+  );
+  await user.click(screen.getByRole("button", { name: "Ask" }));
+  return within(await screen.findByLabelText("Answer"));
 }
 
 const walkthrough = () =>
@@ -280,14 +300,17 @@ describe("the keyboard while the walkthrough runs", () => {
     // look at where focus actually went. Asserting an `inert` attribute would
     // pass here whatever the page did, because neither jsdom nor user-event
     // implements it.
+    //
+    // Learn is opened first so the codebase tour's own Start button is on the
+    // page while this runs. That is the specific collision the criterion is
+    // about — two walks running at once — and it is the furthest control from
+    // the card, past the chrome and the panel's tabs, so it is the one a
+    // background that was merely dim would reach last.
     const user = userEvent.setup();
     renderEverything();
+    await openLearn(user);
     const explorer = document.querySelector(".explorer");
-    const background = [
-      screen.getByLabelText("Search nodes"),
-      screen.getByRole("button", { name: "Path" }),
-      screen.getByRole("button", { name: "Walkthrough" }),
-    ];
+    expect(screen.getByRole("button", { name: "Start tour" })).toBeVisible();
     expect(explorer).not.toHaveAttribute("inert");
 
     await startWalkthrough(user);
@@ -312,9 +335,16 @@ describe("the keyboard while the walkthrough runs", () => {
     }
     // Not a vacuous pass: tabbing genuinely moved focus around the card.
     expect(new Set(reached).size).toBeGreaterThan(1);
-    for (const control of background) {
-      expect(reached).not.toContain(control);
+    // Named rather than held by identity. A node captured before the
+    // walkthrough started would go stale the day React remounts the panel
+    // behind it, and the comparison would then quietly pass over everything.
+    const names = reached.map((el) => (el.textContent ?? "").trim());
+    for (const outside of ["Start tour", "Walkthrough", "Path", "Overview"]) {
+      expect(names).not.toContain(outside);
     }
+    // The search field is nameless by text, and the card holds no input of
+    // its own — so reaching one at all means reaching the background.
+    expect(reached.some((el) => el.tagName === "INPUT")).toBe(false);
   });
 
   it("closes on Escape through the explorer's one cascade", async () => {
@@ -405,6 +435,13 @@ describe("the keyboard while the walkthrough runs", () => {
 });
 
 describe("the walkthrough and the codebase tour", () => {
+  // The third property of this pair — that the codebase tour cannot be
+  // *started* while the walkthrough runs — is asserted where the evidence for
+  // it is strongest, in "leaves nothing behind it reachable by tabbing"
+  // above: that test opens Learn so the Start button is on the page, and
+  // requires focus to stay inside the card for all twenty-five presses. A
+  // second loop here asserting only that one node was not reached said less
+  // and depended on holding that node across a re-render.
   it("names the two walks distinctly", async () => {
     // With the codebase tour actually on screen, which is the only state in
     // which the two could be confused for each other.
@@ -445,23 +482,6 @@ describe("the walkthrough and the codebase tour", () => {
     ).toBeInTheDocument();
   });
 
-  it("cannot be started from inside the walkthrough", async () => {
-    const user = userEvent.setup();
-    renderEverything();
-    await openLearn(user);
-    const start = screen.getByRole("button", { name: "Start tour" });
-
-    await startWalkthrough(user);
-
-    // Reachable by neither key nor pointer while the walkthrough runs: the
-    // page behind it is not merely dimmed. Twenty-five presses is past the
-    // thirteen chrome controls and the panel's own tabs, so a background that
-    // was merely dim rather than inert would have arrived here.
-    for (let i = 0; i < 25; i++) {
-      await user.tab();
-      expect(document.activeElement).not.toBe(start);
-    }
-  });
 });
 
 describe("the step list against the interface it describes", () => {
@@ -469,7 +489,21 @@ describe("the step list against the interface it describes", () => {
     // The drift guard in the direction that matters most: a control added to
     // the chrome tomorrow belongs to no marked band, and this fails until
     // somebody decides which band it is in — or gives it a step of its own.
+    //
+    // A question is asked first, and that is the whole difference between an
+    // invariant and a sentence. The answer band renders directly inside
+    // `.explorer` with a dismissal and one button per citation, and it is the
+    // one band with no step of its own; a fixture that never asked could not
+    // produce it, so the guard would have claimed something of the component
+    // that the component does not do.
+    const user = userEvent.setup();
     renderEverything();
+    const answer = await askAQuestion(user);
+    expect(
+      answer.getByRole("button", { name: "Dismiss answer" }),
+    ).toBeVisible();
+    expect(answer.getAllByRole("button").length).toBeGreaterThan(1);
+
     const explorer = document.querySelector(".explorer");
     if (explorer === null) {
       throw new Error("no explorer rendered");
@@ -487,15 +521,50 @@ describe("the step list against the interface it describes", () => {
     expect(unexplained).toEqual([]);
   });
 
-  it("says something about every part it marks, and marks every part it names", () => {
+  it("says something about every part it marks, and marks every part it names", async () => {
     // The other direction: a marker with no step is a highlight with nothing
     // to say, and a step with no marker is prose about something that is not
     // on the page.
+    //
+    // The transient bands are the one stated exception, and stating it costs
+    // nothing here: the expected set is the steps plus that list, so a band
+    // marked without prose still fails unless somebody wrote it down — and an
+    // entry in the list that names no band on this fully-featured page fails
+    // in the same assertion.
+    const user = userEvent.setup();
     renderEverything();
+    await askAQuestion(user);
 
     expect([...markersOnScreen()].sort()).toEqual(
-      WALKTHROUGH_STEPS.map((s) => s.id).sort(),
+      [...WALKTHROUGH_STEPS.map((s) => s.id), ...WALKTHROUGH_TRANSIENT].sort(),
     );
+  });
+
+  it("marks the answer band and deliberately does not walk it", async () => {
+    // The rule that reconciles the two guards above, asserted rather than
+    // implied. The answer to a question is marked so the controls inside it
+    // are accounted for, and it carries no step because it is absent until a
+    // question has been asked — a step about it would spotlight nothing on
+    // every walk that did not follow one.
+    const user = userEvent.setup();
+    renderEverything();
+    await askAQuestion(user);
+    expect(markersOnScreen()).toContain("answer");
+
+    const declared = WALKTHROUGH_STEPS.map((s) => s.id);
+    for (const id of WALKTHROUGH_TRANSIENT) {
+      expect(declared).not.toContain(id);
+    }
+
+    // On screen, and the walk is exactly as long as it is without it: a
+    // marked band is walked only where the declaration names it.
+    await startWalkthrough(user);
+    expect(
+      within(walkthrough()).getByText(
+        `Step 1 of ${WALKTHROUGH_STEPS.length}`,
+      ),
+    ).toBeInTheDocument();
+    expect(litId()).not.toBe("answer");
   });
 
   it("walks only the controls this particular page has", async () => {

@@ -12,8 +12,10 @@
 // artifact and jsdom can both be missing `matchMedia` entirely, which is not
 // worth a broken dashboard over.
 
-/** What the operating system asks for, as far as this browser will say. */
-export function prefersReducedMotion(): boolean {
+/** What the operating system asks for, as far as this browser will say. Not
+ * exported: callers want a duration or a behaviour, and the two below are the
+ * only shapes anything in this dashboard has ever needed. */
+function prefersReducedMotion(): boolean {
   try {
     return (
       globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ===

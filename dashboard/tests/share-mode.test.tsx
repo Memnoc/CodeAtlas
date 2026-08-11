@@ -8,6 +8,11 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { App } from "../src/app/App.js";
 import { SHARE_DATA_ID } from "../src/app/share.js";
+import {
+  WALKTHROUGH_LIT,
+  WALKTHROUGH_MARKER,
+  WALKTHROUGH_STEPS,
+} from "../src/app/walkthrough.js";
 import { openLearn, openRegion } from "./drive.js";
 import smallMap from "./fixtures/small-map.json";
 
@@ -88,7 +93,7 @@ describe("share mode", () => {
     expect(banner).toHaveTextContent(/diff overlay/i);
   });
 
-  it("walks the guided tour and the domain flows, redacted labels intact", async () => {
+  it("walks the codebase tour and the domain flows, redacted labels intact", async () => {
     const user = userEvent.setup();
     render(<App />);
 
@@ -118,5 +123,46 @@ describe("share mode", () => {
     expect(
       screen.queryByRole("checkbox", { name: "Diff overlay" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("walks the interface, minus the controls this page does not have", async () => {
+    // The interface walkthrough (story 20) is deliberately in the artifact:
+    // its recipient is exactly the reader that story is about, and it makes
+    // no request — `fetch` does not exist in this file at all, so a walk that
+    // reached for one would crash rather than pass.
+    //
+    // Started here rather than only rendered, because the property worth
+    // holding is what it *says*: a share artifact has no question box and no
+    // diff overlay, and a reader must never be walked through a control they
+    // do not have. Both absent steps are the page's, not the walkthrough's,
+    // which is why the expected walk is derived by removing them from the
+    // declaration rather than written out again.
+    const user = userEvent.setup();
+    render(<App />);
+    const dialog = () =>
+      screen.getByRole("dialog", { name: "Interface walkthrough" });
+
+    await user.click(screen.getByRole("button", { name: "Walkthrough" }));
+
+    const expected = WALKTHROUGH_STEPS.map((s) => s.id).filter(
+      (id) => id !== "ask" && id !== "diff",
+    );
+    expect(
+      within(dialog()).getByText(`Step 1 of ${expected.length}`),
+    ).toBeInTheDocument();
+
+    const walked: string[] = [];
+    for (let i = 1; i <= expected.length; i++) {
+      const lit = [
+        ...document.querySelectorAll<HTMLElement>(`[${WALKTHROUGH_LIT}]`),
+      ];
+      expect(lit).toHaveLength(1);
+      walked.push(lit[0]?.getAttribute(WALKTHROUGH_MARKER) ?? "");
+      if (i < expected.length) {
+        await user.click(within(dialog()).getByRole("button", { name: "Next" }));
+      }
+    }
+
+    expect(walked).toEqual(expected);
   });
 });

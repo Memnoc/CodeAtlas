@@ -16,7 +16,7 @@ import oldMap from "../../crates/codeatlas/tests/fixtures/maps/known-good.json";
 
 const map = tourMap as KnowledgeGraph;
 
-describe("guided tour", () => {
+describe("the codebase tour", () => {
   it("walks the tour step by step, moving the canvas selection", async () => {
     const user = userEvent.setup();
     render(<MapExplorer map={map} />);

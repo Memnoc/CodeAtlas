@@ -69,7 +69,7 @@ describe("CodeAtlas's own self-scan map", () => {
     const files = map.nodes.filter((n) => n.kind === "file");
     const tour = map.tour ?? [];
     expect(tour.length).toBeGreaterThan(0);
-    // One step per file is an enumeration, not a guided tour: this repo has
+    // One step per file is an enumeration, not a codebase tour: this repo has
     // ~150 files (including every lockfile and test fixture) and the walk
     // stays a newcomer's sitting. The exact bound is `TOUR_MAX_STEPS`,
     // pinned on the Rust side (crates/codeatlas/tests/scan.rs); 20 is the

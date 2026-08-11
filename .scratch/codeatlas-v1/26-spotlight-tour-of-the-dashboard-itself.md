@@ -223,3 +223,104 @@ added. `README.md`'s self-scan figure was stale before this ticket and is
 refreshed — 1224 nodes and 2264 edges in about 150 ms, measured three times on
 a release build — because leaving a number that had drifted in both directions
 is the sort of quietly false sentence the last three tickets each shipped.
+
+## What /crosscheck found
+
+No severe defects. The reflow test, the accessibility assertions, the Escape
+layer and the zero-egress properties were all verified genuine. What follows
+is what the review asked for on top of them.
+
+**One drift guard stated an invariant that is false of the component.** "Every
+interactive control inside `.explorer` sits within some element carrying
+`data-walkthrough`" is how the guard reads, and `AnswerPanel` is the
+counterexample: it renders between the search row and the chip row, in no
+marked band, carrying a dismissal and one button per citation. The guard
+passed only because its fixture asked no question, so the band never rendered
+— which is the exact failure this repository keeps re-discovering, a guard
+whose fixture cannot produce the case it is about. The reconciliation marks
+the band and writes the exemption down. `WALKTHROUGH_TRANSIENT` names the
+bands that are marked so their controls are accounted for and that
+deliberately carry no step, with the reason attached: the answer exists only
+after a question has been asked, so a step about it would spotlight an absent
+element on every walk that did not follow one. The second guard now expects
+the markers on screen to be the declared step ids *plus* that list, which
+fails in both new directions as well as the two it already covered — a band
+marked without prose, and an entry in the list that has stopped naming a band
+on the page. A third test states the rule itself: the band is on screen, no
+declared step names it, and the walk is exactly as long as it is without it.
+Both guards and the new test ask a question first.
+
+**Every guard touched was broken again, and the fixture change is the one
+worth reading.** Removing `data-walkthrough` from the answer panel failed all
+three — the first printing the dismiss button's own HTML against an expected
+empty list — and then, with the marker still missing but the question
+unasked, that same guard went green. Emptying `WALKTHROUGH_TRANSIENT` failed
+the second guard on the extra marker; declaring an `answer` step failed five
+tests, the explicit rule among them ("expected [ 'identity', 'view', …(12) ]
+to not include 'answer'"). A stray `<button>` in `topbar-actions` still fails
+the first guard, as it did during the work.
+
+**Nothing started the walkthrough inside a share artifact.** The claim that it
+is deliberately present there, minus the two steps that page has no controls
+for, was accurate by reading and unasserted by anything: the nearest proxy
+rendered a served explorer with no `onAsk`. `share-mode.test.tsx` now starts
+it from the real share render — the file where `fetch` has been deleted
+outright, so a walk that reached for the network would crash rather than pass
+— and walks all eleven steps, comparing the ids it lit against the declaration
+with `ask` and `diff` removed. Making `resolveWalkthroughSteps` return the
+unfiltered declaration fails it on "Step 1 of 11".
+
+**`README.md`'s self-scan figure is deleted rather than corrected again.** Two
+consecutive tickets rewrote it and this one refreshed it a third time; the
+counts drift on every commit and the timing was never verifiable by a reader
+on a different machine. The sentence keeps its point — a scan is one command
+and no model — and now says to run `codeatlas scan .` and look, because the
+counts belong to the repository on the day it is run and the timing to the
+machine running it. The only other hand-maintained number in the file is the
+map contract version, which is left: it is a version, so it changes by a
+deliberate act that CI's contract-drift check will not let pass silently,
+rather than by sitting still.
+
+**The spec's open question was settled here and still read as open.** Story
+20's steps are hand-written prose walked in a list read off the live page, and
+`/harden` walks the spec, so an answered question left open is a walk that
+reports an unresolved decision. A dated resolution is appended under the
+original question in the spec's own convention, naming `walkthrough.ts`,
+`resolveWalkthroughSteps` and the two guards. The question itself is untouched.
+
+**The rename had reached every user-visible string and stopped at the code.**
+`Header.tsx` still explained the `Mode` type with "Learn walks the guided tour
+through it", and three test suites still described the codebase tour as the
+guided one — which is the ambiguity the naming decision exists to remove, left
+sitting in the first thing a maintainer reads. Those four are renamed, along
+with a fifth in `self-scan.test.tsx`. No assertion changed.
+
+**Three seams had no need.** `walkthroughTarget` and `resolveWalkthroughSteps`
+each took a `root` defaulting to `document` that no caller or test ever
+supplied, and `prefersReducedMotion` was exported to nobody: callers of
+`motion.ts` want a duration or a behaviour, which is the whole reason that
+module exists. All three are gone.
+
+**The focus-return rule was written out twice and is now written once.**
+`Walkthrough.tsx` reproduced `ExportMenu.tsx`'s `wasOpen` ref, its
+`document.activeElement === document.body` check and its refocus almost
+verbatim, and its comment conceded the copy. `focus.ts`'s `useFocusReturn`
+owns both the ref and the effect, so each call site is one line. Removing the
+refocus fails one test per call site; removing the `<body>` check fails the
+export menu's "leaves focus where the reader put it", which is the half of the
+rule a re-derivation would most likely drop.
+
+**Two small ones.** `SegmentedControl`'s conditional spread was doing by hand
+what React does with an `undefined` attribute value, and the prop that holds a
+step id is now `walkthroughStep`. And the two twenty-five-press tab loops were
+one test: "cannot be started from inside the walkthrough" asserted strictly
+less than "leaves nothing behind it reachable by tabbing" and depended on
+holding the Start button's DOM node across a re-render. They are one loop,
+which opens Learn so the codebase tour's Start button is on the page for it,
+and names the controls it must not have reached rather than holding them.
+Dropping the focus trap fails it; dropping the trap *and* the containment
+assertion leaves the new clause to catch what is left — "expected [ '×',
+'Next', …(23) ] to not include 'Start tour'".
+
+Dashboard suite 170, from 169: one test consolidated away, two added. Rust
+untouched.

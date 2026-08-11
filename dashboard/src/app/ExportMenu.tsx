@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { KnowledgeGraph } from "../index.js";
 import { downloadMap } from "./export.js";
+import { useFocusReturn } from "./focus.js";
 
 /** What the reader has to type. Shown as text, copied on request, never run.
  * Bare, because the subcommand's path argument defaults to the working
@@ -55,7 +56,9 @@ export function ExportMenu({
   onOpen: (open: boolean) => void;
 }) {
   const wrap = useRef<HTMLDivElement | null>(null);
-  const toggle = useRef<HTMLButtonElement | null>(null);
+  // Closing the panel must not drop focus on the floor. The rule about where
+  // it goes is shared with the walkthrough — see `focus.ts`.
+  const toggle = useFocusReturn<HTMLButtonElement>(open);
   const [copied, setCopied] = useState<CopyState>("idle");
 
   // Same shape as the search overlay's dismissal (ticket 22): `pointerdown`
@@ -76,31 +79,6 @@ export function ExportMenu({
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [open, onOpen]);
-
-  // Closing the panel must not drop focus on the floor. A reader who tabbed
-  // to Copy and pressed Escape would otherwise land on `<body>`, and their
-  // next Tab would restart from the top of the document.
-  //
-  // `<body>` is the signal, and it is a precise one: a browser moves focus
-  // there when the focused element is removed, so finding it there just
-  // after the panel closed means the panel took focus with it. Any other
-  // value means the reader moved focus themselves — clicked the search box,
-  // pressed the toggle again — and the kind thing is to leave them there.
-  //
-  // The `wasOpen` guard is not decoration: without it this runs on mount,
-  // where `open` is false and focus is legitimately on `<body>`, and the
-  // menu would seize focus from the page as it loads.
-  const wasOpen = useRef(false);
-  useEffect(() => {
-    if (open) {
-      wasOpen.current = true;
-      return;
-    }
-    if (wasOpen.current && document.activeElement === document.body) {
-      toggle.current?.focus();
-    }
-    wasOpen.current = false;
-  }, [open]);
 
   // "Copied." is about the press that just happened, so it does not survive
   // the menu closing — and the menu closes three ways (the toggle, a click

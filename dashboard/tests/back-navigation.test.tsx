@@ -180,7 +180,7 @@ describe("Escape goes back too", () => {
   });
 });
 
-describe("the guided tour's way back", () => {
+describe("the codebase tour's way back", () => {
   it("greys Previous at the first step rather than hiding it", async () => {
     // A multi-step tour, because a one-step tour cannot tell a disabled
     // Previous from one that simply never enables. The fixture lists four

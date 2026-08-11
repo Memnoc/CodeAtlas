@@ -10,6 +10,7 @@
 // opens (ticket 22) and so that starting it can put the codebase tour back to
 // its starting line.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useFocusReturn } from "./focus.js";
 import { scrollBehaviour } from "./motion.js";
 import {
   hasSeenWalkthrough,
@@ -66,29 +67,15 @@ export function WalkthroughLauncher({
   onStart: () => void;
 }) {
   const [offered, setOffered] = useState(hasSeenWalkthrough);
-  const button = useRef<HTMLButtonElement | null>(null);
+  // Closing the walkthrough must not drop focus on the floor, and where it
+  // goes is the same rule the export menu obeys — see `focus.ts`.
+  const button = useFocusReturn<HTMLButtonElement>(open);
 
   const start = () => {
     setOffered(true);
     markWalkthroughSeen();
     onStart();
   };
-
-  // Closing the walkthrough must not drop focus on the floor. Same shape, and
-  // for the same reason, as the export menu's: `<body>` is the precise signal
-  // that the thing which had focus was removed, and any other value means the
-  // reader moved focus themselves and should be left where they are.
-  const wasOpen = useRef(false);
-  useEffect(() => {
-    if (open) {
-      wasOpen.current = true;
-      return;
-    }
-    if (wasOpen.current && document.activeElement === document.body) {
-      button.current?.focus();
-    }
-    wasOpen.current = false;
-  }, [open]);
 
   return (
     <div className="walkthrough-launch" data-walkthrough="walkthrough">

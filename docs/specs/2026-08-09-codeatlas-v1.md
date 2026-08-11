@@ -397,6 +397,15 @@ boundaries; no test reaches into pipeline internals.
 - **Open question**: whether story 20's walkthrough steps are hand-written or
   derived from the components present. A hand-written list goes stale the next
   time the header changes; a derived one may not have anything useful to say.
+  *Settled 2026-08-11 in ticket 26: both halves, because they come from
+  different places. The prose is hand-written — nothing can derive "Domain
+  groups files by the call flows the map found" from a DOM node — and lives in
+  `dashboard/src/app/walkthrough.ts`; which of those steps a given page is
+  walked through is read off the live interface by `resolveWalkthroughSteps`,
+  so a share artifact with no question box is never told about one. The
+  staleness objection is answered as a test problem, by two drift guards in
+  `dashboard/tests/walkthrough.test.tsx` that hold the declaration and the
+  rendered interface together in both directions.*
 - **Story 13 stops being unverifiable once story 19 lands.** Five `/harden`
   walks have recorded story 13 as verified only at the provider seam, because
   the Claude-facing half needs credentials and real spend. The CLI provider

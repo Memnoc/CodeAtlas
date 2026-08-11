@@ -17,7 +17,7 @@ export function SegmentedControl<T extends string>({
   value,
   options,
   onChange,
-  walkthrough,
+  walkthroughStep,
 }: {
   /** Group name — also the control's accessible name. */
   name: string;
@@ -27,14 +27,16 @@ export function SegmentedControl<T extends string>({
   /** Which walkthrough step this switch is the subject of. On the group and
    * not on either button: the reader is being shown a decision, and a
    * spotlight cut around one half of it describes half a decision. */
-  walkthrough?: string;
+  walkthroughStep?: string;
 }) {
   return (
+    // An absent step leaves the attribute off, which is what React does with
+    // an `undefined` attribute value — no conditional spread required.
     <div
       className="segmented"
       role="radiogroup"
       aria-label={name}
-      {...(walkthrough === undefined ? {} : { "data-walkthrough": walkthrough })}
+      data-walkthrough={walkthroughStep}
     >
       {options.map((option) => (
         <button

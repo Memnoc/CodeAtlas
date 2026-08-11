@@ -26,7 +26,11 @@ export function AnswerPanel({
   }
 
   return (
-    <section className="answer" aria-label="Answer">
+    // Marked, and deliberately without a walkthrough step of its own: the
+    // band exists only after a question has been asked, so a step about it
+    // would spotlight an absent element on most walks. The marker is what
+    // accounts for the controls inside it — see `WALKTHROUGH_TRANSIENT`.
+    <section className="answer" aria-label="Answer" data-walkthrough="answer">
       <div className="answer-head">
         {/* Shown as well as left in the field: the reader can keep typing
             the next question without losing sight of what this answers. */}

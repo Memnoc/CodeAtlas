@@ -22,8 +22,9 @@
 // interface together in both directions: every interactive control in the
 // explorer must sit inside some marked element, so a control added to the
 // header tomorrow fails the suite until it is placed; and the markers on a
-// fully-featured page must be exactly the ids below, so a marker without prose
-// and prose without a marker both fail too.
+// fully-featured page must be exactly the ids below plus the transient bands
+// named after them, so a marker without prose and prose without a marker both
+// fail too.
 
 /** The attribute that marks an element as something the walkthrough explains.
  * Put it on the band, not on every control inside it: the reader is being
@@ -48,6 +49,23 @@ export type WalkthroughStep = {
   title: string;
   body: string;
 };
+
+/** Bands that are marked so the controls inside them are accounted for, and
+ * that deliberately carry no step.
+ *
+ * The answer to a question is the only one, and the reason is the reason a
+ * marker and a step are two different things: the band exists only after the
+ * reader has asked something, so a step about it would spotlight an absent
+ * element on every walk that did not happen to follow a question. The band it
+ * is reached *from* — the search row — is explained instead.
+ *
+ * Written down rather than left implicit because the alternative is an
+ * invariant that reads stronger than the component: "every control sits in a
+ * marked band" is true, and "every marked band has prose" is true of
+ * everything but these. Both guards in `tests/walkthrough.test.tsx` are stated
+ * against this list, and the second requires every id in it to actually be on
+ * screen — so an entry that stops naming a real band fails too. */
+export const WALKTHROUGH_TRANSIENT: readonly string[] = ["answer"];
 
 /** Every step there is, in reading order — top bar first, then the search
  * band, the regions, the canvas and its panel, and last the things that take
@@ -165,21 +183,16 @@ export const WALKTHROUGH_STEPS: readonly WalkthroughStep[] = [
 /** The live element a step is about, or `null` when this page has no such
  * control — a share artifact has no question box, and a repository with no
  * diff run has no overlay toggle. */
-export function walkthroughTarget(
-  id: string,
-  root: ParentNode = document,
-): HTMLElement | null {
-  return root.querySelector<HTMLElement>(`[${WALKTHROUGH_MARKER}="${id}"]`);
+export function walkthroughTarget(id: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(
+    `[${WALKTHROUGH_MARKER}="${id}"]`,
+  );
 }
 
 /** The walk this particular page gets: the declaration above, minus the steps
  * whose subject is not on screen. */
-export function resolveWalkthroughSteps(
-  root: ParentNode = document,
-): WalkthroughStep[] {
-  return WALKTHROUGH_STEPS.filter(
-    (step) => walkthroughTarget(step.id, root) !== null,
-  );
+export function resolveWalkthroughSteps(): WalkthroughStep[] {
+  return WALKTHROUGH_STEPS.filter((step) => walkthroughTarget(step.id) !== null);
 }
 
 /** Whether this browser has been offered the walkthrough before. Storage
