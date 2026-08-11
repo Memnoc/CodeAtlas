@@ -7,6 +7,12 @@ approved-by: Memnoc
 
 # ADR-0006: Zero egress is enforced by a compile-time feature gate
 
+> Egress surface extended by [ADR-0008](./0008-enrichment-through-an-authenticated-claude-cli-behind-its-own-feature.md)
+> and [ADR-0009](./0009-codebase-questions-are-answered-by-the-serving-binary.md) —
+> the feature-gate rule below is unchanged; the list of what sits behind it is
+> not. The Decision's clause naming the enrichment provider as the only
+> network code was corrected on 2026-08-11 for that reason.
+
 ## Context
 
 CodeAtlas must be runnable on proprietary code and survive a workplace
@@ -17,9 +23,9 @@ policy is not audit-grade; the guarantee has to be verifiable.
 
 ## Decision
 
-All network code — which is exactly the enrichment provider of ADR-0004 —
-lives behind a Cargo feature. The standard binary includes it but the default
-(deterministic) path never touches the network; a sealed
+All egress-capable code lives behind a Cargo feature. The standard binary
+includes those features but the default (deterministic) path never touches the
+network; a sealed
 `--no-default-features` build produces a binary that contains no networking
 code at all. An egress test suite asserts the default path opens no sockets
 and the dashboard serves only local, vendored assets; a redaction
