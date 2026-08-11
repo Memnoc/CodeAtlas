@@ -81,6 +81,25 @@ async function askAbout(
 
 const answer = () => within(screen.getByLabelText("Answer"));
 
+/** The question-route calls actually made, which is what a second press
+ * would cost the reader. */
+function asksMade(stub: ReturnType<typeof servedBy>) {
+  return stub.mock.calls.filter(([url]) => url === ASK_ROUTE);
+}
+
+/** A question route that does not answer until the test lets it — the only
+ * way to stand inside the window where a second press spends money. */
+function heldOpen(): {
+  answer: () => Promise<Reply>;
+  release: (reply: Reply) => void;
+} {
+  let resolve: (reply: Reply) => void = () => {};
+  return {
+    answer: () => new Promise<Reply>((r) => (resolve = r)),
+    release: (reply) => resolve(reply),
+  };
+}
+
 const realFetch = globalThis.fetch;
 
 afterEach(() => {
@@ -329,6 +348,53 @@ describe("asking the map a question", () => {
 
     expect(await screen.findByText("asked: what is a region?")).toBeVisible();
   });
+
+  it("costs one model call however many times Enter is pressed", async () => {
+    // The keyboard has no `disabled` attribute to carry the in-flight rule,
+    // so the rule cannot live on the button: it is `useAsk.submit`'s, where
+    // both ways of asking meet it. Two presses used to be two POSTs, and the
+    // reader pays for both.
+    const user = userEvent.setup();
+    const held = heldOpen();
+    const fetchStub = servedBy({ ask: true, answer: held.answer });
+    await servedDashboard();
+    const field = screen.getByLabelText("Search nodes");
+
+    await user.type(field, "what does this do?{Enter}");
+    await screen.findByLabelText("Answer");
+    await user.type(field, "{Enter}");
+    await user.type(field, "{Enter}");
+
+    expect(asksMade(fetchStub)).toHaveLength(1);
+    // Refused, not broken: the one answer still lands.
+    held.release({
+      status: 200,
+      body: { answer: "It greets people.", citations: [] },
+    });
+    expect(await screen.findByText("It greets people.")).toBeVisible();
+  });
+
+  it("costs one model call however many times Ask is pressed", async () => {
+    const user = userEvent.setup();
+    const held = heldOpen();
+    const fetchStub = servedBy({ ask: true, answer: held.answer });
+    await servedDashboard();
+    await user.type(screen.getByLabelText("Search nodes"), "what does this do?");
+    const askButton = screen.getByRole("button", { name: "Ask" });
+
+    await user.click(askButton);
+    await screen.findByLabelText("Answer");
+    await user.click(askButton);
+    await user.click(askButton);
+
+    expect(askButton).toBeDisabled();
+    expect(asksMade(fetchStub)).toHaveLength(1);
+    held.release({
+      status: 200,
+      body: { answer: "It greets people.", citations: [] },
+    });
+    expect(await screen.findByText("It greets people.")).toBeVisible();
+  });
 });
 
 describe("Escape closes the answer, in the explorer's one cascade", () => {
@@ -353,10 +419,41 @@ describe("Escape closes the answer, in the explorer's one cascade", () => {
     expect(screen.queryByTestId("region-docs")).not.toBeInTheDocument();
   });
 
-  it("reaches the answer wherever focus is, including on a citation", async () => {
-    // Ticket 22's dead zone, which is why this layer belongs in the
-    // explorer's document-level cascade rather than in a handler of its own:
-    // focus inside the answer must not be a place Escape stops working.
+  it("reaches the answer from focus outside the panel entirely", async () => {
+    // What makes this the explorer's cascade rather than a third handler of
+    // its own: focus is parked on a canvas node, which no listener scoped to
+    // the answer panel can see. Focus *inside* the panel would not prove it
+    // — a panel-scoped handler would pass that test too.
+    const user = userEvent.setup();
+    servedBy({
+      ask: true,
+      answer: () => ({
+        status: 200,
+        body: { answer: "Start at the entry point.", citations: [] },
+      }),
+    });
+    await servedDashboard();
+    await askAbout(user, "where does the program start?");
+    await screen.findByLabelText("Answer");
+
+    const canvasNode = document.querySelector<HTMLElement>(
+      '.react-flow__node[data-id="region:src"]',
+    );
+    if (canvasNode === null) {
+      throw new Error("no canvas node to park focus on");
+    }
+    canvasNode.focus();
+    // The parking has to have taken, or this asserts nothing about focus.
+    expect(document.activeElement).toBe(canvasNode);
+    await user.keyboard("{Escape}");
+
+    expect(screen.queryByLabelText("Answer")).not.toBeInTheDocument();
+  });
+
+  it("reaches it from focus inside the panel too, on a citation", async () => {
+    // Ticket 22's dead zone was a keyboard reader unable to close what they
+    // had opened, and citations are exactly the kind of new focus target
+    // that reopens it.
     const user = userEvent.setup();
     servedBy({
       ask: true,
@@ -371,9 +468,11 @@ describe("Escape closes the answer, in the explorer's one cascade", () => {
     await servedDashboard();
     await askAbout(user, "where does the program start?");
 
-    within(await screen.findByLabelText("Cited nodes"))
-      .getByRole("button")
-      .focus();
+    const citation = within(await screen.findByLabelText("Cited nodes")).getByRole(
+      "button",
+    );
+    citation.focus();
+    expect(document.activeElement).toBe(citation);
     await user.keyboard("{Escape}");
 
     expect(screen.queryByLabelText("Answer")).not.toBeInTheDocument();

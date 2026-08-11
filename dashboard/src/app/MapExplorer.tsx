@@ -175,9 +175,13 @@ export function MapExplorer({
   // pressing Ask (or Enter) is the difference, so a filename typed by someone
   // who wanted a filename never becomes a request.
   const asking = useAsk(onAsk);
-  const canAsk = onAsk !== undefined && query.trim() !== "";
+  // Whether pressing Ask right now would send anything: there is a server to
+  // ask and something typed to ask it. Not "this server can answer
+  // questions" — that is `onAsk` on its own, and conflating the two is how
+  // both call sites ended up bolting a second clause onto one name.
+  const canSubmit = onAsk !== undefined && query.trim() !== "";
   const askQuestion = () => {
-    if (!canAsk) {
+    if (!canSubmit) {
       return;
     }
     // The results list is what the reader was just told about the *name*;
@@ -508,9 +512,11 @@ export function MapExplorer({
           <button
             type="button"
             className="ask-button"
-            // Disabled while one question is in flight: pressing again would
-            // spend the reader's model budget twice for one answer.
-            disabled={!canAsk || asking.state.phase === "asking"}
+            // Disabled while one question is in flight, so pressing again
+            // reads as refused rather than as ignored. The refusal itself is
+            // `useAsk.submit`'s — every way of asking meets it there, which
+            // a `disabled` attribute on one of two controls cannot do.
+            disabled={!canSubmit || asking.state.phase === "asking"}
             title="Answer this question from the map (the local server asks the model)"
             onClick={askQuestion}
           >

@@ -236,3 +236,90 @@ five bytes from process memory over loopback and its claims about what plain
 `serve` holds and routes remain true word for word. No re-ask, no history, no
 multi-turn: the spec's Out of Scope keeps conversation out of V1, and an
 answer is a question and its reply.
+
+## What `/crosscheck` found
+
+**Enter could be pressed twice and bought two model calls.** The Ask button
+carried the in-flight guard, with a comment saying exactly why; the keyboard
+path did not, and `useAsk.submit` checked only that there was a backend and
+something to ask it. Two presses were two `POST /api/ask`, and the reader
+pays for both. The rule now lives in `submit` — the one door the button and
+the key both go through — held on a ref rather than the rendered phase,
+because two presses can land before React has re-rendered either of them. The
+button keeps its `disabled`, which is no longer the guard but is still what
+makes a refusal look like a refusal instead of a dead press. Both entry
+points are now driven in flight and asserted on the recorded `fetch` calls,
+which is where the money is; neither was tested before, and that is precisely
+why a guard on one of two paths read as finished.
+
+**`docs/SECURITY.md` §1 was made false by the new route.** It said plain
+`serve` "is the same program it was before ADR-0009 rather than a similar
+one", drawing that from two clauses that are both still true — no provider,
+no `POST /api/ask`. But `GET /api/capabilities` exists only to advertise
+ADR-0009's feature and did not exist before it, so the conclusion did not
+follow from its premises. The paragraph now names the route, says what it
+answers on a plain `serve`, and says what it costs: no provider, no
+credential, no egress path, one more loopback GET whose body is a boolean
+about this process. The document holds every claim to a committed test, and
+`CAPABILITIES_ROUTE` and
+`the_capability_route_states_whether_questions_can_be_asked` were named
+nowhere in it — the fourth GET route was the one part of the serve surface
+the security document did not cover. It is covered now. The "deliberately
+not done" note above — *"`docs/SECURITY.md` needed no amendment"* — is wrong,
+and wrong in exactly the way ticket 32 was filed to catch: it checked the two
+narrow clauses and not the conclusion drawn from them.
+
+**The "Honest limitations" enumeration no longer matched `serve.rs`.** Its
+DoS bullet reasoned from "the server reads just the map and overlay from disk
+and serves embedded assets" — an enumeration an auditor checks against the
+routing function, and the capability answer is in none of its three
+categories. It is composed from `routes.ask.is_some()`, so the server does
+now disclose one fact about its own process configuration. The conclusion
+survives untouched (one boolean, loopback only, derivable anyway by asking a
+question and seeing what comes back); the list it rests on is now the list
+the code actually serves.
+
+**`serve.rs`'s module comment contradicted itself four lines apart.** It
+promised one socket, asset bytes from memory, the map from disk, "nothing
+else, ever" — and then described the capability route, which is none of the
+three. Ticket 27 edited that block and left the sentence standing. It now
+names the fourth thing and keeps the claim that matters, which was never
+about the count of things read but about nothing being off this host.
+
+**The route constants were unpinned across the language border.**
+`ask.ts` declared `ASK_ROUTE` and `CAPABILITIES_ROUTE` with comments saying
+"must match `serve::…`", which is a wish, and the Rust tests used literals.
+The failure mode is specific and nasty: `readCapabilities` swallows every
+error by design, so a typo in the TypeScript constant makes the question box
+permanently and silently absent in the real dashboard while every dashboard
+test still passes — they stub `fetch` against the same constant they would be
+proving wrong. Demonstrated, not assumed: with `/api/capabilties` committed,
+the dashboard suite ran 146 green. `crates/codeatlas/tests/routes.rs` reads
+the TypeScript source and requires both declarations to match the Rust
+constants, in the spirit of the `contract` job's drift check and at the size
+the problem deserves — two strings want a test, not a code generator.
+`/api/map` is deliberately not in it: a typo there fails at first paint, in
+the load error the dashboard already has for it, so it is pinned by anyone
+who runs the program once. The routes worth a committed check are the ones
+whose breakage is silence.
+
+**One Escape test overclaimed.** "Reaches the answer wherever focus is,
+including on a citation" parked focus on a button inside the answer panel, so
+a hypothetical third handler scoped to that panel would have passed it too —
+the thing the test was named to exclude. Focus is now parked on a canvas
+node, genuinely outside the panel, and the assertion that the parking took is
+part of the test. The citation case is kept as a second test under its own
+name, because ticket 22's dead zone was a keyboard reader unable to close
+what they had opened and citations are exactly that kind of new focus target;
+it just no longer claims to prove something it cannot.
+
+**`canAsk` meant two things.** It read as "this server can answer questions"
+but meant that *and* the field being non-empty, which is why both call sites
+bolted a second clause onto it — and why one of them bolted on the wrong set.
+It is `canSubmit`: whether pressing Ask right now would send anything.
+
+**Three guards were re-proven able to fail.** Dropping `inFlight.current`
+from `submit` turned the Enter test's one call into three; dropping the
+button's `disabled` clause left it enabled mid-flight; deleting the answer
+layer from the Escape cascade left the panel on screen in all three of its
+tests. The route-drift test's tamper is described above.

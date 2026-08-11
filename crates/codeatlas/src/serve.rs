@@ -11,10 +11,12 @@
 //!
 //! # Two shapes, and the difference is a flag
 //!
-//! Without `--ask` the runtime I/O is exactly what it always was: one
+//! Without `--ask` this process reaches for four things and no others: one
 //! listening socket on 127.0.0.1, asset bytes from process memory, the map
-//! from local disk. Nothing else, ever — which is what the netns egress test
-//! puts a real subject under.
+//! and overlay from local disk, and one sentence it composes about its own
+//! configuration (the capability route below, which is not read from
+//! anywhere — it is `routes.ask.is_some()`). Nothing off this host, ever,
+//! which is what the netns egress test puts a real subject under.
 //!
 //! With `--ask` the binary also holds an enrichment provider, and
 //! `POST /api/ask` reaches a model through it (ADR-0009). That is opt-in,

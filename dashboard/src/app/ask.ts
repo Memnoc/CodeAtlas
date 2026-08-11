@@ -111,6 +111,13 @@ export type AskState =
  * already been sent by the time a second question is asked, so what matters
  * is that only the newest reply is allowed to land — including after a
  * dismissal, which would otherwise reopen the panel the reader just closed.
+ *
+ * It is also where asking twice for one answer is refused. That rule lives
+ * here rather than at the call sites because there is more than one way to
+ * ask — the Ask button and the Enter key — and a copy of the rule per entry
+ * point is exactly how the keyboard one came to be missing it: two presses
+ * bought two model calls for one answer. `submit` is the one door they both
+ * go through, so the guard on it cannot be bypassed by adding a third.
  */
 export function useAsk(ask: AskFn | undefined): {
   state: AskState;
@@ -119,23 +126,30 @@ export function useAsk(ask: AskFn | undefined): {
 } {
   const [state, setState] = useState<AskState>({ phase: "idle" });
   const latest = useRef(0);
+  // A ref rather than the rendered `state`, because two presses can happen
+  // before React has re-rendered either of them: a phase read out of the
+  // closure would still say "idle" for the second one.
+  const inFlight = useRef(false);
 
   const submit = useCallback(
     (raw: string) => {
       const question = raw.trim();
-      if (ask === undefined || question === "") {
+      if (ask === undefined || question === "" || inFlight.current) {
         return;
       }
       const mine = ++latest.current;
+      inFlight.current = true;
       setState({ phase: "asking", question });
       ask(question).then(
         (answer) => {
           if (latest.current === mine) {
+            inFlight.current = false;
             setState({ phase: "answered", question, answer });
           }
         },
         (error: unknown) => {
           if (latest.current === mine) {
+            inFlight.current = false;
             setState({
               phase: "failed",
               question,
@@ -150,6 +164,10 @@ export function useAsk(ask: AskFn | undefined): {
 
   const dismiss = useCallback(() => {
     latest.current += 1;
+    // Putting the answer away frees the field for the next question, which
+    // is what the Ask button has always done on dismissal. The reply already
+    // paid for is not cancelled — it is discarded by the counter above.
+    inFlight.current = false;
     setState({ phase: "idle" });
   }, []);
 

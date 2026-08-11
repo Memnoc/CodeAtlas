@@ -35,8 +35,13 @@ compiles and runs all three.
 flags are the exceptions, and they are named rather than implied:
 `scan --enrich` and `serve --ask`, which are guarantee 2's subject. Plain
 `serve` — the flag absent — holds no provider at all and does not route
-`POST /api/ask`, so it is the same program it was before [ADR-0009] rather
-than a similar one.
+`POST /api/ask`. It is not quite the program it was before [ADR-0009],
+because it answers one route that decision added: `GET /api/capabilities`
+(`serve::CAPABILITIES_ROUTE`), which on a plain `serve` says `{"ask":false}`.
+The dashboard is the same embedded bytes either way, so which shape is
+serving it has to be said at runtime. That route is the whole of the
+difference — no provider, no credential, no egress path, one more loopback
+GET whose body is a boolean about this process.
 
 **Enforced by** `crates/codeatlas/tests/egress.rs`: each command runs inside
 a fresh Linux network namespace (`unshare -r -n`) whose only interface is
@@ -62,6 +67,19 @@ paths to fail in the same conditions:
   server answers `GET /api/map` 200 immediately afterwards. That second
   request is a live control, not a courtesy: a server that never started
   would produce a 502 just as readily
+
+The capability route is held by a test of its own, because what it claims is
+a fact about the server rather than about egress:
+`the_capability_route_states_whether_questions_can_be_asked`
+(`crates/codeatlas/tests/serve.rs`) reads it on both shapes and then holds
+each answer to the route it describes — a plain `serve` must 405 the question
+route it said it does not have, and a `serve --ask` must answer it. A
+capability answer nothing checks against reality is the kind of fact that
+drifts silently. `the_dashboard_asks_the_routes_this_binary_serves`
+(`crates/codeatlas/tests/routes.rs`) pins both route strings across the
+language border, so the page cannot come to ask for a route this server does
+not serve — which would look to a reader exactly like a server that cannot
+answer questions.
 
 `serve` additionally binds a hardcoded `Ipv4Addr::LOCALHOST`
 (`crates/codeatlas/src/serve.rs`); there is no `--host` flag, so the
@@ -357,8 +375,13 @@ The artifact also self-discloses which fields were redacted and how often.
   `crates/codeatlas/src/serve.rs`), so half-open requests cannot park
   threads forever, but a determined local process can still hammer the
   server. This affects availability of the local dashboard only, never
-  confidentiality: the server reads just the map and overlay from disk and
-  serves embedded assets.
+  confidentiality. What a connection can be told is the whole of this list:
+  the map and the diff overlay, read from disk; the embedded dashboard
+  assets, from process memory; and — since [ADR-0009] — one boolean saying
+  whether this process was started with `--ask` (`CAPABILITIES_ROUTE`). That
+  last is the only thing the server discloses about its own configuration
+  rather than about the repository, and it is a fact a local process could
+  establish anyway by asking a question and seeing what comes back.
 - **Reproducing the tree probe by hand.** `cargo tree` shows
   dev-dependencies by default, and the test-only `jsonschema` crate pulls in
   `reqwest` and `tokio`. So the obvious hand-check —
