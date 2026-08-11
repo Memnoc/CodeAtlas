@@ -1,11 +1,12 @@
 # Ticket 32 — three build configurations, and the claims that describe them
 
-**Status:** blocked
+**Status:** ready
 **Spec:** docs/specs/2026-08-09-codeatlas-v1.md
 **Story:** 9 — a sealed build plus an egress suite, so approving CodeAtlas is
 a code review rather than a trust exercise (as amended 2026-08-11)
 **Blocks:** none
-**Blocked by:** 31 (the CLI provider) **and** 34 (`serve --ask`)
+**Blocked by:** 31 (the CLI provider) **and** 34 (`serve --ask`) — both done
+2026-08-11, so this is unblocked
 
 ## Problem
 

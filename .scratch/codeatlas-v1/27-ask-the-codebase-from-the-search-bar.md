@@ -1,11 +1,14 @@
 # Ticket 27 — ask the codebase a question from the search bar
 
-**Status:** blocked
+**Status:** ready
 **Spec:** docs/specs/2026-08-09-codeatlas-v1.md
 **Story:** 21 — ask the map a question in my own words and be shown which
 nodes answer it (**the dashboard half**; ticket 34 is the binary half)
 **Blocks:** none
-**Blocked by:** 34 — `serve --ask` and `POST /api/ask`
+**Blocked by:** 34 — `serve --ask` and `POST /api/ask`, done 2026-08-11 in
+`e850c71`, so this is unblocked. The route is `serve::ASK_ROUTE`; it demands
+`Content-Type: application/json` (a same-origin `fetch` sets it, and the
+demand is what keeps another origin from spending the reader's model budget)
 **Scope:** V1 — decided 2026-08-11, against a recommendation to defer it
 
 ## Problem
