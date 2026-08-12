@@ -156,6 +156,14 @@ export const WALKTHROUGH_STEPS: readonly WalkthroughStep[] = [
       "“does this reach that, and through what”.",
   },
   {
+    id: "focus",
+    title: "Giving the space to the map",
+    body:
+      "The panel and the regions each fold away on their own, and this folds " +
+      "both at once. A folded panel leaves a rail with the way back on it, " +
+      "and what you fold is remembered in this browser.",
+  },
+  {
     id: "export",
     title: "Taking the map with you",
     body:

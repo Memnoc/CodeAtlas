@@ -1,6 +1,7 @@
 // The top bar: what you are looking at, how you want to look at it, and the
 // two things you can do to it.
 import type { KnowledgeGraph } from "../index.js";
+import { allOpen, type Chrome } from "./chrome.js";
 import { ExportMenu } from "./ExportMenu.js";
 import type { RegionKind } from "./regions.js";
 import { SegmentedControl } from "./SegmentedControl.js";
@@ -20,6 +21,8 @@ export function Header({
   onGrouping,
   pathOpen,
   onTogglePath,
+  chrome,
+  onChrome,
   shared,
   exportOpen,
   onExportOpen,
@@ -33,6 +36,11 @@ export function Header({
   onGrouping: (grouping: RegionKind) => void;
   pathOpen: boolean;
   onTogglePath: () => void;
+  /** What is folded away. The panel and the chips each have a control of
+   * their own; this is the one that does both at once, for a reader who wants
+   * the map and nothing else. */
+  chrome: Chrome;
+  onChrome: (chrome: Chrome) => void;
   /** True when this document is a share artifact rather than the served
    * dashboard — see {@link ExportMenu}. */
   shared: boolean;
@@ -122,6 +130,29 @@ export function Header({
           onClick={onTogglePath}
         >
           Path
+        </button>
+        {/* Both folds at once. It reads as pressed while anything is folded,
+            so the control that got the reader here is the control that gets
+            them back — whichever of the three they used. */}
+        <button
+          type="button"
+          className={`topbar-button${allOpen(chrome) ? "" : " topbar-button-on"}`}
+          aria-pressed={!allOpen(chrome)}
+          data-walkthrough="focus"
+          title={
+            allOpen(chrome)
+              ? "Fold the panel and the regions away, leaving the map"
+              : "Bring the panel and the regions back"
+          }
+          onClick={() =>
+            onChrome(
+              allOpen(chrome)
+                ? { panel: true, chips: true }
+                : { panel: false, chips: false },
+            )
+          }
+        >
+          Focus
         </button>
         {/* Named for what it walks. The other walk in this product is the
             *codebase* tour behind the Learn switch, and two things called a

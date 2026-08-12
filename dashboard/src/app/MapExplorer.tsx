@@ -23,6 +23,7 @@ import { createPortal } from "react-dom";
 import type { KnowledgeGraph, Node as MapNode } from "../index.js";
 import { AnswerPanel } from "./AnswerPanel.js";
 import { type AskFn, useAsk } from "./ask.js";
+import { type Chrome, readChrome, writeChrome } from "./chrome.js";
 import { FilesPanel } from "./FilesPanel.js";
 import { FlowsPanel } from "./FlowsPanel.js";
 import {
@@ -91,6 +92,14 @@ export function MapExplorer({
 }) {
   const [mode, setMode] = useState<Mode>("overview");
   const [grouping, setGrouping] = useState<RegionKind>("structural");
+  // What the reader folded away last time, so a preference for a big canvas
+  // survives a reload. Written on every change rather than on unmount, which
+  // a closed tab never reaches.
+  const [chrome, setChromeState] = useState<Chrome>(readChrome);
+  const setChrome = useCallback((next: Chrome) => {
+    setChromeState(next);
+    writeChrome(next);
+  }, []);
   const [openRegionId, setOpenRegionId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -504,6 +513,8 @@ export function MapExplorer({
         }}
         pathOpen={pathOpen}
         onTogglePath={() => setPathOpen(!pathOpen)}
+        chrome={chrome}
+        onChrome={setChrome}
         shared={shared}
         exportOpen={exportOpen}
         onExportOpen={setExportOpen}
@@ -586,23 +597,41 @@ export function MapExplorer({
       />
 
       <div className="chiprow" data-walkthrough="regions">
-        <span className="chiprow-total">
-          {regions.length} {regions.length === 1 ? "region" : "regions"}
-        </span>
-        {regions.map((region, i) => (
-          <button
-            key={region.id}
-            type="button"
-            className={`region-chip${openRegionId === region.id ? " region-chip-on" : ""}`}
-            data-accent={i % 6}
-            onClick={() =>
-              setOpenRegionId(openRegionId === region.id ? null : region.id)
-            }
-          >
-            <span className="region-dot" aria-hidden="true" />
-            {region.name} <span className="chip-count">{region.files.length}</span>
-          </button>
-        ))}
+        {/* The fold control is the row's own, and it stays behind when the
+            chips go — a row that folded itself away entirely would take the
+            only way back with it. */}
+        <button
+          type="button"
+          className="chiprow-fold"
+          aria-expanded={!chrome.chips}
+          title={
+            chrome.chips
+              ? "Show the regions"
+              : "Fold the regions away and give the row to the map"
+          }
+          onClick={() => setChrome({ ...chrome, chips: !chrome.chips })}
+        >
+          <span aria-hidden="true">{chrome.chips ? "▸" : "▾"}</span>
+          <span className="chiprow-total">
+            {regions.length} {regions.length === 1 ? "region" : "regions"}
+          </span>
+        </button>
+        {!chrome.chips &&
+          regions.map((region, i) => (
+            <button
+              key={region.id}
+              type="button"
+              className={`region-chip${openRegionId === region.id ? " region-chip-on" : ""}`}
+              data-accent={i % 6}
+              onClick={() =>
+                setOpenRegionId(openRegionId === region.id ? null : region.id)
+              }
+            >
+              <span className="region-dot" aria-hidden="true" />
+              {region.name}{" "}
+              <span className="chip-count">{region.files.length}</span>
+            </button>
+          ))}
         {overlay && (
           <label className="overlay-toggle" data-walkthrough="diff">
             <input
@@ -623,8 +652,25 @@ export function MapExplorer({
         )}
       </div>
 
-      <div className="workspace">
-
+      <div className={`workspace${chrome.panel ? " workspace-folded" : ""}`}>
+        {/* Folded, the panel is a rail holding one control: the way back. The
+            panel itself is unmounted rather than hidden, so the walkthrough
+            skips its step instead of spotlighting a hole of no size — the
+            same thing it already does for a control a given page lacks. */}
+        {chrome.panel ? (
+          <div className="panelrail">
+            <button
+              type="button"
+              className="panelrail-open"
+              aria-expanded={false}
+              title="Show the side panel"
+              onClick={() => setChrome({ ...chrome, panel: false })}
+            >
+              <span aria-hidden="true">›</span>
+              <span className="panelrail-label">Panel</span>
+            </button>
+          </div>
+        ) : (
         <aside className="rightpanel" data-walkthrough="panel">
           <div className="tabs" role="tablist" aria-label="Detail">
             {(["info", "files"] as const).map((t) => (
@@ -639,6 +685,16 @@ export function MapExplorer({
                 {t === "info" ? "Info" : "Files"}
               </button>
             ))}
+            <button
+              type="button"
+              className="tabs-fold"
+              aria-expanded
+              aria-label="Hide the side panel"
+              title="Fold the side panel away and give its width to the map"
+              onClick={() => setChrome({ ...chrome, panel: true })}
+            >
+              <span aria-hidden="true">‹</span>
+            </button>
           </div>
 
           {pathOpen && (
@@ -684,6 +740,7 @@ export function MapExplorer({
             />
           )}
         </aside>
+        )}
 
         <main className="canvas" data-walkthrough="canvas">
           <nav className="breadcrumb" aria-label="Canvas scope">
