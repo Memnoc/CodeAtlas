@@ -1,6 +1,6 @@
 # Ticket 43 — what is worth enriching
 
-**Status:** deferred — after V1, and see "The case against this ticket"
+**Status:** dropped — 2026-08-12, by the user at the `/next` harvest, with the measurement attached: the pain it targeted was dissolved by tickets 40 and 42, and its own text predicted this disposition and called it a successful outcome. Recorded in `docs/intake/2026-08-12-codeatlas-v1-next.md`
 **Spec:** docs/specs/2026-08-09-codeatlas-v1.md
 **Story:** 12 — enrich a map through a real backend
 **Blocks:** none
