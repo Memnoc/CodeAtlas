@@ -34,7 +34,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
@@ -167,17 +167,33 @@ const MAX_BODY: usize = 64 * 1024;
 
 /// The most a connection is read out on the way to being closed. Closing on
 /// bytes nobody read resets the connection in the client's face (see
-/// [`hang_up`]), but past this many of them being tidy is not worth the
+/// [`hang_up`]), but past a megabyte of them being tidy is not worth the
 /// bytes: a caller still sending after it has been answered has had its
 /// answer.
-const MAX_DRAIN: usize = 16 * MAX_BODY;
+///
+/// Its own number rather than a multiple of [`MAX_BODY`]. The two cap
+/// different things and no longer move together: `MAX_BODY` bounds a body
+/// this server parses, and that read is bounded above it by the 413 check in
+/// [`answer_question`], while this bounds bytes nobody will ever look at, on
+/// the way out of a connection that has already been answered.
+const MAX_DRAIN: usize = 1024 * 1024;
 
-/// How long [`hang_up`] waits on a client that is still sending. Much
+/// How long [`hang_up`] waits on a client that has gone quiet mid-send. Much
 /// shorter than [`READ_TIMEOUT`], and it can be: by then the response has
 /// been written and flushed, so nothing the reader is waiting for depends on
-/// this number. All it bounds is how long a handler thread stays alive being
-/// polite.
+/// this number.
 const LINGER_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// How long [`hang_up`] may take in total, across every read it makes.
+///
+/// This is the bound that can be stated, and [`LINGER_TIMEOUT`] is not: a
+/// per-read timeout bounds no loop, because any number of reads that each
+/// beat it add up to no limit at all. A client dribbling one byte every
+/// 450 ms leaves every read inside `LINGER_TIMEOUT` and still takes
+/// [`MAX_DRAIN`] of them to stop — days of thread life, unauthenticated, on
+/// every route. A deadline across the whole loop is what makes a handler
+/// thread's extra life a number rather than a hope.
+const DRAIN_DEADLINE: Duration = Duration::from_secs(1);
 
 /// The two request headers this server reads. It read none before ADR-0009,
 /// and reads exactly these now — one to frame a body, one to refuse a
@@ -472,20 +488,39 @@ fn respond(
 /// server wait on a client that has not finished sending, and it would put
 /// that wait in front of the response rather than behind it.
 ///
-/// Bounded twice, because an unauthenticated local caller picks both numbers
-/// otherwise: [`MAX_DRAIN`] bytes, and [`LINGER_TIMEOUT`] of silence.
-/// Nothing is kept — the bytes pass through one stack buffer and are dropped
-/// — so a route that was never going to read a body still never allocates
-/// one for it.
+/// Bounded three ways, because an unauthenticated local caller picks every
+/// number this loop is not given: [`MAX_DRAIN`] bytes, [`LINGER_TIMEOUT`] on
+/// a client that goes quiet, and [`DRAIN_DEADLINE`] across the loop as a
+/// whole. The last is the one that makes the other two add up to anything —
+/// bytes and silence are both bounds a busy client never reaches. Nothing is
+/// kept — the bytes pass through one stack buffer and are dropped — so a
+/// route that was never going to read a body still never allocates one for
+/// it.
 fn hang_up(stream: &mut TcpStream) {
     if stream.shutdown(Shutdown::Write).is_err() {
         // Already gone; there is nobody left to be polite to.
         return;
     }
-    let _ = stream.set_read_timeout(Some(LINGER_TIMEOUT));
+    let deadline = Instant::now() + DRAIN_DEADLINE;
     let mut scratch = [0u8; 4096];
     let mut drained = 0;
     while drained < MAX_DRAIN {
+        let left = deadline.saturating_duration_since(Instant::now());
+        // Out of budget, or the budget would not go onto the socket. The
+        // second is why this is not `let _ =`: a failed `set_read_timeout`
+        // leaves the stream on the ten-second `READ_TIMEOUT`, and the
+        // deadline is only consulted between reads, so one read could sit
+        // there for ten times the bound this function documents. Stopping
+        // instead costs a client that is still sending the response it was
+        // owed — exactly what the `MAX_DRAIN` break already costs, and the
+        // price of a bound being a bound.
+        if left.is_zero()
+            || stream
+                .set_read_timeout(Some(left.min(LINGER_TIMEOUT)))
+                .is_err()
+        {
+            break;
+        }
         match stream.read(&mut scratch) {
             // EOF, a timeout, or a peer that hung up first: done either way.
             Ok(0) | Err(_) => break,

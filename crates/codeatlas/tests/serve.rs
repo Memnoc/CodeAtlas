@@ -7,6 +7,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use assert_cmd::cargo::CommandCargoExt;
 use predicates::prelude::PredicateBooleanExt;
@@ -94,9 +96,31 @@ fn serve_with(repo: &Path, extra: &[&str]) -> Server {
     Server { child, port }
 }
 
+/// Reads one response off a socket a request has already been written to:
+/// everything up to EOF, split at the header/body separator into (status
+/// line, headers, body). Every helper below is this plus a request, which is
+/// the only reason a hand-rolled client is affordable — keeping it hand-rolled
+/// adds no HTTP dependency and exercises the wire format directly.
+///
+/// The `Result` is the point rather than a formality: a response that never
+/// arrives is what ticket 35 is about, so the caller decides whether a reset
+/// is a failure or the thing under test.
+fn read_response(stream: &mut TcpStream) -> std::io::Result<(String, Vec<String>, Vec<u8>)> {
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)?;
+    let split = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| std::io::Error::other("no header/body separator in response"))?;
+    let head = String::from_utf8_lossy(&response[..split]).to_string();
+    let body = response[split + 4..].to_vec();
+    let mut lines = head.lines().map(str::to_string);
+    let status = lines.next().unwrap_or_default();
+    Ok((status, lines.collect(), body))
+}
+
 /// Minimal HTTP/1.1 GET over a raw socket; returns (status line, headers,
-/// body). Keeping the client hand-rolled means the test adds no HTTP
-/// dependency and exercises the wire format directly.
+/// body).
 fn http_get(port: u16, path: &str) -> (String, Vec<String>, Vec<u8>) {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
     write!(
@@ -104,17 +128,7 @@ fn http_get(port: u16, path: &str) -> (String, Vec<String>, Vec<u8>) {
         "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
     )
     .unwrap();
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).unwrap();
-    let split = response
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .expect("no header/body separator in response");
-    let head = String::from_utf8_lossy(&response[..split]).to_string();
-    let body = response[split + 4..].to_vec();
-    let mut lines = head.lines().map(str::to_string);
-    let status = lines.next().unwrap();
-    (status, lines.collect(), body)
+    read_response(&mut stream).unwrap()
 }
 
 /// Minimal HTTP/1.1 POST over a raw socket. Hand-rolled for the same reason
@@ -140,23 +154,14 @@ fn http_post_as(
         body.len()
     )
     .unwrap();
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response).unwrap();
-    let split = response
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .expect("no header/body separator in response");
-    let head = String::from_utf8_lossy(&response[..split]).to_string();
-    let body = response[split + 4..].to_vec();
-    let mut lines = head.lines().map(str::to_string);
-    let status = lines.next().unwrap();
-    (status, lines.collect(), body)
+    read_response(&mut stream).unwrap()
 }
 
-/// The smallest body that is certain to outlast the server's first read of
-/// the connection. `BufReader`'s default buffer is 8 KiB, so a request whose
-/// body exceeds that cannot be swallowed whole by the read that collects the
-/// header block, whatever the network happens to do with the segments.
+/// A body comfortably past what the server's first read can swallow.
+/// `BufReader`'s default buffer is 8 KiB, so any body larger than that is
+/// certain to be still in the socket when the header block has been read,
+/// whatever the network does with the segments; four times over is margin
+/// against that buffer size changing, not a threshold of its own.
 const LARGER_THAN_ONE_READ: usize = 32 * 1024;
 
 /// A POST that is still arriving when the server decides how to answer it,
@@ -192,15 +197,8 @@ fn http_post_still_arriving(
     stream.write_all(body.as_bytes())?;
     stream.flush()?;
 
-    let mut response = Vec::new();
-    stream.read_to_end(&mut response)?;
-    let split = response
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .ok_or_else(|| std::io::Error::other("no header/body separator in response"))?;
-    let head = String::from_utf8_lossy(&response[..split]).to_string();
-    let status = head.lines().next().unwrap_or_default().to_string();
-    Ok((status, response[split + 4..].to_vec()))
+    let (status, _, body) = read_response(&mut stream)?;
+    Ok((status, body))
 }
 
 /// Asks a question and returns (status line, parsed JSON body).
@@ -687,8 +685,8 @@ fn an_oversized_request_body_is_refused() {
 ///
 /// Repetition is the assertion, not decoration. The defect that filed this
 /// ticket passed twenty-four runs in twenty-five, so a single green run says
-/// nothing; [`post_body_late`] makes each round deterministic and the loop
-/// makes a rare survivor visible.
+/// nothing; [`http_post_still_arriving`] makes each round deterministic and
+/// the loop makes a rare survivor visible.
 #[test]
 fn a_refused_method_reaches_the_client_that_asked_for_it() {
     let repo = materialize("simple");
@@ -716,11 +714,16 @@ fn a_refused_method_reaches_the_client_that_asked_for_it() {
 /// Ticket 35, the other two refusals that answer from the header block alone.
 ///
 /// 415 is decided by `Content-Type` and 413 by the declared length, so both
-/// reply while the body is still arriving — the same close-on-unread-bytes
-/// race as the 405 above, on the one route that does read bodies. The 413
-/// round doubles as the proof that an over-long request is refused on its
-/// declared length rather than after the server has read it: the body here is
-/// written only after the refusal has been decided.
+/// now reply while the body is still arriving, and both need the hang-up for
+/// the same reason the 405 above does. What this guards is that pairing, not
+/// the race itself: before ticket 35 these two branches read the body *before*
+/// deciding, so the receive queue was empty at close and this test passes
+/// against the unfixed server. It fails if the hang-up is dropped while the
+/// reorder stays — which is the combination a later change is most likely to
+/// reach for, since the reorder is the part that looks like an optimisation.
+/// The 413 round doubles as the proof that an over-long request is refused on
+/// its declared length rather than after the server has read it: the body here
+/// is written only after the refusal has been decided.
 #[test]
 fn the_question_routes_refusals_reach_the_client_too() {
     let repo = materialize("simple");
@@ -760,6 +763,158 @@ fn the_question_routes_refusals_reach_the_client_too() {
     assert!(
         status.contains("200"),
         "map status after refusals: {status}"
+    );
+}
+
+/// One byte at a time, slower than the drain's per-read timeout and forever.
+///
+/// Ticket 35's hang-up gave the drain a timeout per read and a cap in bytes,
+/// and neither bounds a loop: a client whose every read lands inside the
+/// timeout simply gets another read, up to a megabyte of them. This dribbles
+/// at `TRICKLE` below — well inside the 500 ms per-read bound — so every read
+/// succeeds and only a deadline across the whole loop can end it. Against the
+/// server that shipped, the handler thread outlives its response for days,
+/// unauthenticated, on a route that needs no flag.
+///
+/// The trickle has to start before the response is read and continue through
+/// it. A client that pauses to read is a client that has gone quiet, and going
+/// quiet is the one case the per-read timeout already handled — which would
+/// make this a test that passes either way.
+#[test]
+fn a_client_that_keeps_sending_is_hung_up_on_rather_than_drained_forever() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let server = serve(repo.path());
+
+    /// Between dribbled bytes: comfortably inside the server's 500 ms
+    /// per-read timeout, so no read of the drain ever times out.
+    const TRICKLE: Duration = Duration::from_millis(200);
+    /// How long the client is willing to keep dribbling. Far past the
+    /// server's one-second deadline; reaching the end of it is the failure.
+    const PATIENCE: Duration = Duration::from_secs(6);
+    /// The bound asserted. Not the server's deadline — the client cannot see
+    /// that — but a number a loaded machine still beats and an unbounded
+    /// drain never does.
+    const HUNG_UP_WITHIN: Duration = Duration::from_secs(4);
+
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    stream.set_nodelay(true).unwrap();
+    // A modest declared body, sent one byte at a time and never finished: the
+    // refusal is decided from the request line alone, so the server answers
+    // and then drains whatever this keeps feeding it.
+    write!(
+        stream,
+        "POST /api/ask HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+         Content-Length: 4096\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+
+    let mut dribbling = stream.try_clone().unwrap();
+    let began = Instant::now();
+    let trickler = thread::spawn(move || {
+        while began.elapsed() < PATIENCE {
+            // The server closing on us is what this is waiting for: the next
+            // write after that fails, which is the only way a client learns
+            // the drain has stopped.
+            if dribbling
+                .write_all(b"a")
+                .and_then(|()| dribbling.flush())
+                .is_err()
+            {
+                return Some(began.elapsed());
+            }
+            thread::sleep(TRICKLE);
+        }
+        None
+    });
+
+    let (status, _, body) = read_response(&mut stream).expect("the refusal never arrived");
+    assert!(status.contains("405"), "status: {status}");
+    assert!(
+        String::from_utf8_lossy(&body).contains("only GET"),
+        "the refusal must say which verbs are served: {:?}",
+        String::from_utf8_lossy(&body)
+    );
+
+    let hung_up = trickler.join().unwrap();
+    let hung_up = hung_up.unwrap_or_else(|| {
+        panic!("the server was still draining a trickling client after {PATIENCE:?}")
+    });
+    assert!(
+        hung_up < HUNG_UP_WITHIN,
+        "the drain has no deadline: hung up after {hung_up:?}, not within {HUNG_UP_WITHIN:?}"
+    );
+
+    // And the server is unharmed by having been dribbled at.
+    let (status, _, _) = http_get(server.port, "/api/map");
+    assert!(
+        status.contains("200"),
+        "map status after trickling: {status}"
+    );
+}
+
+/// The byte bound has a price, and this pins it rather than letting it be
+/// discovered.
+///
+/// `MAX_DRAIN` stops the close-time drain at a megabyte, so a client that
+/// sends more than that is still sending when the server stops reading and
+/// closes — which is the reset the drain exists to avoid, back again for the
+/// requests that overrun it. What the sender sees is its own write failing
+/// partway, not the 413 that named the cap. That is the trade the bound makes:
+/// a server that drains whatever it is sent has no bound at all.
+///
+/// The refusal was written and flushed before the drain began, so on Linux it
+/// is usually still in the client's receive buffer afterwards — which is not
+/// asserted here, because it is the kernel's ordering of a FIN and an RST
+/// rather than anything this server promises, and ticket 35 exists because
+/// that ordering was being leaned on.
+#[test]
+fn a_body_far_past_the_drain_bound_costs_the_client_its_refusal() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let outside = tempfile::tempdir().unwrap();
+    let spec = format!(
+        "fake:{}",
+        canned(outside.path(), "MUST NOT BE REACHED", &[]).display()
+    );
+    let server = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+
+    /// Past `MAX_DRAIN` (a megabyte, in `crates/codeatlas/src/serve.rs`) by a
+    /// margin no pair of socket buffers can absorb — measured here, a client
+    /// gets about 2.8 MB out before the write fails.
+    const PAST_ANY_DRAIN: usize = 16 * 1024 * 1024;
+
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    write!(
+        stream,
+        "POST /api/ask HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+         Content-Length: {PAST_ANY_DRAIN}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    let sent = stream
+        .write_all(&vec![b'a'; PAST_ANY_DRAIN])
+        .and_then(|()| stream.flush());
+    let err = sent.expect_err(
+        "the whole body was accepted, so the drain read past its bound — \
+         either MAX_DRAIN grew or nothing stops it",
+    );
+    assert!(
+        matches!(
+            err.kind(),
+            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+        ),
+        "expected the server to have stopped reading and closed, got: {err:?}"
+    );
+
+    // The server is unharmed, and a request inside the bound still gets the
+    // 413 that names the cap — the limitation is the size, not the route.
+    let huge = serde_json::json!({ "question": "a".repeat(200_000) }).to_string();
+    let (status, _, body) = http_post(server.port, "/api/ask", &huge);
+    assert!(status.contains("413"), "oversized body status: {status}");
+    assert!(
+        String::from_utf8_lossy(&body).contains("at most"),
+        "the refusal must state the cap: {:?}",
+        String::from_utf8_lossy(&body)
     );
 }
 

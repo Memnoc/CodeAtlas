@@ -475,30 +475,77 @@ text — those claims are about what git does:
   does receive map data — it is the model call — bounded exactly as
   guarantee 2 states, and it is spawned only when that provider is selected.
 - **`serve` DoS surface is loopback-local.** Any process on the same host
-  may connect to the dashboard port. Accepted connections carry a 10-second
-  read timeout (`accepted_connections_carry_a_read_timeout`,
-  `crates/codeatlas/src/serve.rs`), so half-open requests cannot park
-  threads forever, but a determined local process can still hammer the
-  server. A handler thread also outlives its own response by up to half a
-  second: every response is followed by a half-close and a drain of whatever
-  the client is still sending, because closing on unread bytes resets the
+  may connect to the dashboard port, and a determined one can hammer the
+  server. Accepted connections carry a 10-second read timeout
+  (`accepted_connections_carry_a_read_timeout`,
+  `crates/codeatlas/src/serve.rs`), so a connection that goes silent on a
+  read errors out rather than blocking on it forever — but that timeout is
+  per read and not per request, which is the next bullet. A handler thread
+  also outlives its own response, by at most `DRAIN_DEADLINE` — one second:
+  every response is followed by a half-close and a drain of whatever the
+  client is still sending, because closing on unread bytes resets the
   connection and costs the client the response it was owed. That drain is
-  bounded in both directions — `LINGER_TIMEOUT` of silence and `MAX_DRAIN`
-  bytes, both in `crates/codeatlas/src/serve.rs` — so it is a second finite
-  hold on a thread rather than a second way to keep one. Nothing is retained
-  from it: the bytes pass through a stack buffer and are dropped, which is
-  what keeps a route that reads no body from allocating one
-  (`a_refused_method_reaches_the_client_that_asked_for_it` and
-  `the_question_routes_refusals_reach_the_client_too`,
-  `crates/codeatlas/tests/serve.rs`, both asserted under repetition). This
-  affects availability of the local dashboard only, never
-  confidentiality. What a connection can be told is the whole of this list:
+  bounded three ways, all in `crates/codeatlas/src/serve.rs`:
+  `LINGER_TIMEOUT`, 500 ms, on a client that goes quiet mid-send;
+  `MAX_DRAIN`, one mebibyte, on how much is read out; and `DRAIN_DEADLINE`
+  across the loop as a whole. The last is what makes the other two add up to
+  a bound — a per-read timeout bounds no loop, since any number of reads that
+  each beat it are still any number of reads, and a client dribbling a byte
+  at a time reaches neither of the first two for days.
+  `a_client_that_keeps_sending_is_hung_up_on_rather_than_drained_forever`
+  (`crates/codeatlas/tests/serve.rs`) holds the real binary to it by
+  dribbling at a server that has already answered. So the drain is a second
+  finite hold on a thread rather than a second way to keep one. Nothing is
+  retained from it: the bytes pass through a stack buffer and are dropped,
+  which is what keeps a route that reads no body from allocating one
+  (`a_plain_serve_still_ignores_a_body_it_was_never_going_to_read`, which
+  asks a plain `serve` for the map behind a declared 200 KB body and requires
+  the map to come back at once). That the responses themselves arrive,
+  including refusals decided while a body is still in flight, is asserted
+  under repetition by `a_refused_method_reaches_the_client_that_asked_for_it`
+  and `the_question_routes_refusals_reach_the_client_too` — with the one
+  exception two bullets down. This affects availability of the local
+  dashboard only, never confidentiality. What a connection can be told is the
+  whole of this list:
   the map and the diff overlay, read from disk; the embedded dashboard
   assets, from process memory; and — since [ADR-0009] — one boolean saying
   whether this process was started with `--ask` (`CAPABILITIES_ROUTE`). That
   last is the only thing the server discloses about its own configuration
   rather than about the repository, and it is a fact a local process could
   establish anyway by asking a question and seeing what comes back.
+- **A slow header block can park a handler thread indefinitely.**
+  `read_headers` (`crates/codeatlas/src/serve.rs`) loops on `read_line` with
+  no cap on the number of header lines, no cap on the length of one line and
+  no deadline across the block. The only limit is the 10-second
+  `READ_TIMEOUT` above, and it applies per read: a local client sending one
+  header line every nine seconds holds a handler thread for as long as it
+  cares to, and one sending a very long line without a newline grows a
+  `String` while it does. `serve` is thread-per-connection and nothing caps
+  how many threads exist. This is on the request path and predates all of the
+  response-path work above; it is filed as ticket 38
+  (`.scratch/codeatlas-v1/38-a-header-block-that-never-ends.md`) and deferred
+  past V1, because it is reachable only from loopback by someone already
+  running code on the machine. It is written here rather than fixed, and it
+  is written here rather than in the bullet above because the bullet above
+  claimed the opposite until this was found — that half-open requests cannot
+  park threads forever. They can, and this is how. A limitation an auditor
+  can read is a different thing from a guarantee that is not true.
+- **A request body past `MAX_DRAIN` costs its sender the refusal.** The drain
+  stops at one mebibyte, so a client that declares and sends more than that
+  is still sending when the server gives up reading and closes — which resets
+  the connection, the very thing the drain exists to avoid, back again for
+  the requests that overrun it. What that client sees is its own write
+  failing partway rather than the 413 naming the cap. The response was
+  written and flushed before the drain began, so on Linux it is usually still
+  in the client's receive buffer to be read afterwards; that is the kernel's
+  ordering of a FIN and an RST rather than anything this server promises, and
+  a client which treats a failed write as fatal, as `curl` does, never looks.
+  Pinned rather than fixed, by
+  `a_body_far_past_the_drain_bound_costs_the_client_its_refusal`
+  (`crates/codeatlas/tests/serve.rs`), so raising or losing the bound is a
+  test failure rather than a discovery. Raising it would only move the line:
+  a server that drains whatever it is sent has no bound at all, which is the
+  trade the two numbers make.
 - **Reproducing the tree probe by hand.** `cargo tree` shows
   dev-dependencies by default, and the test-only `jsonschema` crate pulls in
   `reqwest` and `tokio`. So the obvious hand-check —
