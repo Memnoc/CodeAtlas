@@ -16,6 +16,12 @@ between them — to `.codeatlas/knowledge-graph.json`. Run it and look. The
 counts belong to whatever the repository is on the day you run it and the
 timing to your machine, so neither is written down here.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/plate-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/plate-light.png">
+  <img alt="CodeAtlas — a map of your codebase: regions, routes between them, and the elevation of what everything rests on" src="docs/images/plate-dark.png" width="100%">
+</picture>
+
 ## Quick start
 
 ```sh
@@ -41,6 +47,107 @@ parent excluded, so an outright exclusion keeps enrichment unpublished no
 matter what the nested file says; ignoring the *contents* lets the nested file
 do its job. Keep the `**/` or the rule stops applying at the root, and a scan
 run from a subdirectory leaves a `.codeatlas/` there that nothing ignores.
+
+## How it works
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/pipeline-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/pipeline-light.png">
+  <img alt="From repository to map in one command: scan parses and groups, map.json is the contract, --enrich is the optional model pass, then read it in the dashboard or share one HTML file" src="docs/images/pipeline-dark.png" width="100%">
+</picture>
+
+## What it looks like
+
+Live captures and designed cards, all drawn from CodeAtlas's own map — the
+pictures follow your GitHub theme, and the counts inside them belong to the
+day the map was scanned.
+
+### How to read the map
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/legend-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/legend-light.png">
+  <img alt="The legend: regions, edges, elevation, and the structural-versus-llm provenance badges" src="docs/images/legend-dark.png" width="100%">
+</picture>
+
+### The whole repository as a handful of regions
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/regions-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/regions-light.png">
+  <img alt="The region map: every file in a labelled region, edges saying which regions import which" src="docs/images/regions-dark.png" width="100%">
+</picture>
+
+### The same repository, structurally and by behaviour
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/twoviews-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/twoviews-light.png">
+  <img alt="Structural groups by where files live; Domain groups by what actually runs; one toggle swaps between them" src="docs/images/twoviews-dark.png" width="100%">
+</picture>
+
+### Follow the call flows, not the folder tree
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/flows-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/flows-light.png">
+  <img alt="The Domain view: regions drawn around call flows rather than directories" src="docs/images/flows-dark.png" width="100%">
+</picture>
+
+### One file, everything it touches
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/focus-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/focus-light.png">
+  <img alt="Focus: the map dimmed to a single node with its used-by and uses paths lit" src="docs/images/focus-dark.png" width="100%">
+</picture>
+
+### Every symbol, file and summary, one keystroke away
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/search-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/search-light.png">
+  <img alt="Search: one ranked list of functions and files, each with its location" src="docs/images/search-dark.png" width="100%">
+</picture>
+
+### Ask the map a question in plain English
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/ask-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/ask-light.png">
+  <img alt="Ask: a typed question answered in prose, with the files the answer was drawn from" src="docs/images/ask-dark.png" width="100%">
+</picture>
+
+<!-- HELD BANNERS — two pairs exist in the design file but are not published:
+  walkthrough-{dark,light}.png says "Thirteen steps" (and a "13 steps" chip);
+  the shipped walkthrough has fourteen — re-export without the number.
+  hero-{dark,light}.png says "in nine themes"; the dashboard ships two.
+  After re-export, drop the files into docs/images/ and give each its
+  <picture> block here (walkthrough) and wherever the hero should live. -->
+
+### Where to start, and what everything leans on
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/panel-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/panel-light.png">
+  <img alt="The info panel naming entry points and load-bearing files; the FILES tab behind its filter" src="docs/images/panel-dark.png" width="100%">
+</picture>
+
+### You always know which parts a model wrote
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/provenance-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/provenance-light.png">
+  <img alt="Two kinds of label: structural read off the code, llm written during enrichment and stripped from the shared page" src="docs/images/provenance-dark.png" width="100%">
+</picture>
+
+### Take the map with you
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/share-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/share-light.png">
+  <img alt="The Share/Export menu: one self-contained redacted HTML file, or the raw JSON against the versioned contract" src="docs/images/share-dark.png" width="100%">
+</picture>
 
 ## Commands
 
@@ -245,7 +352,12 @@ serving binary. The V1 scope lives in [`docs/specs/`](docs/specs/).
 
 ## Status
 
-V1 is not shipped. The three build configurations are green and the dashboard
-suite with them. The known next area is the dashboard at scale — layout
-currently places nodes on a fixed grid within each layer, which reads well for
-small repositories and becomes crowded for large ones.
+V1 shipped on 2026-08-12. Every story in the V1 spec passes, and the record —
+six verification walks plus a browser walk, story by story — lives in the
+spec's own Verification section
+([`docs/specs/2026-08-09-codeatlas-v1.md`](docs/specs/2026-08-09-codeatlas-v1.md)).
+The agenda for what comes next is
+[`docs/intake/2026-08-12-codeatlas-v1-next.md`](docs/intake/2026-08-12-codeatlas-v1-next.md);
+its headline is the dashboard at scale — layout currently places nodes on a
+fixed grid within each layer, which reads well for small repositories and
+becomes crowded for large ones.
