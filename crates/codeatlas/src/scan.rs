@@ -293,10 +293,27 @@ fn import_targets(
 /// must actually be exported by its defining file, possibly through one
 /// level of export alias or re-export. Anything else — member calls,
 /// packages, files outside the map — is dropped, never emitted dangling.
+///
+/// Wherever a *target* module is reached, the member is looked up across the
+/// whole namespace that module anchors rather than in the one file: see
+/// [`resolve_calls`]'s `resolve_in_module`, which is what makes a Go package
+/// behave as the directory it is.
 fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>, root: &Path) {
     let files: HashSet<String> = paths.iter().cloned().collect();
     let facts_by_path: HashMap<&str, &FileFacts> =
         facts.iter().map(|f| (f.path.as_str(), f)).collect();
+    // Files grouped by the directory they sit in, path-sorted within each
+    // group because `facts` is. Built once for the package widening below:
+    // without it, a member that is not in its package's anchor file costs a
+    // scan of every file in the repository, and in a Go tree that is most
+    // members — measured at +171% scan time on a 560-file probe.
+    let mut facts_by_directory: HashMap<&str, Vec<&FileFacts>> = HashMap::new();
+    for file in facts {
+        facts_by_directory
+            .entry(directory_of(&file.path))
+            .or_default()
+            .push(file);
+    }
 
     // Where an import of `name` from `file` actually lands: the file's own
     // exported function, an aliased local (`export { internal as external }`),
@@ -327,6 +344,42 @@ fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>, r
             }
         }
     };
+
+    // Where an import that landed on `target` publishes `name`. In five of the
+    // six languages a module is one file and this is `resolve_exported`
+    // outright. Go's import names a *directory*: `resolve_import` answers with
+    // the package's anchor file, but the member may be defined in any file of
+    // the package, so where a directory is one namespace the lookup widens
+    // across the anchor's directory.
+    //
+    // The widening is keyed on the **callee's** directory. The sibling search
+    // below is keyed on the caller's and answers a different question — "the
+    // other files of my own package" rather than "the package I imported" —
+    // which is why binding a Go qualifier to its anchor file and leaning on
+    // that search resolves `util.Format` and misses `util.Extra`.
+    //
+    // It cannot widen into an invented edge: the specifier had to resolve into
+    // the map first, the file has to sit in the resolved file's own directory
+    // and be of the caller's language, and the name has to be exported there.
+    let resolve_in_module =
+        |parser: &dyn parsers::Parser, target: &str, name: &str| -> Option<(String, String)> {
+            if let Some(found) = resolve_exported(target, name) {
+                return Some(found);
+            }
+            if !parser.directory_shares_scope() {
+                return None;
+            }
+            // Facts are path-sorted, so which file answers is deterministic —
+            // though in valid Go only one file of a package can export a name.
+            facts_by_directory
+                .get(directory_of(target))
+                .into_iter()
+                .flatten()
+                .filter(|other| {
+                    other.path != target && parser.extensions().contains(&extension_of(&other.path))
+                })
+                .find_map(|other| resolve_exported(&other.path, name))
+        };
 
     let mut seen: HashSet<(NodeId, NodeId)> = HashSet::new();
     for file in facts {
@@ -407,7 +460,7 @@ fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>, r
                         receiver_module(parser, &file.path, &call.receiver, &modules, &files, root)
                     })
                     .clone()
-                    .and_then(|module| resolve_exported(&module, &call.callee))
+                    .and_then(|module| resolve_in_module(parser, &module, &call.callee))
             } else if file.functions.contains(&call.callee) {
                 Some((file.path.clone(), call.callee.clone()))
             } else if let Some(sibling) = parser
@@ -429,10 +482,9 @@ fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>, r
                 Some((sibling.path.clone(), call.callee.clone()))
             } else {
                 bindings.get(call.callee.as_str()).and_then(|candidates| {
-                    candidates
-                        .iter()
-                        .rev()
-                        .find_map(|(target_file, imported)| resolve_exported(target_file, imported))
+                    candidates.iter().rev().find_map(|(target_file, imported)| {
+                        resolve_in_module(parser, target_file, imported)
+                    })
                 })
             };
             let Some((target_file, target_fn)) = target else {

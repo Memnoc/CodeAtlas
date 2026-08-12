@@ -10,3 +10,10 @@ import . "example.com/demo/util"
 func viaDot() string {
 	return Format("dot")
 }
+
+// "Every exported name of the *package*", not of the file the import edge
+// lands on: `Extra` lives in `util/extra.go`, one directory-mate away from
+// `util/util.go`, and a dot import binds it just the same.
+func viaDotSecondFile() string {
+	return Extra("dot")
+}

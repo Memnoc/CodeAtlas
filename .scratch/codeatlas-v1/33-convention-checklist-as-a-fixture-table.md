@@ -356,6 +356,40 @@ that is not a plain pass is ticket 37, which is the honest shape of it: Go's
 package qualifier is one missing binding, and it is load-bearing for six of
 the fourteen rows.
 
+### The table after ticket 37 (2026-08-12)
+
+Ticket 37 landed and all six Go cells moved, which is the mechanism working as
+designed: three `Filed` cells could not stay filed against a closed ticket, and
+three `Vacuous` cells failed the moment the thing they were waiting for
+arrived, forcing each to be re-proved by tamper rather than sliding into a
+silent pass. The whole-module cell now asserts what its TypeScript and Python
+neighbours assert — the file edge plus one call through the bound name — and
+the two non-edge cells were re-proved on two *different* mutations, so neither
+is carrying the other.
+
+| Convention | TypeScript | Rust | Python | Go | C | C++ |
+|---|---|---|---|---|---|---|
+| a plain module import | pass | pass | pass | pass | pass | pass |
+| a named/member import | pass | pass | pass | n/a | n/a | n/a |
+| an aliased import | pass | pass | pass | pass | n/a | n/a |
+| a namespace or whole-module import | pass | pass | pass | **pass** | n/a | n/a |
+| a relative import | pass | pass | pass | n/a | pass | pass |
+| a package/directory import through an initialiser or index | pass | pass | pass | pass | n/a | n/a |
+| a header/source pairing (C/C++ only) | n/a | n/a | n/a | n/a | pass | pass |
+| an unqualified call to an imported name | pass | pass | pass | **pass** | pass | pass |
+| a qualified call through an imported module | pass | pass | pass | **pass** | n/a | n/a |
+| a qualified call through an aliased module | pass | pass | pass | **pass** | n/a | n/a |
+| a qualified call through a nested module path | n/a | pass | pass | n/a | n/a | n/a |
+| NON-EDGE: receiver is a value, not a module | pass | pass | pass | **pass** | pass | pass |
+| NON-EDGE: a call into a package outside the repo | pass | pass | pass | **pass** | pass | pass |
+| NON-EDGE: an import resolving to no file in the repo | pass | pass | pass | pass | pass | pass |
+
+62 pass, 22 not-applicable, 0 filed, 0 vacuous — story 2's checklist is
+complete in all six languages. `Verdict::Filed` and `Verdict::Vacuous` are
+therefore constructed nowhere and are kept behind an `#[allow(dead_code)]`
+with the reason written above the enum: they are the vocabulary the next gap
+needs, and both carry assertions no other verdict makes.
+
 ### How the amended cells were proved able to fail
 
 | Mutation | What it printed |

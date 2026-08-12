@@ -25,6 +25,11 @@
 //!   is still true, so the ticket that removes the reason forces the cell to
 //!   be re-proved rather than letting it drift into a silent pass.
 //!
+//! As of ticket 37 every cell is `Holds` or `NotApplicable`. The last three
+//! filed and three vacuous cells were all Go's, and all six turned on one
+//! missing binding between a package qualifier and the directory it names.
+//! The two unused arms stay for the next gap — see the note above [`Verdict`].
+//!
 //! One test per convention, so a failure names the row. Assertions are at
 //! seam 1 — run the binary over a committed fixture, read the emitted map —
 //! and no cell reaches into the pipeline.
@@ -168,6 +173,17 @@ struct Cell {
     verdict: Verdict,
 }
 
+// Every cell holds as of ticket 37, so nothing constructs `Filed` or
+// `Vacuous` today. That is the state the table exists to reach, not a reason
+// to delete the vocabulary that reaches it. `Filed` is the escape hatch ticket
+// 33 was agreed on — a failing row is filed against a ticket rather than
+// quietly fixed or quietly ignored — and `Vacuous` is what stops a cell that
+// cannot fail from rendering beside cells that can. Both carry assertions no
+// other verdict makes (a filed row's gap must still be there; a vacuous row's
+// reason must still be true), so deleting them would mean the next walk that
+// finds a gap has to re-invent the classification, and the likeliest thing it
+// would do instead is leave the row silently red or silently green.
+#[allow(dead_code)]
 enum Verdict {
     /// The row passes: scan `fixture` and `expect` must hold of its map.
     Holds {
@@ -518,23 +534,24 @@ const CHECKLIST: &[Cell] = &[
     Cell {
         language: Language::Go,
         convention: Convention::WholeModuleImport,
-        form: "import \"example.com/demo/util\" — the same statement as the plain form",
-        verdict: Verdict::Vacuous {
-            ticket: "37",
+        // Go has one import statement and it genuinely is both forms at once,
+        // so the file edge here is the plain-import cell's. What tells the two
+        // rows apart is the second edge: the same statement binds `util` as a
+        // qualifier, and a member reached through that qualifier lands. Until
+        // ticket 37 the cell had only the shared edge and was `Vacuous` for
+        // it; it now asserts exactly what the TypeScript and Python cells of
+        // this row assert — the file edge plus one call through the bound name.
+        form: "import \"example.com/demo/util\"; util.Format(…)",
+        verdict: Verdict::Holds {
             fixture: "goproj",
-            guard: Expect::Edges(&[("imports", "file:main.go", "file:util/util.go")]),
-            vacuous_until: Expect::Edges(&[(
-                "calls",
-                "function:main.go:main",
-                "function:util/util.go:Format",
-            )]),
-            because: "Go has one import statement and it is both forms at once: the \
-                      statement that makes the file edge is the statement that binds \
-                      `util` as a qualifier. The edge is therefore byte-for-byte the \
-                      plain-import cell's, so no mutation can fail one and not the other \
-                      and the table must not claim two independent passes for it. The \
-                      only evidence that tells the rows apart is the qualifier binding, \
-                      which is a qualified call, which is ticket 37",
+            expect: Expect::Edges(&[
+                ("imports", "file:main.go", "file:util/util.go"),
+                (
+                    "calls",
+                    "function:main.go:main",
+                    "function:util/util.go:Format",
+                ),
+            ]),
         },
     },
     Cell {
@@ -820,19 +837,27 @@ const CHECKLIST: &[Cell] = &[
         // Not inapplicable, though it read that way until /crosscheck: a dot
         // import binds every exported name of the package unqualified and is
         // legal Go, so `Format("dot")` in `goproj/dot.go` really is an
-        // unqualified call to an imported name. The parser binds no name for
-        // any Go import, so it resolves to nothing — the same root cause as
-        // the two qualified-call cells, and ticket 37 already carries dot
-        // imports as a criterion.
+        // unqualified call to an imported name. Ticket 37 resolved it the way
+        // the C family resolves an `#include`: the file offers every callee it
+        // does not define to the dot import, and cross-file resolution keeps
+        // only the ones the package really exports. The second edge is what
+        // says "the package" and not "the file the import edge landed on" —
+        // `Extra` lives in `util/extra.go`.
         form: "import . \"example.com/demo/util\"; Format(\"dot\")",
-        verdict: Verdict::Filed {
-            ticket: "37",
+        verdict: Verdict::Holds {
             fixture: "goproj",
-            want: Expect::Edges(&[(
-                "calls",
-                "function:dot.go:viaDot",
-                "function:util/util.go:Format",
-            )]),
+            expect: Expect::Edges(&[
+                (
+                    "calls",
+                    "function:dot.go:viaDot",
+                    "function:util/util.go:Format",
+                ),
+                (
+                    "calls",
+                    "function:dot.go:viaDotSecondFile",
+                    "function:util/extra.go:Extra",
+                ),
+            ]),
         },
     },
     Cell {
@@ -904,15 +929,25 @@ const CHECKLIST: &[Cell] = &[
     Cell {
         language: Language::Go,
         convention: Convention::QualifiedCall,
-        form: "import \"example.com/demo/util\"; util.Format(…)",
-        verdict: Verdict::Filed {
-            ticket: "37",
+        // Two edges, because a Go qualifier names a *directory*. `Format` is
+        // in the package's anchor file and `Extra` is in its other one, and
+        // the second edge is the whole difference between binding the name to
+        // a package and binding it to whichever file the import edge chose.
+        form: "import \"example.com/demo/util\"; util.Format(…), util.Extra(…)",
+        verdict: Verdict::Holds {
             fixture: "goproj",
-            want: Expect::Edges(&[(
-                "calls",
-                "function:main.go:main",
-                "function:util/util.go:Format",
-            )]),
+            expect: Expect::Edges(&[
+                (
+                    "calls",
+                    "function:main.go:main",
+                    "function:util/util.go:Format",
+                ),
+                (
+                    "calls",
+                    "function:main.go:second",
+                    "function:util/extra.go:Extra",
+                ),
+            ]),
         },
     },
     Cell {
@@ -977,10 +1012,9 @@ const CHECKLIST: &[Cell] = &[
         language: Language::Go,
         convention: Convention::QualifiedCallThroughAlias,
         form: "import u \"example.com/demo/util\"; u.Format(…)",
-        verdict: Verdict::Filed {
-            ticket: "37",
+        verdict: Verdict::Holds {
             fixture: "goproj",
-            want: Expect::Edges(&[(
+            expect: Expect::Edges(&[(
                 "calls",
                 "function:alias.go:aliased",
                 "function:util/util.go:Format",
@@ -1117,29 +1151,22 @@ const CHECKLIST: &[Cell] = &[
     Cell {
         language: Language::Go,
         convention: Convention::ReceiverIsAValue,
+        // The sharpest of the six non-edge cells, and the only one whose decoy
+        // the resolver would reach by doing something entirely reasonable.
+        // `value.go` really does import the `util` package, so `util` really
+        // is a module name in this file — and then a parameter of the same
+        // name shadows it for the length of `onValue`. Nothing about the call
+        // site's *syntax* distinguishes it from `main.go`'s; only the function's
+        // own declarations do. Ticket 37 measured a sketch that skipped the
+        // shadow check and it fabricated exactly this edge.
         form: "import \"…/util\"; onValue(util Logger) { util.Format(…) }  // shadowed",
-        verdict: Verdict::Vacuous {
-            ticket: "37",
+        verdict: Verdict::Holds {
             fixture: "goproj",
-            guard: Expect::NoEdge {
+            expect: Expect::NoEdge {
                 kind: "calls",
                 source: "function:value.go:onValue",
                 decoy: "function:util/util.go:Format",
             },
-            vacuous_until: Expect::Edges(&[(
-                "calls",
-                "function:main.go:main",
-                "function:util/util.go:Format",
-            )]),
-            because: "`go.rs` keeps a call only when the callee node is an `identifier`, \
-                      and `util.Format(…)` is a `selector_expression` — so no Go selector \
-                      call is recorded at all and no mutation of the resolver can \
-                      fabricate this edge. The decoy is a real temptation now rather than \
-                      a pose: `value.go` imports the `util` package and then shadows the \
-                      name with a parameter holding a Logger, which is precisely what a \
-                      resolver that binds package qualifiers without checking for \
-                      shadowing would get wrong. It cannot get it wrong until ticket 37 \
-                      records selector calls",
         },
     },
     Cell {
@@ -1211,25 +1238,22 @@ const CHECKLIST: &[Cell] = &[
     Cell {
         language: Language::Go,
         convention: Convention::CallIntoOutsidePackage,
+        // The call site is recorded now — `util.Format(…)` with receiver
+        // `util` — and the receiver is not shadowed, so the shadow check is
+        // not what saves this one. What saves it is that the import binds no
+        // module: `github.com/external/lib/util` does not start with the
+        // go.mod module path, so nothing lands in this file's module map and
+        // the receiver resolves to nothing. Go keeps the dotted-language rule
+        // that an unbound receiver is a value, so there is no fallback to
+        // reach the identically-named in-repo package with.
         form: "import \"github.com/external/lib/util\"; util.Format(…)",
-        verdict: Verdict::Vacuous {
-            ticket: "37",
+        verdict: Verdict::Holds {
             fixture: "goproj",
-            guard: Expect::NoEdge {
+            expect: Expect::NoEdge {
                 kind: "calls",
                 source: "function:external.go:external",
                 decoy: "function:util/util.go:Format",
             },
-            vacuous_until: Expect::Edges(&[(
-                "calls",
-                "function:main.go:main",
-                "function:util/util.go:Format",
-            )]),
-            because: "the same reason as the value-receiver cell above: no Go selector \
-                      call is recorded, so there is no call for an over-eager resolver \
-                      to mis-target. The import half of this guard is real and asserted \
-                      by the resolves-nowhere cell, which pins the whole edge set out of \
-                      `external.go` as empty; the call half waits on ticket 37",
         },
     },
     Cell {

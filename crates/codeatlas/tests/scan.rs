@@ -1307,6 +1307,79 @@ fn go_files_yield_symbols_imports_and_calls() {
     );
 }
 
+/// `tests/conventions.rs` says a Go qualifier resolves; this says it resolves
+/// to *that and nothing else*, which is the half a per-cell expectation cannot
+/// reach. Every function in `goproj` that writes a selector call has its whole
+/// outgoing call set pinned, so the two ways this could go wrong both redden
+/// something: a stdlib receiver leaking into an edge (`fmt.Println`,
+/// `strings.TrimSpace`) shows up as an extra target, and a receiver that is
+/// really a value or really outside the module shows up as a set that should
+/// have been empty and is not.
+///
+/// It also states the directory property outright. `Extra` is in
+/// `util/extra.go` while the import edge lands on `util/util.go`, so
+/// `second -> Extra` is only reachable if the qualifier names the package
+/// rather than the file the specifier resolved to.
+#[test]
+fn a_go_package_qualifier_names_the_whole_directory_and_nothing_outside_it() {
+    let repo = materialize("goproj");
+    scan(repo.path());
+    let map = read_map(repo.path());
+
+    let calls_out_of = |caller: &str| -> Vec<String> {
+        let mut targets: Vec<String> = map["edges"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "calls" && e["source"] == caller)
+            .map(|e| e["target"].as_str().unwrap().to_string())
+            .collect();
+        targets.sort();
+        targets
+    };
+
+    for (caller, expected) in [
+        // The qualifier reaches the package's anchor file, and `fmt.Println`
+        // wrapping the same expression reaches nothing.
+        (
+            "function:main.go:main",
+            &["function:server.go:run", "function:util/util.go:Format"][..],
+        ),
+        // …and the package's *other* file, through the same qualifier.
+        ("function:main.go:second", &["function:util/extra.go:Extra"]),
+        // The alias is what the call site writes, so the alias is what binds.
+        (
+            "function:alias.go:aliased",
+            &["function:util/util.go:Format"],
+        ),
+        // A dot import binds every exported name of the package unqualified,
+        // across both of its files.
+        ("function:dot.go:viaDot", &["function:util/util.go:Format"]),
+        (
+            "function:dot.go:viaDotSecondFile",
+            &["function:util/extra.go:Extra"],
+        ),
+        // `util` is a parameter here, so it is a value however much the file's
+        // import statement makes the name look like a package.
+        ("function:value.go:onValue", &[]),
+        // `util` is `github.com/external/lib/util`, which the go.mod module
+        // line rules out of this module — and an unbound receiver in a dotted
+        // language is never resolved on sight.
+        ("function:external.go:external", &[]),
+        // A stdlib receiver inside the package itself resolves to nothing too.
+        (
+            "function:util/util.go:Format",
+            &["function:util/util.go:indent"],
+        ),
+    ] {
+        assert_eq!(
+            calls_out_of(caller),
+            expected,
+            "the calls out of {caller} are not what the source says"
+        );
+    }
+}
+
 #[test]
 fn c_files_yield_symbols_with_linkage_exports() {
     let repo = materialize("cproj");

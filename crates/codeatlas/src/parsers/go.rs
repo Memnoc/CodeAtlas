@@ -10,12 +10,33 @@
 //! present, else the first Go file in the directory). Stdlib and external
 //! modules never resolve. Same-package calls need no import at all —
 //! [`Parser::directory_shares_scope`] tells the resolver so.
+//!
+//! **The package qualifier.** Every cross-package call Go has is written
+//! `util.Format(…)`; the language has no member import, so this is not a
+//! style a codebase can avoid. An import therefore binds a namespace — the
+//! alias when the statement writes one, else the package's own name — and a
+//! `selector_expression` callee is recorded as a qualified call with that
+//! single identifier as its receiver. A qualifier is always one identifier:
+//! in `a.b.C()` the `a.b` is a field of a value, never a package.
+//!
+//! Two things stop that binding from inventing edges. Go keeps the dotted
+//! language default of [`Parser::receiver_is_never_a_value`], so a receiver
+//! no import bound resolves to nothing rather than being resolved on sight.
+//! And a receiver the enclosing function *declares* is a value whatever the
+//! file's imports say, so [`local_bindings`] collects the function's own
+//! names and a call through one of them is not recorded at all.
+//!
+//! **Dot imports.** `import . "p"` binds every exported name of `p`
+//! unqualified, and one file cannot know which names those are — so
+//! [`bind_dot_imports`] offers every callee the file does not define to the
+//! dot import and lets cross-file resolution keep the ones the package really
+//! exports, exactly as `c_cpp` does for a quoted `#include`.
 
 use std::collections::HashSet;
 
 use tree_sitter::Node as TsNode;
 
-use super::{Analysis, Call, Import, Parser, Symbol, SymbolKind};
+use super::{Analysis, Call, Import, ImportedName, Parser, Symbol, SymbolKind};
 
 pub(super) struct Go;
 
@@ -47,14 +68,22 @@ impl Parser for Go {
         let Some(tree) = parser.parse(source, None) else {
             return Analysis::default();
         };
-        let mut analysis = Analysis::default();
+        let mut collected = Collected::default();
+        // Nothing is declared at file scope that could shadow a qualifier: an
+        // identifier cannot be declared in both the file block (where imports
+        // live) and the package block, so only a function's own names shadow.
+        let file_scope = HashSet::new();
         collect(
             tree.root_node(),
             source.as_bytes(),
-            Ctx { enclosing_fn: None },
-            &mut analysis,
+            Ctx {
+                enclosing_fn: None,
+                shadowed: &file_scope,
+            },
+            &mut collected,
         );
-        analysis
+        bind_dot_imports(&mut collected);
+        collected.analysis
     }
 
     fn resolve_import(
@@ -145,46 +174,71 @@ fn package_anchor(dir: &str, files: &HashSet<String>) -> Option<String> {
         .cloned()
 }
 
-#[derive(Clone, Copy)]
-struct Ctx {
-    /// Index into `Analysis::symbols` of the innermost enclosing function.
-    enclosing_fn: Option<usize>,
+/// What one parse produces: the analysis, plus the bookkeeping
+/// [`bind_dot_imports`] needs once the whole file has been walked.
+#[derive(Default)]
+struct Collected {
+    analysis: Analysis,
+    /// Indices into `analysis.imports` of the file's dot imports. Recorded
+    /// rather than re-derived because the `.` is a property of the statement
+    /// and nothing in the resulting [`Import`] remembers it.
+    dot_imports: Vec<usize>,
 }
 
-fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
+#[derive(Clone, Copy)]
+struct Ctx<'a> {
+    /// Index into `Analysis::symbols` of the innermost enclosing function.
+    enclosing_fn: Option<usize>,
+    /// Names the enclosing function declares. A package qualifier of the same
+    /// name is shadowed by every one of them, so a call through it is a method
+    /// call on a value and not a package member.
+    shadowed: &'a HashSet<String>,
+}
+
+fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Collected) {
     match node.kind() {
         "import_spec" => {
             if let Some(path) = node
                 .child_by_field_name("path")
                 .and_then(|n| n.utf8_text(source).ok())
             {
-                out.imports.push(Import {
-                    specifier: path.trim_matches(['"', '`']).to_string(),
-                    // Package members are reached via selector
-                    // expressions (`util.Format`). Ticket 21 taught the
-                    // pipeline to resolve those, but a Go package is a
-                    // *directory* of files while `resolve_import` answers
-                    // with one file, so binding the package name here would
-                    // resolve only the members that happen to live in that
-                    // one file. Left unbound until the resolver can answer
-                    // with a package.
+                let specifier = path.trim_matches(['"', '`']).to_string();
+                // The statement's optional `name`: an alias replacing the
+                // package's own name, `.` binding every exported name
+                // unqualified, or `_` binding nothing at all (a side-effect
+                // import, which still makes the file edge).
+                let written = node
+                    .child_by_field_name("name")
+                    .and_then(|n| n.utf8_text(source).ok());
+                let namespaces = match written {
+                    Some(".") | Some("_") => Vec::new(),
+                    Some(alias) => vec![alias.to_string()],
+                    None => package_qualifier(&specifier).into_iter().collect(),
+                };
+                if written == Some(".") {
+                    out.dot_imports.push(out.analysis.imports.len());
+                }
+                out.analysis.imports.push(Import {
+                    specifier,
+                    // A plain import binds no *name*, only the qualifier
+                    // above; a dot import binds every exported name, and
+                    // `bind_dot_imports` fills those in once the file's
+                    // callees are known.
                     names: Vec::new(),
-                    namespaces: Vec::new(),
+                    namespaces,
                 });
             }
             return;
         }
         "call_expression" => {
-            if let (Some(callee), Some(caller_idx)) = (
-                node.child_by_field_name("function")
-                    .filter(|f| f.kind() == "identifier")
-                    .and_then(|f| f.utf8_text(source).ok()),
-                ctx.enclosing_fn,
-            ) {
-                out.calls.push(Call {
-                    caller: out.symbols[caller_idx].name.clone(),
-                    callee: callee.to_string(),
-                    receiver: Vec::new(),
+            if let Some(caller_idx) = ctx.enclosing_fn
+                && let Some(function) = node.child_by_field_name("function")
+                && let Some((receiver, callee)) = callee_of(function, source, ctx.shadowed)
+            {
+                out.analysis.calls.push(Call {
+                    caller: out.analysis.symbols[caller_idx].name.clone(),
+                    callee,
+                    receiver,
                 });
             }
         }
@@ -217,7 +271,7 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
             Some(receiver) => format!("{receiver}.{name}"),
             None => name.to_string(),
         };
-        out.symbols.push(Symbol {
+        out.analysis.symbols.push(Symbol {
             kind,
             name: qualified,
             start_line: node.start_position().row as u32 + 1,
@@ -228,16 +282,188 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
             exported: scope.is_none() && name.chars().next().is_some_and(|c| c.is_uppercase()),
         });
         if kind == SymbolKind::Function {
-            pushed_fn = Some(out.symbols.len() - 1);
+            pushed_fn = Some(out.analysis.symbols.len() - 1);
         }
     }
 
+    // A function is where names get declared, so it is where a qualifier can
+    // be shadowed. Anything else inherits its enclosing function's set.
+    let scope_names = matches!(
+        node.kind(),
+        "function_declaration" | "method_declaration" | "func_literal"
+    )
+    .then(|| local_bindings(node, source, ctx.shadowed));
     let child_ctx = Ctx {
         enclosing_fn: pushed_fn.or(ctx.enclosing_fn),
+        shadowed: scope_names.as_ref().unwrap_or(ctx.shadowed),
     };
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         collect(child, source, child_ctx, out);
+    }
+}
+
+/// The callee of a call expression as `(receiver, name)`, or `None` when the
+/// call is not one this pipeline can bind.
+///
+/// A bare `run()` has no receiver. `util.Format(…)` has one, and it is the
+/// only cross-package call form Go offers — but only when the operand is a
+/// single identifier the enclosing function has not declared. Both conditions
+/// matter and neither is redundant:
+///
+/// - a deeper operand (`a.b.C()`, `f().C()`, `p[i].C()`) is a field or result
+///   of a *value*; a Go package qualifier is always exactly one identifier;
+/// - an identifier the function declares is a value here whatever the file's
+///   imports say. `goproj/value.go` imports the `util` package and then takes
+///   a `util Logger` parameter, so the call site is written identically to a
+///   real package call and only the declaration tells them apart.
+///
+/// Declining leaves no call at all rather than an unqualified one: a method
+/// call on a value is not an edge, and rewriting it as `Format()` would offer
+/// it to the same-package and imported-name lookups, which is a different
+/// invented edge rather than a fix.
+fn callee_of(
+    function: TsNode,
+    source: &[u8],
+    shadowed: &HashSet<String>,
+) -> Option<(Vec<String>, String)> {
+    match function.kind() {
+        "identifier" => Some((Vec::new(), function.utf8_text(source).ok()?.to_string())),
+        "selector_expression" => {
+            let operand = function
+                .child_by_field_name("operand")
+                .filter(|o| o.kind() == "identifier")?
+                .utf8_text(source)
+                .ok()?;
+            if shadowed.contains(operand) {
+                return None;
+            }
+            let field = function
+                .child_by_field_name("field")?
+                .utf8_text(source)
+                .ok()?;
+            Some((vec![operand.to_string()], field.to_string()))
+        }
+        _ => None,
+    }
+}
+
+/// Every name the function rooted at `node` declares: its receiver,
+/// parameters and named results, and every `:=`, `var`, `const`, `range`,
+/// type-switch and channel-receive binding anywhere inside it — unioned with
+/// whatever the enclosing scope already shadowed.
+///
+/// Deliberately whole-function rather than block-scoped, and deliberately
+/// blind to declaration order. Both approximations err the same way: they
+/// call a name shadowed where a stricter reading might not, and a shadowed
+/// name only ever *declines* to follow a receiver. The cost of declining
+/// wrongly is a missing edge — a name declared after the call that uses it,
+/// or in a sibling block — and the cost of following wrongly is an edge
+/// between two files with no relationship at all, which is the bug ticket 21
+/// shipped and ticket 33 built `goproj/value.go` to catch.
+fn local_bindings(node: TsNode, source: &[u8], inherited: &HashSet<String>) -> HashSet<String> {
+    let mut names = inherited.clone();
+    gather_bindings(node, source, &mut names);
+    names
+}
+
+fn gather_bindings(node: TsNode, source: &[u8], out: &mut HashSet<String>) {
+    match node.kind() {
+        // `func f(a, b int)`, `func f(rest ...int)`, `var x, y = …`,
+        // `const k = …`: one node, a repeated `name` field.
+        "parameter_declaration" | "variadic_parameter_declaration" | "var_spec" | "const_spec" => {
+            let mut names = node.walk();
+            for name in node.children_by_field_name("name", &mut names) {
+                if let Ok(text) = name.utf8_text(source) {
+                    out.insert(text.to_string());
+                }
+            }
+        }
+        // `x := …`, `for k, v := range …`, `case v := <-ch:`: an expression
+        // list on the left.
+        "short_var_declaration" | "range_clause" | "receive_statement" => {
+            if let Some(left) = node.child_by_field_name("left") {
+                insert_identifiers(left, source, out);
+            }
+        }
+        // `switch t := x.(type)` binds `t` in every case clause.
+        "type_switch_statement" => {
+            if let Some(alias) = node.child_by_field_name("alias") {
+                insert_identifiers(alias, source, out);
+            }
+        }
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        gather_bindings(child, source, out);
+    }
+}
+
+fn insert_identifiers(node: TsNode, source: &[u8], out: &mut HashSet<String>) {
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "identifier"
+            && let Ok(text) = child.utf8_text(source)
+        {
+            out.insert(text.to_string());
+        }
+    }
+}
+
+/// The qualifier a plain `import "example.com/demo/util"` binds: `util`.
+///
+/// Go's actual rule is the target directory's `package` clause, which a
+/// one-file-at-a-time parser cannot read, so this takes the last path
+/// segment — the convention every Go project follows and the same assumption
+/// `goimports` makes. A package whose clause name differs from its directory
+/// name binds under the directory name instead, and that only ever costs an
+/// edge: a receiver matching no bound name resolves to nothing, so the wrong
+/// key cannot be reached by the right call site or the right key by a wrong
+/// one.
+fn package_qualifier(specifier: &str) -> Option<String> {
+    let last = specifier.rsplit('/').next()?;
+    (!last.is_empty()).then(|| last.to_string())
+}
+
+/// Offers every callee the file does not define to each of its dot imports.
+///
+/// `import . "p"` binds every *exported* name of `p` unqualified, and the
+/// parser sees one file at a time, so which names those are is not knowable
+/// here — the same problem `c_cpp` has with a header, solved the same way.
+/// Cross-file resolution keeps only the candidates the package really
+/// exports, so a name the package does not publish resolves to nothing rather
+/// than to a guess, and a name the file defines itself is never offered at
+/// all (in valid Go it could not collide with a dot import anyway).
+fn bind_dot_imports(out: &mut Collected) {
+    if out.dot_imports.is_empty() {
+        return;
+    }
+    let defined: HashSet<&str> = out
+        .analysis
+        .symbols
+        .iter()
+        .map(|s| s.name.as_str())
+        .collect();
+    let mut candidates: Vec<String> = out
+        .analysis
+        .calls
+        .iter()
+        // A qualified call reaches its callee through a package name, so it is
+        // never the unqualified binding a dot import provides.
+        .filter(|call| call.receiver.is_empty() && !defined.contains(call.callee.as_str()))
+        .map(|call| call.callee.clone())
+        .collect();
+    candidates.sort_unstable();
+    candidates.dedup();
+    for index in &out.dot_imports {
+        out.analysis.imports[*index].names = candidates
+            .iter()
+            .map(|name| ImportedName {
+                local: name.clone(),
+                imported: name.clone(),
+            })
+            .collect();
     }
 }
 
