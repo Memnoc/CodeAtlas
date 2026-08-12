@@ -32,22 +32,9 @@ import {
  * read. */
 const FOCUSABLE = "button:not([disabled]), [href], input, select, textarea";
 
-/** How far the card sits from the element it is describing. */
+/** How far the card sits from the element it is describing, and from the
+ * edges of the window. */
 const CARD_GAP = 14;
-
-/** The custom property `.walkthrough-card` reads to place itself horizontally.
- * Exported so the drift test can check the stylesheet still consumes the name
- * this emits: a custom property nothing reads is silent, and the failure it
- * would restore — the card off the right edge of the screen — is one no test
- * in this project can see, because jsdom never loads `styles.css` and lays
- * nothing out. The name is the only part of that coupling anything can check,
- * so it gets checked. */
-export const CARD_LEFT = "--walkthrough-card-left";
-
-/** Roughly how tall the card gets. Only used to decide whether it fits below
- * the lit element or has to go above it, so an estimate is the right kind of
- * number: being ten pixels out flips nothing. */
-const CARD_HEIGHT_ESTIMATE = 260;
 
 type Geometry = {
   top: number;
@@ -55,6 +42,13 @@ type Geometry = {
   width: number;
   height: number;
 };
+
+/** Keeps `value` inside `[min, max]`, preferring `min` where the range has
+ * collapsed — on a window too small to hold the card at all, against the
+ * near edge is a better answer than off the far one. */
+function clampTo(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), Math.max(min, max));
+}
 
 function geometryOf(element: HTMLElement): Geometry {
   const rect = element.getBoundingClientRect();
@@ -145,6 +139,9 @@ export function Walkthrough({
 }) {
   const [index, setIndex] = useState(0);
   const [geometry, setGeometry] = useState<Geometry | null>(null);
+  const [cardSize, setCardSize] = useState<{ width: number; height: number } | null>(
+    null,
+  );
   const card = useRef<HTMLDivElement | null>(null);
   const step = steps[Math.min(index, steps.length - 1)];
 
@@ -193,6 +190,44 @@ export function Walkthrough({
     };
   }, [step]);
 
+  // How big the card actually came out. Measured rather than estimated,
+  // because the two things it decides — whether the card fits below the lit
+  // element, and how far it can be pushed towards an edge before it leaves
+  // the window — are both wrong by however wrong the estimate is, and one
+  // step's prose is twice the length of another's.
+  //
+  // This cannot oscillate. The card's width is a `min()` against the viewport
+  // and its height follows from that width and the step's text; neither reads
+  // the position this computes, so a measurement never changes what is being
+  // measured. It is a *layout* effect so the corrected position is in place
+  // before the browser paints — a card that flashed at the wrong offset on
+  // every step would be worse than the bug it fixes.
+  useLayoutEffect(() => {
+    const element = card.current;
+    if (element === null) {
+      return;
+    }
+    const measure = () => {
+      const rect = element.getBoundingClientRect();
+      setCardSize((previous) =>
+        previous !== null &&
+        previous.width === rect.width &&
+        previous.height === rect.height
+          ? previous
+          : { width: rect.width, height: rect.height },
+      );
+    };
+    measure();
+    const observer =
+      typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
+    observer?.observe(element);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [step]);
+
   // Focus lands on the step's text, not on the button that produced it, so a
   // screen reader reads the explanation. On every step, because a walkthrough
   // whose second step is announced by silence is a walkthrough for one reader.
@@ -206,29 +241,35 @@ export function Walkthrough({
 
   const last = index === steps.length - 1;
 
-  // Below the lit element where there is room, above it where there is not.
-  // The card is `position: fixed`, so both are stated against the viewport.
+  // Below the lit element where there is room, above it where there is not,
+  // and inside the window either way. The card is `position: fixed`, so all of
+  // this is stated against the viewport.
   //
-  // The horizontal axis is deliberately *not* finished here. This says where
-  // the card would like to sit; `.walkthrough-card` in `styles.css` bounds it
-  // against the right edge, because the card's width is a `min()` the
-  // stylesheet resolves and this code cannot read. Setting an inline `left`
-  // would win over that rule and put the bug back, so the desired position
-  // travels as a custom property instead.
-  const viewport = typeof window === "undefined" ? 800 : window.innerHeight;
-  const below =
-    geometry === null ||
-    geometry.top + geometry.height + CARD_GAP + CARD_HEIGHT_ESTIMATE < viewport;
-  const placement: CSSProperties & Record<`--${string}`, string> = {
-    [CARD_LEFT]: `${geometry === null ? CARD_GAP : Math.max(CARD_GAP, geometry.left)}px`,
-    ...(geometry === null
-      ? { top: `${CARD_GAP}px` }
-      : below
-        ? { top: `${geometry.top + geometry.height + CARD_GAP}px` }
-        : {
-            bottom: `${Math.max(CARD_GAP, viewport - geometry.top + CARD_GAP)}px`,
-          }),
-  };
+  // Both axes are clamped, and both clamps are the same shape, because the bug
+  // was the same on each: a preference for where the card *should* go with no
+  // statement of where it may not. `.walkthrough-card` caps the card at the
+  // window less two gaps in both dimensions, which is what makes these ranges
+  // non-empty — the card can always be placed somewhere legal.
+  const viewportWidth = typeof window === "undefined" ? 1280 : window.innerWidth;
+  const viewportHeight = typeof window === "undefined" ? 800 : window.innerHeight;
+  const cardWidth = cardSize?.width ?? 0;
+  const cardHeight = cardSize?.height ?? 0;
+
+  let placement: CSSProperties;
+  if (geometry === null) {
+    placement = { top: `${CARD_GAP}px`, left: `${CARD_GAP}px` };
+  } else {
+    const below =
+      geometry.top + geometry.height + CARD_GAP + cardHeight <=
+      viewportHeight - CARD_GAP;
+    const wanted = below
+      ? geometry.top + geometry.height + CARD_GAP
+      : geometry.top - CARD_GAP - cardHeight;
+    placement = {
+      left: `${clampTo(geometry.left, CARD_GAP, viewportWidth - cardWidth - CARD_GAP)}px`,
+      top: `${clampTo(wanted, CARD_GAP, viewportHeight - cardHeight - CARD_GAP)}px`,
+    };
+  }
 
   return (
     <div

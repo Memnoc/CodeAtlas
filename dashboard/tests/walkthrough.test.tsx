@@ -16,14 +16,11 @@
 //   - *reduced motion* — asserted on the argument passed to `scrollIntoView`,
 //     which is observable; the transition itself is CSS, which jsdom does not
 //     run and this file does not pretend to check.
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeGraph } from "../src/index.js";
 import { MapExplorer } from "../src/app/MapExplorer.js";
-import { CARD_LEFT } from "../src/app/Walkthrough.js";
 import {
   WALKTHROUGH_MARKER,
   WALKTHROUGH_SEEN_KEY,
@@ -706,19 +703,59 @@ describe("the spotlight against a page that moves", () => {
     expect(geometryOf()).toBe("240px 500px 320px 44px");
   });
 
-  it("leaves the horizontal bound to the stylesheet that knows the width", async () => {
-    // The bug this is about: the card lighting a control at the right end of
-    // the toolbar hung off the edge of the screen, prose truncated and the
-    // Back and Next buttons cut away. Seen by eye at step 6 of 12, because
-    // nothing here could see it — jsdom lays nothing out, so the card's real
-    // width is zero and any arithmetic this file did against it would be a
-    // sum about a fiction.
+  /** Lays the page out, because jsdom does not. Both rectangles are *inputs*
+   * to the placement — a browser supplies them, this supplies them here —
+   * which is the same move the reflow test above makes, and for the same
+   * reason: two zeroes compared to two zeroes prove nothing.
+   *
+   * One mock, not two. An instance spy on a single element would not stay on
+   * that element: `vi.spyOn` finds the method on `Element.prototype` and
+   * patches it there, so a second spy silently answers for the card as well —
+   * which is exactly how the first draft of this test measured the card as
+   * 100px wide and asserted a number that came out of the anchor. */
+  function layOut(sizes: { card: () => DOMRect; anchor: () => DOMRect }) {
+    const real = Element.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: Element) {
+        if (this.classList.contains("walkthrough-card")) {
+          return sizes.card();
+        }
+        return this.hasAttribute(WALKTHROUGH_MARKER)
+          ? sizes.anchor()
+          : real.call(this);
+      },
+    );
+  }
+
+  function cardPlacement(): { left: number; top: number } {
+    const element = walkthrough().querySelector<HTMLElement>(".walkthrough-card");
+    if (element === null) {
+      throw new Error("no card rendered");
+    }
+    return {
+      left: Number.parseFloat(element.style.left),
+      top: Number.parseFloat(element.style.top),
+    };
+  }
+
+  it("keeps the card inside the window on both axes", async () => {
+    // Both halves of this were shipped bugs, found by eye and not by any test
+    // here, because jsdom lays nothing out: the card hung off the right edge
+    // beside a control at the end of the toolbar, and off the top above a
+    // control with no room beneath it. Each axis had a preference for where
+    // the card should go and no statement of where it may not.
     //
-    // So this asserts the one thing that *is* observable and is what actually
-    // broke: the component states a desired left and stops, leaving the clamp
-    // to the rule that resolved the width. An inline `left` would win over
-    // that rule, silently, and put the card back off the screen.
+    // The vertical one is the more instructive: the card used to be placed
+    // above using a hardcoded 260px height estimate, and the step whose prose
+    // ran long was taller than that. The height here is deliberately larger
+    // than any estimate would have been, so a component that guesses fails
+    // this whatever it guesses.
     const user = userEvent.setup();
+    vi.stubGlobal("innerWidth", 1280);
+    vi.stubGlobal("innerHeight", 600);
+    // Far right, and low enough that 420px of card does not fit beneath it.
+    let anchor = rect(400, 1180, 100, 30);
+    layOut({ card: () => rect(0, 0, 360, 420), anchor: () => anchor });
     renderEverything();
     const identity = document.querySelector<HTMLElement>(
       `[${WALKTHROUGH_MARKER}="identity"]`,
@@ -726,37 +763,49 @@ describe("the spotlight against a page that moves", () => {
     if (identity === null) {
       throw new Error("no element to measure");
     }
-    vi.spyOn(identity, "getBoundingClientRect").mockImplementation(() =>
-      rect(10, 1180, 100, 30),
-    );
 
     await startWalkthrough(user);
-    const card = walkthrough().querySelector<HTMLElement>(".walkthrough-card");
-    if (card === null) {
-      throw new Error("no card rendered");
-    }
 
-    expect(card.style.getPropertyValue(CARD_LEFT)).toBe("1180px");
-    expect(
-      card.style.left,
-      "an inline left overrides the stylesheet's clamp",
-    ).toBe("");
+    // Wanted 1180, which would put the card's right edge at 1540 on a 1280
+    // window. The right end of the legal range is 1280 - 360 - 14.
+    expect(cardPlacement().left).toBe(906);
+    // No room below (400 + 30 + 14 + 420 > 600 - 14), so above — which is
+    // 400 - 14 - 420 = -34, off the top. Clamped to the margin.
+    expect(cardPlacement().top).toBe(14);
+
+    // And it still prefers the anchor when the anchor is legal, so what was
+    // added is a bound and not a constant.
+    anchor = rect(40, 120, 100, 30);
+    expect(reflow(identity)).toBe(1);
+    expect(cardPlacement()).toEqual({ left: 120, top: 84 });
   });
 
-  it("emits the custom property the stylesheet actually reads", async () => {
-    // The coupling the test above depends on, and the only part of it anything
-    // can check: `styles.css` is never loaded here, so a renamed property on
-    // either side would leave the component setting a variable nobody reads
-    // and every other test in this file still green.
-    // Resolved against the vitest root rather than `import.meta.url`, which
-    // under jsdom is an http URL. A wrong path throws, which fails loudly —
-    // the one thing this must not do is quietly find nothing and pass.
-    const css = await readFile(
-      resolve(process.cwd(), "src/app/styles.css"),
-      "utf8",
-    );
-    const rule = css.slice(css.indexOf(".walkthrough-card {"));
-    expect(rule.slice(0, rule.indexOf("}"))).toContain(`var(${CARD_LEFT}`);
+  it("re-measures the card when the step's prose changes its height", async () => {
+    // One estimate for twelve steps is what put the card off the top of the
+    // screen. Stepping forward must re-measure, not reuse. The anchor is held
+    // still so that the card's own height is the only thing that differs
+    // between the two reads.
+    const user = userEvent.setup();
+    vi.stubGlobal("innerWidth", 1280);
+    vi.stubGlobal("innerHeight", 600);
+    let height = 100;
+    layOut({
+      card: () => rect(0, 0, 360, height),
+      anchor: () => rect(300, 100, 100, 30),
+    });
+    renderEverything();
+
+    await startWalkthrough(user);
+    // 100px of card fits under an anchor ending at 330, so: just below it.
+    expect(cardPlacement().top).toBe(344);
+
+    // 300px does not, on a 600px window, so the card goes above — to
+    // 300 - 14 - 300 = -14, clamped to the margin. A component holding on to
+    // the first step's height still answers 344 here.
+    height = 300;
+    await user.click(within(walkthrough()).getByRole("button", { name: "Next" }));
+
+    expect(cardPlacement().top).toBe(14);
   });
 
   it("stops watching an element it has moved off", async () => {

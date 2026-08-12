@@ -679,7 +679,7 @@ body {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--muted);
+  color: inherit;
   margin-right: 6px;
 }
 
@@ -1874,27 +1874,24 @@ button.crumb:hover {
   z-index: 101;
 }
 
-/* `left` is clamped here rather than in `Walkthrough.tsx` because only this
- * rule knows how wide the card ended up: the width is a `min()` against the
- * viewport, so the number the component would have to subtract is one it
- * cannot read. Stating both against `--walkthrough-card-width` is what keeps
- * them from drifting apart. The component supplies the *desired* left in
- * `--walkthrough-card-left` and this bounds it — a card lighting a control at
- * the right end of the toolbar would otherwise hang off the edge, taking Back
- * and Next with it. `clamp()` handles the narrow-viewport case on its own:
- * once the width is `100vw - 2 * gap` the upper bound equals the lower one and
- * the card pins to the left margin. */
+/* The card is never larger than the window less a gap at each edge. That is
+ * not cosmetic: `Walkthrough.tsx` clamps the card's `top` and `left` into
+ * `[gap, viewport - size - gap]`, and these two caps are what stop that range
+ * from being empty. A card taller than the window scrolls its own text rather
+ * than hanging off the top — which is what it used to do, because the
+ * component guessed the height instead of measuring it.
+ *
+ * `--walkthrough-gap` is the same 14 as `CARD_GAP` there. It is duplicated
+ * because CSS cannot do the element-relative arithmetic and the component
+ * cannot read a resolved `min()`; being out of step would cost a few pixels
+ * of margin, not correctness, which is the only reason it is tolerable. */
 .walkthrough-card {
   position: fixed;
   z-index: 102;
   --walkthrough-gap: 14px;
-  --walkthrough-card-width: min(360px, calc(100vw - var(--walkthrough-gap) * 2));
-  width: var(--walkthrough-card-width);
-  left: clamp(
-    var(--walkthrough-gap),
-    var(--walkthrough-card-left, var(--walkthrough-gap)),
-    calc(100vw - var(--walkthrough-card-width) - var(--walkthrough-gap))
-  );
+  width: min(360px, calc(100vw - var(--walkthrough-gap) * 2));
+  max-height: calc(100vh - var(--walkthrough-gap) * 2);
+  overflow-y: auto;
   padding: 14px 16px;
   border: 1px solid var(--accent);
   border-radius: 10px;
