@@ -157,6 +157,27 @@ guessing at names, and be shown where in the code the answer lives.
     words and be shown which nodes answer it, so that I can find things
     before I know what they are called
 
+*Stories 22–23 added 2026-08-12, after every ticket was already `done`. Both
+describe work that had already shipped — the pipeline running backwards, which
+is worth admitting in the spec rather than hiding in a ticket. They are here so
+that `/harden` walks them; a shipped feature with no story is not verified, it
+is merely unmentioned. See tickets 39 and 44.*
+
+22. As a reader looking at a large map, I want the panel and the region chips
+    to fold away — separately, or both at once — so that the canvas gets the
+    space, and I want what I folded to still be folded when I come back.
+    **Verifiable by eye only**: jsdom lays nothing out, so no test in this
+    repository can show that anything got bigger; the committed tests assert
+    which controls survive a fold, that nothing folds away the only route to
+    something, and that the choice is remembered
+23. As a reader running `codeatlas serve` without `--ask`, I want to be told
+    that questions exist and how to turn them on, so that a feature the
+    dashboard correctly hides is not a feature I can never discover. The
+    dashboard must stay silent about it — advertising a question this server
+    cannot answer is worse than saying nothing — so the terminal is where it
+    belongs, and a build compiled with no backend at all must not offer a flag
+    it cannot honour
+
 ## Implementation Decisions
 
 The load-bearing decisions are recorded as ADRs; this spec must not contradict

@@ -1,9 +1,9 @@
 # Ticket 41 — the fold has no story to walk
 
-**Status:** ready — but see "This is a decision, not code"
+**Status:** done — 2026-08-12, resolved by option 1
 **Spec:** docs/specs/2026-08-09-codeatlas-v1.md
 **Story:** *this ticket is about the absence of one*
-**Blocks:** `/harden`
+**Blocks:** ~~`/harden`~~ — cleared 2026-08-12
 **Blocked by:** none
 **Filed:** 2026-08-12, from ticket 39's write-up
 
@@ -45,13 +45,25 @@ against it, so nobody later mistakes silence for a pass.
 
 Either is defensible. What is not defensible is neither.
 
+## Resolved: option 1, 2026-08-12
+
+The user chose to add the story. **Story 22** now exists in
+`docs/specs/2026-08-09-codeatlas-v1.md`, so `/harden` will walk the fold like
+the other twenty-one.
+
+A second gap surfaced while closing this and is filed as **ticket 44**: the
+`serve` question-hint (`25e12a1`) had shipped with no ticket and no story
+either, and nobody had noticed. **Story 23** covers it. Two features had
+shipped unmentioned; the reason this ticket was worth filing open rather than
+noting inside ticket 39 is that it was the thing that made anyone go looking
+for the second one.
+
 ## Acceptance criteria
 
-- [ ] One of the two options above is chosen by the user, by name.
-- [ ] If option 1: the story exists in the spec's User Stories section and
+- [x] One of the two options above is chosen by the user, by name.
+- [x] If option 1: the story exists in the spec's User Stories section and
       `/harden` walks it.
-- [ ] If option 2: the spec's `## Verification` section names the fold as
-      accepted-unverified, with who accepted it.
+- [ ] ~~If option 2~~ — not taken.
 
 ## Notes
 
