@@ -96,6 +96,11 @@ readers will run `scan --enrich` with no arguments, once, and judge the
 product by what comes back. A flag nobody sets is not a decision — the default
 is the decision.
 
-**Ticket 40 is a cheaper answer to part of this.** A good deal of the
-frustration behind this ticket was not knowing how long the run would take or
-whether it was working. Progress output costs nothing and no answer quality.
+**Ticket 40 is a cheaper answer to part of this, and it got cheaper.** A good
+deal of the frustration behind this ticket was not knowing what the run would
+cost before agreeing to it, nor whether it was working once it had started.
+Ticket 40 now covers both — an estimate before the first call and progress
+during — and neither costs a single point of answer quality. Weigh this ticket
+*after* that one has landed: a reader who is told "1593 slots, 64 calls,
+~140k–185k input tokens" up front may simply decide the full run is worth it,
+which would close this as won't-do without changing any behaviour at all.
