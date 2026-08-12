@@ -1,6 +1,6 @@
 # Ticket 36 — the serve surface, and the document that describes it
 
-**Status:** ready
+**Status:** deferred — after V1, decided 2026-08-12
 **Spec:** docs/specs/2026-08-09-codeatlas-v1.md
 **Story:** 9 — approving CodeAtlas is a code review rather than a trust
 exercise (the document half: an audit entry point that cannot silently fall
@@ -8,6 +8,14 @@ behind the code)
 **Blocks:** none
 **Blocked by:** none
 **Filed:** 2026-08-11, from a pattern across tickets 32 and 27
+
+**Why deferred rather than built.** This guards against a *class* of drift; it
+does not repair a live defect. Every claim in `README.md` and
+`docs/SECURITY.md` was verified true against the code as of `4a1e81a`, after
+each of the three amendments that had made one false. So nothing ships wrong
+by waiting — what waits is the assurance that the fourth route added after V1
+cannot slip past the document the way the third one did. `/harden` does not
+walk it, and it is not counted against the V1 ticket set.
 
 ## Problem
 
