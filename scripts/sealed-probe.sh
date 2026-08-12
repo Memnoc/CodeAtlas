@@ -223,6 +223,35 @@ echo "$out" | grep -q -- '--ask' \
   || fail "sealed 'serve --ask' does not name the flag that failed: $out"
 echo "ok: sealed serve --ask refuses at startup and says why"
 
+# Plain `serve` on a build that *has* a backend prints a line pointing at
+# `--ask`, because the dashboard hides the question feature entirely when the
+# server cannot answer and nothing else would ever tell the reader it exists.
+# A sealed binary must not print it: there is no backend for `--ask` to
+# resolve, so the pointer would send the reader to the startup failure checked
+# immediately above. This is the only place that can be verified — every
+# `cargo test` build carries `test-provider`, so `recognised_specs()` is never
+# empty there.
+#
+# `serve` blocks, so it is run under a timeout and killed; the banner is
+# written before it starts accepting, so the output is complete either way.
+set +e
+out="$(timeout 5 "$sealed" serve --port 0 "$tmp/repo" 2>&1)"
+set -e
+echo "$out" | grep -q 'CodeAtlas dashboard at' \
+  || fail "sealed plain serve never started, so this proves nothing: $out"
+echo "$out" | grep -q -- '--ask' \
+  && fail "sealed plain serve points at --ask, which cannot work here: $out"
+echo "ok: sealed plain serve does not offer a flag this build cannot honour"
+
+if [ -n "$control" ]; then
+  set +e
+  out="$(timeout 5 "$control" serve --port 0 "$tmp/repo" 2>&1)"
+  set -e
+  echo "$out" | grep -q -- '--ask' \
+    || fail "control plain serve omits the --ask pointer — the probe above is vacuous: $out"
+  echo "ok: control binary does point at --ask (the sealed check is live)"
+fi
+
 if [ -n "$control" ]; then
   if ! ask_paragraph "$control" | grep -qi 'claude'; then
     fail "control --ask lacks 'claude' — the --ask help probe is vacuous"

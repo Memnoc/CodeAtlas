@@ -1023,6 +1023,99 @@ fn serve_ask_refuses_at_startup_when_no_backend_resolves() {
         .stderr(predicates::str::contains("codeatlas scan").not());
 }
 
+/// Spawns `serve`, reads the two lines it writes to stderr at startup, and
+/// stops it. `serve_with` sends stderr to `/dev/null` to keep test output
+/// readable, which is right for every test but this one.
+///
+/// The lines are read *before* the kill. Killing on the strength of the stdout
+/// URL and then reading what survived is a race, and not a theoretical one:
+/// the first version of this did exactly that and caught
+/// `answering questions at POST http://127.0.0.1` with the port sliced off
+/// mid-write.
+///
+/// Reading is bounded by quiet rather than by a line count, which matters more
+/// than it looks. A count is the obvious way to write this and it *hangs* when
+/// a line stops being printed — which is precisely the regression these tests
+/// exist to catch. The second version of this helper deadlocked the suite
+/// instead of failing it. `serve` writes its whole banner in consecutive
+/// statements and then blocks accepting connections, so a second of silence
+/// means there is nothing more coming.
+fn startup_banner(repo: &Path, extra: &[&str]) -> String {
+    let mut child = Command::cargo_bin("codeatlas")
+        .unwrap()
+        .args(["serve", "--port", "0"])
+        .args(extra)
+        .current_dir(repo)
+        .env_remove(PROVIDER_ENV)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let (lines, received) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {
+                    if lines.send(line).is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    let mut banner = String::new();
+    while let Ok(line) = received.recv_timeout(Duration::from_secs(1)) {
+        banner.push_str(&line);
+    }
+    child.kill().unwrap();
+    let _ = child.wait();
+    banner
+}
+
+/// Plain `serve` hides the question feature completely — no Ask button, no
+/// hint in the search field, no walkthrough step — because the dashboard is
+/// told by `GET /api/capabilities` that this server cannot answer. That is the
+/// right call in the browser and it leaves nobody anywhere to learn the
+/// feature exists, so the terminal says it, where `--ask` can be acted on.
+///
+/// The sealed case — a build with no backend at all, which must *not* be
+/// pointed at `--ask` — is in `scripts/sealed-probe.sh` for the same reason
+/// the test above is: every `cargo test` build carries `test-provider`, so
+/// `recognised_specs()` is never empty here and that branch is unreachable.
+#[test]
+fn a_server_that_cannot_answer_says_what_would_make_one_that_can() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    assert!(
+        !codeatlas::enrich::recognised_specs().is_empty(),
+        "this assertion is about the branch taken when a backend exists",
+    );
+
+    let plain = startup_banner(repo.path(), &[]);
+    assert!(
+        plain.contains("--ask"),
+        "plain serve leaves no way to discover questions: {plain}"
+    );
+
+    // And the pointer is gone once it would be noise: a server that already
+    // answers must not tell the reader to restart it.
+    let canned_path = canned(repo.path().parent().unwrap(), "ok", &[]);
+    let spec = format!("fake:{}", canned_path.display());
+    let asking = startup_banner(repo.path(), &["--ask", "--provider", &spec]);
+    assert!(
+        asking.contains(codeatlas::serve::ASK_ROUTE),
+        "a serving --ask does not say where questions go: {asking}"
+    );
+    assert!(
+        !asking.contains("restart with --ask"),
+        "a server that answers still asks to be restarted: {asking}"
+    );
+}
+
 #[test]
 fn serve_refuses_to_start_without_a_map() {
     let repo = tempfile::tempdir().unwrap();

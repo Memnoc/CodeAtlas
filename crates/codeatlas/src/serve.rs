@@ -104,6 +104,24 @@ pub fn serve(root: &Path, options: ServeOptions<'_>) -> Result<()> {
     eprintln!("serving {} — press Ctrl-C to stop", root.display());
     if routes.ask.is_some() {
         eprintln!("answering questions at POST http://{addr}{ASK_ROUTE}");
+    } else if !enrich::recognised_specs().is_empty() {
+        // Without `--ask` the dashboard hides the whole feature — no Ask
+        // button, no hint in the search field, no walkthrough step — because
+        // `GET /api/capabilities` tells it this server cannot answer, and
+        // advertising a question nobody here can answer is worse than saying
+        // nothing. That is right in the browser and it leaves a gap: a reader
+        // who has only ever run plain `serve` has no way to learn the feature
+        // exists at all. This is the place to close it, because this is where
+        // `--ask` is something they can act on.
+        //
+        // Guarded on the compiled backend list and not on a feature name. A
+        // sealed build has nothing for `--ask` to resolve, so the pointer
+        // would send the reader straight into the startup refusal above — see
+        // `recognised_specs`, whose own comment is about this exact mistake.
+        // No `cargo test` build can reach that branch, because every one of
+        // them carries `test-provider`; `scripts/sealed-probe.sh` checks it
+        // against a real sealed binary.
+        eprintln!("questions are off; restart with --ask to ask this map questions in prose");
     }
 
     // Ctrl-C ends the process (default SIGINT handling); nothing to clean up
