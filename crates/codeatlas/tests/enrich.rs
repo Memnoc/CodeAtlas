@@ -1074,3 +1074,150 @@ fn the_cli_backend_runs_claude_and_refuses_to_run_anything_else() {
     assert_schema_valid(&map);
     node(&map, "file:src/main.ts");
 }
+
+/// Ticket 40. Every assertion here is on what the **binary prints**, which is
+/// the part the in-process tests in `enrich.rs` cannot reach: they observe the
+/// `Batch` handed to the checkpoint, and a run that computed perfect progress
+/// and printed none of it satisfies them completely.
+#[test]
+fn an_enrich_run_says_what_it_will_cost_before_it_spends_anything() {
+    let repo = materialize("simple");
+    let spec = canned_provider(repo.path(), &[]);
+
+    let assert = scan(repo.path(), true, Some(&spec)).success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+
+    let estimate = stderr
+        .lines()
+        .find(|line| line.starts_with("enriching: "))
+        .unwrap_or_else(|| panic!("no estimate line at all:\n{stderr}"));
+
+    // The two exactly-known numbers, in every configuration.
+    assert!(
+        estimate.contains(" slots in ") && estimate.contains(" calls"),
+        "the estimate states neither slots nor calls: {estimate}"
+    );
+    // No price, in every configuration.
+    for money in ['$', '£', '€'] {
+        assert!(
+            !estimate.contains(money),
+            "a price compiled into the binary goes stale: {estimate}"
+        );
+    }
+    // The token figures exist only where a prompt builder does. A sealed build
+    // has no `prompt` module to measure — it is compiled without any backend —
+    // so it states the two numbers it knows and stops rather than inventing
+    // the rest. This test build reaches enrichment anyway, through the
+    // `test-provider` backends, which is the one configuration where "can
+    // enrich, cannot estimate the prompt" is reachable at all.
+    #[cfg(any(feature = "network", feature = "agent-cli"))]
+    assert_eq!(
+        estimate.matches('–').count(),
+        2,
+        "both token figures must be ranges: {estimate}"
+    );
+    #[cfg(not(any(feature = "network", feature = "agent-cli")))]
+    assert!(
+        !estimate.contains('–'),
+        "a build with no prompt builder cannot know a token count: {estimate}"
+    );
+
+    // It comes *before* the work, which is the whole point — a cost quoted
+    // after the spending is a receipt, not an estimate.
+    let estimate_at = stderr.find("enriching: ").unwrap();
+    let first_batch = stderr
+        .find("  batch 1/")
+        .unwrap_or_else(|| panic!("no progress lines:\n{stderr}"));
+    assert!(
+        estimate_at < first_batch,
+        "the estimate arrived after the first batch:\n{stderr}"
+    );
+}
+
+#[test]
+fn progress_advances_and_accounts_for_every_batch() {
+    let repo = materialize("simple");
+    let spec = canned_provider(repo.path(), &[]);
+
+    let assert = scan(repo.path(), true, Some(&spec)).success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+
+    let batches: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.trim_start().starts_with("batch "))
+        .collect();
+    assert!(batches.len() > 1, "one line is not progress:\n{stderr}");
+
+    // The counter really counts: 1, 2, 3 … and the last one reaches the total
+    // the first one promised. A run printing "batch 1/N" N times passes any
+    // assertion that only looks for the word.
+    let total: usize = batches[0]
+        .split('/')
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|n| n.parse().ok())
+        .unwrap_or_else(|| panic!("unparseable progress line: {}", batches[0]));
+    assert_eq!(batches.len(), total, "batches printed != batches promised");
+    for (i, line) in batches.iter().enumerate() {
+        assert!(
+            line.contains(&format!("batch {}/{}", i + 1, total)),
+            "progress went {line:?} at position {}",
+            i + 1
+        );
+    }
+
+    // Per batch, not per slot: `simple` has far more slots than batches.
+    let slots: usize = stderr
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("enriching: ")?
+                .split(' ')
+                .next()?
+                .parse()
+                .ok()
+        })
+        .expect("no slot count");
+    assert!(
+        slots > batches.len(),
+        "a line per slot is not progress: {slots} slots, {} lines",
+        batches.len()
+    );
+}
+
+#[test]
+fn dry_run_estimates_and_spends_nothing() {
+    let repo = materialize("simple");
+    // A provider spec pointing at a file that does not exist: resolving it is
+    // fine, *calling* it is not. So this fails loudly if `--dry-run` gets as
+    // far as a request, rather than passing because the canned answers
+    // happened to be empty.
+    let spec = format!("fake:{}", repo.path().join("nothing-here.json").display());
+
+    let assert = assert_cmd::Command::cargo_bin("codeatlas")
+        .unwrap()
+        .args(["scan", "--enrich", "--dry-run", "--provider", &spec])
+        .current_dir(repo.path())
+        .env_remove(PROVIDER_ENV)
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+
+    assert!(
+        stderr.contains("would enrich: ") && stderr.contains(" slots in "),
+        "no estimate from --dry-run:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("batch 1/"),
+        "--dry-run made a call:\n{stderr}"
+    );
+    // And it left the map structural: a dry run that enriched would be the
+    // worst possible outcome of a flag whose promise is that it does not.
+    let map = read_map(repo.path());
+    let enriched = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["provenance"] == "llm")
+        .count();
+    assert_eq!(enriched, 0, "--dry-run enriched {enriched} nodes");
+}

@@ -1,6 +1,6 @@
 # Ticket 42 — a purchased answer is never thrown away
 
-**Status:** ready
+**Status:** done — 2026-08-12, `394112f` and `641018f`
 **Spec:** docs/specs/2026-08-09-codeatlas-v1.md
 **Story:** 12 — enrich a map through a real backend
 **Blocks:** none
@@ -65,28 +65,28 @@ interruption should cost only what is left.
 
 ## Acceptance criteria
 
-- [ ] A run interrupted partway through, then re-run, makes provider calls
+- [x] A run interrupted partway through, then re-run, makes provider calls
       only for the slots it did not already have. **Count the calls** — a test
       that only checks the final map is satisfied by re-buying everything.
-- [ ] A batch that fails does not discard the batches that succeeded before
+- [x] A batch that fails does not discard the batches that succeeded before
       it. This needs a backend that fails on the *nth* call; `fail` refuses
       everything and `fake:` refuses nothing, so seam 2 likely needs one more
       test provider. Adding it is part of this ticket.
-- [ ] Batches actually run concurrently: assert **calls in flight**, not
+- [x] Batches actually run concurrently: assert **calls in flight**, not
       elapsed time and not the final result. A wall-clock assertion is flaky
       and a result assertion passes over a sequential implementation — this is
       the criterion most likely to be ticked against something that cannot
       fail.
-- [ ] Concurrency does not change the outcome. The same fixture through the
+- [x] Concurrency does not change the outcome. The same fixture through the
       same fake backend yields byte-identical output whatever the interleaving;
       answers are addressed by slot key, so this should hold by construction —
       assert it anyway.
-- [ ] The map on disk is still written once, whole. A half-enriched
+- [x] The map on disk is still written once, whole. A half-enriched
       `knowledge-graph.json` must not be observable, and the existing
       guarantee that a failed enrichment leaves the structural map intact must
       still hold — the egress suite's `the structural map is intact`
       assertion passes unchanged.
-- [ ] The concurrency limit is bounded and conservative by default. A reader
+- [x] The concurrency limit is bounded and conservative by default. A reader
       on a subscription has a rate limit, and the failure mode of guessing too
       high is their allowance, not a slow test.
 

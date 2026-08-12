@@ -66,6 +66,12 @@ enum Command {
         /// binary was compiled — see --provider.
         #[arg(long, id = "backend")]
         enrich: bool,
+        /// With --enrich, say what the run would cost and stop without making
+        /// a single provider call. The estimate is the one the real run
+        /// prints, worked out by the same code, so it cannot quote a number
+        /// the run would not spend.
+        #[arg(long, requires = "backend")]
+        dry_run: bool,
         #[command(flatten)]
         backend: BackendArgs,
     },
@@ -114,6 +120,7 @@ pub fn run() -> ExitCode {
         Command::Scan {
             path,
             enrich,
+            dry_run,
             backend,
         } => {
             let root = path.unwrap_or_else(|| PathBuf::from("."));
@@ -146,6 +153,14 @@ pub fn run() -> ExitCode {
                 .count();
             eprintln!("mapped {files} files");
             if !enrich {
+                return ExitCode::SUCCESS;
+            }
+            if dry_run {
+                // The same sentence the real run prints, from the same
+                // `Plan::of`, and then nothing: no provider is resolved, so
+                // this also answers the question on a machine with no
+                // credentials at all.
+                eprintln!("would enrich: {}", enrich::Plan::of(&graph).describe());
                 return ExitCode::SUCCESS;
             }
             match enrich::run(&root, &mut graph, backend.choice()) {

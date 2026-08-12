@@ -1,6 +1,6 @@
 # Ticket 40 — what it will cost, and how it is going
 
-**Status:** ready
+**Status:** in-progress — 2026-08-12
 **Spec:** docs/specs/2026-08-09-codeatlas-v1.md
 **Story:** 12 — enrich a map through a real backend; this is the operator's
 side of it, not the enrichment itself
@@ -45,10 +45,15 @@ affordable at either end.
 | `BATCH_SIZE` | 25 |
 | provider calls, sequential | 64 |
 | prompt characters | ~550,000 |
-| input tokens | ~138k – 184k |
-| output tokens | ~40k – 72k |
+| input tokens | ~143k – 191k |
+| output tokens | ~40k – 73k |
 
-The last three are approximate and the ticket is about making them not be.
+The last three were approximate when this was filed — hand-computed at
+~138k–184k. The figures above are what the built feature now measures off the
+real prompts, and they are ~4% higher: the hand version undercounted the
+system prompt and the schema, which are sent on all 65 calls. That the ticket
+about not quoting loose numbers was itself filed with a loose number is the
+whole argument for measuring from the real code path.
 
 ## What to build
 
@@ -95,27 +100,27 @@ Three things it must not do:
 
 - [ ] Every `--enrich` run prints, before its first provider call: the slot
       count, the number of calls it will make, and an input-token **range**.
-- [ ] The predicted call count **equals** the calls actually made. Assert it
+- [x] The predicted call count **equals** the calls actually made. Assert it
       against a fixture at seam 2 by counting provider invocations — this is
       the criterion that keeps the estimate from drifting into fiction, and it
       is the reason the estimate must come from the real code path.
 - [ ] `--dry-run` prints the same estimate and makes **zero** provider calls.
       Count them; asserting on the output alone passes over a dry run that
       quietly enriches.
-- [ ] The token figure is rendered as a range and never as an exact count, and
+- [x] The token figure is rendered as a range and never as an exact count, and
       no output anywhere states a price.
 - [ ] Progress **advances** during the run, and the final report accounts for
       every batch. Assert the sequence, not that output is non-empty: one line
       printed once satisfies "it printed something" and leaves the reader
       exactly as stuck.
-- [ ] Nothing is printed per *slot*. 1593 lines is not progress.
+- [x] Nothing is printed per *slot*. 1593 lines is not progress.
 - [ ] All of it goes to **stderr**, where `mapped N files` and every other
       line `scan` writes already goes. `scan` has no stdout contract today and
       this must not invent one.
-- [ ] A failed batch is still visible as a failure, and the existing guarantee
+- [x] A failed batch is still visible as a failure, and the existing guarantee
       holds unchanged: the structural map survives and the run says so. The
       egress suite's `the structural map is intact` assertion must still pass.
-- [ ] Whatever the run prints when its output is a pipe rather than a terminal
+- [x] Whatever the run prints when its output is a pipe rather than a terminal
       is what the test drives. A `\r`-updating line is reasonable on a TTY and
       unreadable in a log; if the two differ, the test asserts the one it can
       capture and the TTY form is named as unverified.
