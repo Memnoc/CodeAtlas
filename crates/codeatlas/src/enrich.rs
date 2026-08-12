@@ -953,7 +953,12 @@ pub fn fill_slots_with(
     match failure {
         // Whatever succeeded before the failure has already been applied and
         // checkpointed. The error still propagates, so the caller does not
-        // write a map it only half enriched.
+        // write a map it only half enriched — but it says what survived,
+        // because "keep what was paid for" is worth nothing to a reader who
+        // assumes the failed run cost them everything and does not re-run.
+        Some(err) if count > 0 => {
+            Err(err.context(format!("{count} slots were answered and saved before this")))
+        }
         Some(err) => Err(err),
         None => Ok(count),
     }
@@ -2175,7 +2180,14 @@ mod tests {
         })
         .unwrap_err();
 
-        assert!(err.to_string().contains("injected failure"));
+        assert!(format!("{err:#}").contains("injected failure"));
+        // The reader is told what survived. Without this they assume a failed
+        // run cost them everything, do not re-run, and the checkpoint buys
+        // them nothing.
+        assert!(
+            format!("{err:#}").contains(&format!("{} slots were answered", 2 * BATCH_SIZE)),
+            "the failure does not say what was saved: {err:#}"
+        );
         // Two batches answered, so two checkpoints, and the last of them saw
         // every node those two batches covered. Asserting only "a checkpoint
         // happened" would pass over one that ran before any answer was
