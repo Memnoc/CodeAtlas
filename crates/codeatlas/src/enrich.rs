@@ -2529,7 +2529,15 @@ mod tests {
         let graph = files_graph(4 * BATCH_SIZE);
         let described = Plan::of(&graph).describe();
 
-        assert!(described.contains('–'), "not a range: {described}");
+        // *Both* figures, counted rather than searched for. The first version
+        // of this asserted `contains('–')`, which the output range satisfies
+        // on its own — collapsing the prompt figure to a single number left it
+        // green. An estimate is two ranges or it is not this estimate.
+        assert_eq!(
+            described.matches('–').count(),
+            2,
+            "both figures must be ranges: {described}"
+        );
         assert!(
             described.contains(&format!("{} slots", 4 * BATCH_SIZE))
                 && described.contains("in 4 calls"),
