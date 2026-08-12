@@ -469,12 +469,12 @@ for the model. No walk step called a real model or spent anything.
 |---|-------|---------|--------------------|
 | 1 | Structural map in seconds, no LLM | **pass** | fresh clone, 287 files mapped in 0.16 s, no provider in the environment |
 | 2 | Relationship conventions checklist | **pass** | the 84-cell fixture table: every cell pass or n/a, 0 filed, 0 vacuous; the filed-cell mechanism has its own guard |
-| 3 | Interactive dashboard | **pass¹** | data paths walked (map served, search/detail/grouping via the 190-test suite at `21bd4ed`); paint unseen |
+| 3 | Interactive dashboard | **pass** | data paths walked (map served, search/detail/grouping via the 190-test suite at `21bd4ed`); paint unseen; **paint half walked by the user, 2026-08-12, following `browser-walk.md` — pass** |
 | 4 | Opt-in enrichment fills prose slots | **pass** | 1651 slots — 1307 summaries, 8 layers, 324 flows, 12 tour — filled through `fake:`, all four kinds flipped to `llm` |
 | 5 | Re-runs re-purchase only the delta | **pass** | one edited file → `enriching: 9 slots in 1 calls`, exactly that file's nodes; estimate printed by the run itself |
-| 6 | Domain flows and ordered tour | **pass¹** | 12/12 tour steps and 324 flows in the walked map; ordering and panel behaviour by suite; paint unseen |
-| 7 | Diff blast radius | **pass¹** | real edit → 15 changed + 10 affected; every id resolves; all 3 one-hop importers marked; overlay paint unseen |
-| 8 | Self-contained redacted export | **pass¹** | **new axis**: 3 real enriched sentences + 2 enriched layer names verbatim-absent from a 1.3 MB artifact; 0 external refs; `file://` rendering unseen |
+| 6 | Domain flows and ordered tour | **pass** | 12/12 tour steps and 324 flows in the walked map; ordering and panel behaviour by suite; paint unseen; **paint half walked by the user, 2026-08-12, following `browser-walk.md` — pass** |
+| 7 | Diff blast radius | **pass** | real edit → 15 changed + 10 affected; every id resolves; all 3 one-hop importers marked; overlay paint unseen; **paint half walked by the user, 2026-08-12, following `browser-walk.md` — pass** |
+| 8 | Self-contained redacted export | **pass** | **new axis**: 3 real enriched sentences + 2 enriched layer names verbatim-absent from a 1.3 MB artifact; 0 external refs; `file://` rendering unseen; **paint half walked by the user, 2026-08-12, following `browser-walk.md` — pass** |
 | 9 | Sealed build + egress suite | **pass** | 11-check probe against this walk's binaries, controls live; 6 netns egress tests green |
 | 10 | Artifact discloses redaction | **pass** | binary reported `×1127/×6/×302/×9` redacted; disclosure text present in artifact |
 | 11 | Graph rebuilt from scratch | **pass** | deleted file's 8 nodes gone on next scan; new file arrives `structural` |
@@ -528,14 +528,17 @@ answer citing that map's nodes (4+21); four enrichment failures leaving a
 servable map (14); edit → diff → overlay served (7); share built from the
 enriched map (8+10).
 
-**Unverifiable, and what accepting them means:** the paint half of every
-¹ story (stories 20 and 22 have since closed — see ³ and the addendum). All of it is one fifteen-minute session
-at `http://127.0.0.1:4173/` following `browser-walk.md` — a checklist whose
-suspects each name a specific reason to distrust, not a once-over. On
-2026-08-12 exactly this gap hid two real clipping bugs behind 181 green
-tests. **Shipped means these are walked, or accepted by name below.**
+**Resolution, 2026-08-12.** The user walked stories 3, 6, 7 and 8 in the
+browser against the live server, following `browser-walk.md` — including the
+FILES tab, a live diff overlay (one edited file: 123 changed nodes, 12
+affected, the symbol-vs-file counting explained by the toggle's own label),
+and the share artifact. **All four pass.** With stories 20 and 22 closed by
+the stacking fix and the stylesheet contract (³, addendum), every numbered
+story now passes.
 
-*Acceptance:* — pending.
+*Acceptance:* anything not explicitly walked above — residual paint states,
+theme variants, and window shapes beyond those looked at — is accepted as-is
+by **Memnoc**, 2026-08-12. **V1 is shipped.**
 
 `/harden` had previously walked the original 17 stories five
 times. The first walk (**2026-08-09**, baseline `0a523da`) found one failure,
