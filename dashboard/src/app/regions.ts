@@ -262,9 +262,13 @@ export function regionLinks(
 
   return [...tally.values()].map(({ source, target, count, kinds }) => {
     // One kind gets named; a mix is just "links", because "12 imports and
-    // calls" is a number nobody can act on.
+    // calls" is a number nobody can act on. Contract kinds are verb forms —
+    // "A imports B" — so the counted noun has to drop their s first:
+    // 1 import, 2 imports. Pluralising the verb printed "2 importss" on
+    // every busy region edge.
     const kind = kinds.size === 1 ? ([...kinds][0] ?? "link") : "link";
-    return { source, target, count, label: `${count} ${plural(kind, count)}` };
+    const noun = kind.replace(/s$/, "");
+    return { source, target, count, label: `${count} ${plural(noun, count)}` };
   });
 }
 

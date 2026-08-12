@@ -111,7 +111,9 @@ describe("region links", () => {
     );
 
     expect(cliToSrc).toBeDefined();
-    expect(cliToSrc?.label).toBe(`${cliToSrc?.count} imports`);
+    // Kind named, singular or plural as the count demands — the exact
+    // grammar is pinned below, where the counts are chosen on purpose.
+    expect(cliToSrc?.label).toMatch(/^\d+ imports?$/);
   });
 
   it("draws no loop for a region talking to itself", () => {
@@ -119,6 +121,62 @@ describe("region links", () => {
 
     // src imports within itself; that is what its complexity word is for.
     expect(links.filter((l) => l.source === l.target)).toEqual([]);
+  });
+
+  it("counts nouns: 1 import, 2 imports — never the kind's own s twice", () => {
+    // The shipped bug this pins: contract kinds are verb forms ("A imports
+    // B"), and pluralising the verb put "2 importss" on every busy region
+    // edge — immortalised in the first README screenshots before anyone
+    // read it back.
+    const crossing = (
+      edges: readonly (readonly ["imports" | "calls", string, string])[],
+    ): KnowledgeGraph => ({
+      version: "0.2.0",
+      project: { name: "grammar" },
+      layers: [
+        { id: "one", name: "one", provenance: "structural" as const },
+        { id: "two", name: "two", provenance: "structural" as const },
+      ],
+      nodes: ["one/a.ts", "one/b.ts", "two/z.ts"].map((path) => ({
+        id: `file:${path}`,
+        kind: "file" as const,
+        name: path.split("/")[1] ?? path,
+        path,
+        summary: "",
+        layer: path.split("/")[0] ?? "one",
+        provenance: "structural" as const,
+      })),
+      edges: edges.map(([kind, from, to]) => ({
+        source: `file:${from}`,
+        target: `file:${to}`,
+        kind,
+        weight: 1,
+      })),
+    });
+
+    const label = (map: KnowledgeGraph) =>
+      regionLinks(map, structuralRegions(map))[0]?.label;
+
+    expect(label(crossing([["imports", "one/a.ts", "two/z.ts"]]))).toBe(
+      "1 import",
+    );
+    expect(
+      label(
+        crossing([
+          ["imports", "one/a.ts", "two/z.ts"],
+          ["imports", "one/b.ts", "two/z.ts"],
+        ]),
+      ),
+    ).toBe("2 imports");
+    // A mix stays "links": the noun path, exercised with a real plural.
+    expect(
+      label(
+        crossing([
+          ["imports", "one/a.ts", "two/z.ts"],
+          ["calls", "one/b.ts", "two/z.ts"],
+        ]),
+      ),
+    ).toBe("2 links");
   });
 });
 
