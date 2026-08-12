@@ -479,7 +479,19 @@ text — those claims are about what git does:
   read timeout (`accepted_connections_carry_a_read_timeout`,
   `crates/codeatlas/src/serve.rs`), so half-open requests cannot park
   threads forever, but a determined local process can still hammer the
-  server. This affects availability of the local dashboard only, never
+  server. A handler thread also outlives its own response by up to half a
+  second: every response is followed by a half-close and a drain of whatever
+  the client is still sending, because closing on unread bytes resets the
+  connection and costs the client the response it was owed. That drain is
+  bounded in both directions — `LINGER_TIMEOUT` of silence and `MAX_DRAIN`
+  bytes, both in `crates/codeatlas/src/serve.rs` — so it is a second finite
+  hold on a thread rather than a second way to keep one. Nothing is retained
+  from it: the bytes pass through a stack buffer and are dropped, which is
+  what keeps a route that reads no body from allocating one
+  (`a_refused_method_reaches_the_client_that_asked_for_it` and
+  `the_question_routes_refusals_reach_the_client_too`,
+  `crates/codeatlas/tests/serve.rs`, both asserted under repetition). This
+  affects availability of the local dashboard only, never
   confidentiality. What a connection can be told is the whole of this list:
   the map and the diff overlay, read from disk; the embedded dashboard
   assets, from process memory; and — since [ADR-0009] — one boolean saying

@@ -153,6 +153,56 @@ fn http_post_as(
     (status, lines.collect(), body)
 }
 
+/// The smallest body that is certain to outlast the server's first read of
+/// the connection. `BufReader`'s default buffer is 8 KiB, so a request whose
+/// body exceeds that cannot be swallowed whole by the read that collects the
+/// header block, whatever the network happens to do with the segments.
+const LARGER_THAN_ONE_READ: usize = 32 * 1024;
+
+/// A POST that is still arriving when the server decides how to answer it,
+/// returning a `Result` rather than unwrapping one.
+///
+/// A refusal is decided from the request line and the headers alone, so the
+/// server answers with most of a [`LARGER_THAN_ONE_READ`] body still sitting
+/// in the socket's receive queue. Closing a socket in that state closes it
+/// with an RST rather than a FIN, and an RST tells the peer's kernel to
+/// abandon what it has buffered — including the response written a moment
+/// earlier. That is ticket 35's defect, and sizing the body past one buffered
+/// read is what makes it certain rather than one run in twenty-five.
+///
+/// The error is returned rather than unwrapped because a reset *is* a result
+/// under test here — the caller names the round it happened on.
+fn http_post_still_arriving(
+    port: u16,
+    path: &str,
+    content_type: &str,
+    body: &str,
+) -> std::io::Result<(String, Vec<u8>)> {
+    assert!(
+        body.len() > LARGER_THAN_ONE_READ,
+        "this helper proves nothing with a body the server reads in one go"
+    );
+    let mut stream = TcpStream::connect(("127.0.0.1", port))?;
+    write!(
+        stream,
+        "POST {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Type: {content_type}\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )?;
+    stream.write_all(body.as_bytes())?;
+    stream.flush()?;
+
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)?;
+    let split = response
+        .windows(4)
+        .position(|w| w == b"\r\n\r\n")
+        .ok_or_else(|| std::io::Error::other("no header/body separator in response"))?;
+    let head = String::from_utf8_lossy(&response[..split]).to_string();
+    let status = head.lines().next().unwrap_or_default().to_string();
+    Ok((status, response[split + 4..].to_vec()))
+}
+
 /// Asks a question and returns (status line, parsed JSON body).
 fn ask(port: u16, question: &str) -> (String, serde_json::Value) {
     let body = serde_json::json!({ "question": question }).to_string();
@@ -382,11 +432,15 @@ fn the_capability_route_states_whether_questions_can_be_asked() {
     let said: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(said["ask"], serde_json::json!(false), "{said}");
     // And it is telling the truth about this server: the route it says is
-    // absent really is. Deliberately an empty body — a POST that 405s is
-    // refused without being read out, so bytes left unread in the socket can
-    // reset the connection in the client's face (ticket 35). Nothing about
-    // routing needs a body to prove.
-    let (status, _, _) = http_post(plain.port, "/api/ask", "");
+    // absent really is. This carried an empty body until ticket 35, to keep
+    // clear of the reset that a refusal with bytes left unread used to cause;
+    // a refusal now hangs the connection up rather than dropping it on them,
+    // so the question it would really be asked is the honest thing to send.
+    let (status, _, _) = http_post(
+        plain.port,
+        "/api/ask",
+        &serde_json::json!({"question": "anything?"}).to_string(),
+    );
     assert!(
         status.contains("405"),
         "said it could not answer, then did: {status}"
@@ -622,6 +676,91 @@ fn an_oversized_request_body_is_refused() {
     // The connection was read out rather than reset, and the server lives.
     let (status, _, _) = http_get(server.port, "/api/map");
     assert!(status.contains("200"), "map status after 413: {status}");
+}
+
+/// Ticket 35: a refusal is only a refusal if it arrives.
+///
+/// The 405 branch writes its reason and closes. A socket closed with unread
+/// bytes still in its receive queue closes with an RST, and an RST tells the
+/// peer's kernel to throw away what it has buffered — so the reader gets
+/// `ConnectionReset` instead of the sentence naming the routes that do exist.
+///
+/// Repetition is the assertion, not decoration. The defect that filed this
+/// ticket passed twenty-four runs in twenty-five, so a single green run says
+/// nothing; [`post_body_late`] makes each round deterministic and the loop
+/// makes a rare survivor visible.
+#[test]
+fn a_refused_method_reaches_the_client_that_asked_for_it() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let server = serve(repo.path());
+
+    let question = serde_json::json!({"question": "a".repeat(LARGER_THAN_ONE_READ)}).to_string();
+    for round in 1..=25 {
+        let (status, body) =
+            http_post_still_arriving(server.port, "/api/ask", "application/json", &question)
+                .unwrap_or_else(|e| panic!("round {round}: the refusal never arrived: {e}"));
+        assert!(status.contains("405"), "round {round} status: {status}");
+        assert!(
+            String::from_utf8_lossy(&body).contains("only GET"),
+            "round {round}: the refusal must say which verbs are served: {:?}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+
+    // And the server is unharmed by twenty-five of them.
+    let (status, _, _) = http_get(server.port, "/api/map");
+    assert!(status.contains("200"), "map status after POSTs: {status}");
+}
+
+/// Ticket 35, the other two refusals that answer from the header block alone.
+///
+/// 415 is decided by `Content-Type` and 413 by the declared length, so both
+/// reply while the body is still arriving — the same close-on-unread-bytes
+/// race as the 405 above, on the one route that does read bodies. The 413
+/// round doubles as the proof that an over-long request is refused on its
+/// declared length rather than after the server has read it: the body here is
+/// written only after the refusal has been decided.
+#[test]
+fn the_question_routes_refusals_reach_the_client_too() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let outside = tempfile::tempdir().unwrap();
+    let spec = format!(
+        "fake:{}",
+        canned(outside.path(), "MUST NOT BE REACHED", &[]).display()
+    );
+    let server = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+
+    let question = serde_json::json!({"question": "a".repeat(LARGER_THAN_ONE_READ)}).to_string();
+    let huge = serde_json::json!({ "question": "a".repeat(200_000) }).to_string();
+    for round in 1..=10 {
+        let (status, body) =
+            http_post_still_arriving(server.port, "/api/ask", "text/plain", &question)
+                .unwrap_or_else(|e| panic!("round {round}: the 415 never arrived: {e}"));
+        assert!(status.contains("415"), "round {round} status: {status}");
+        assert!(
+            String::from_utf8_lossy(&body).contains("application/json"),
+            "round {round}: the refusal must name the type demanded: {:?}",
+            String::from_utf8_lossy(&body)
+        );
+
+        let (status, body) =
+            http_post_still_arriving(server.port, "/api/ask", "application/json", &huge)
+                .unwrap_or_else(|e| panic!("round {round}: the 413 never arrived: {e}"));
+        assert!(status.contains("413"), "round {round} status: {status}");
+        assert!(
+            String::from_utf8_lossy(&body).contains("at most"),
+            "round {round}: the refusal must state the cap: {:?}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+
+    let (status, _, _) = http_get(server.port, "/api/map");
+    assert!(
+        status.contains("200"),
+        "map status after refusals: {status}"
+    );
 }
 
 /// Seams 3 and 4 together: a question travelling all the way from HTTP to a

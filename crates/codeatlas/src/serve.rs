@@ -31,7 +31,7 @@
 //! other producers emit against (ADR-0003).
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{Ipv4Addr, TcpListener, TcpStream};
+use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
@@ -165,11 +165,19 @@ fn prepare(stream: TcpStream) -> std::io::Result<TcpStream> {
 /// hand-rolled server allocate on demand.
 const MAX_BODY: usize = 64 * 1024;
 
-/// How much of an over-long body to read before answering 413. Replying
-/// without reading the client out can reset the connection in its face, so
-/// an oversized request is swallowed up to here and then refused; past this,
-/// being tidy is not worth the bytes.
+/// The most a connection is read out on the way to being closed. Closing on
+/// bytes nobody read resets the connection in the client's face (see
+/// [`hang_up`]), but past this many of them being tidy is not worth the
+/// bytes: a caller still sending after it has been answered has had its
+/// answer.
 const MAX_DRAIN: usize = 16 * MAX_BODY;
+
+/// How long [`hang_up`] waits on a client that is still sending. Much
+/// shorter than [`READ_TIMEOUT`], and it can be: by then the response has
+/// been written and flushed, so nothing the reader is waiting for depends on
+/// this number. All it bounds is how long a handler thread stays alive being
+/// polite.
+const LINGER_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// The two request headers this server reads. It read none before ADR-0009,
 /// and reads exactly these now — one to frame a body, one to refuse a
@@ -329,29 +337,36 @@ fn answer_question(
     provider: &dyn EnrichmentProvider,
     headers: &Headers,
 ) -> std::io::Result<()> {
-    // Read the client out before replying, whatever the verdict: answering
-    // a request still being written can reset the connection in its face.
-    let mut body = Vec::new();
-    reader
-        .by_ref()
-        .take(headers.content_length.min(MAX_DRAIN) as u64)
-        .read_to_end(&mut body)?;
-    let stream = &mut reader.into_inner();
-
+    // Both of these are settled by the header block, so they are settled
+    // before a byte of the body is read: an over-long request costs this
+    // process nothing but the bytes already in flight, and a request from
+    // another origin costs it nothing at all. Answering while a body is
+    // still arriving is safe because [`respond`] hangs the connection up
+    // rather than dropping it on the unread remainder.
     if headers.content_length > MAX_BODY {
         return json_error(
-            stream,
+            &mut reader.into_inner(),
             "413 Payload Too Large",
             &format!("the request body may be at most {MAX_BODY} bytes"),
         );
     }
     if !headers.content_type.starts_with(ASK_CONTENT_TYPE) {
         return json_error(
-            stream,
+            &mut reader.into_inner(),
             "415 Unsupported Media Type",
             &format!("questions must be sent as {ASK_CONTENT_TYPE}"),
         );
     }
+
+    // The only body this server reads, and the check above is what bounds
+    // it: past that point the declared length is known to be within
+    // `MAX_BODY`, so `take` needs no second cap of its own.
+    let mut body = Vec::new();
+    reader
+        .by_ref()
+        .take(headers.content_length as u64)
+        .read_to_end(&mut body)?;
+    let stream = &mut reader.into_inner();
 
     let asked = match serde_json::from_slice::<AskBody>(&body) {
         Ok(asked) => asked,
@@ -417,6 +432,9 @@ fn json_error(stream: &mut TcpStream, status: &str, message: &str) -> std::io::R
     )
 }
 
+/// Writes one response and ends the connection. Every route funnels through
+/// here, which is the point: the hang-up below is not something a route can
+/// be written without.
 fn respond(
     stream: &mut TcpStream,
     status: &str,
@@ -429,7 +447,51 @@ fn respond(
         body.len()
     )?;
     stream.write_all(body)?;
-    stream.flush()
+    stream.flush()?;
+    hang_up(stream);
+    Ok(())
+}
+
+/// Ends a connection without cutting off the response just written.
+///
+/// A socket closed while unread bytes are still queued against it is closed
+/// with an RST rather than a FIN, and an RST tells the peer's kernel to
+/// abandon what it has buffered — including a response written a moment
+/// earlier. So the client of a refusal reads a connection reset instead of
+/// the reason it was refused. Every refusal this server writes is decided
+/// from the request line and the headers, which is exactly the moment a body
+/// is most likely to still be arriving.
+///
+/// The two halves do different jobs, and the order between them is the
+/// decision rather than a detail. Shutting the write side down first sends
+/// the FIN that ends the client's read, so the response is delivered before
+/// anything at all is waited on; the client, having read it, closes, and the
+/// drain then reaches EOF at once instead of sitting out a timeout. The
+/// drain is what makes the eventual close a FIN rather than an RST. Doing it
+/// the other way round — read the client out, then answer — would make the
+/// server wait on a client that has not finished sending, and it would put
+/// that wait in front of the response rather than behind it.
+///
+/// Bounded twice, because an unauthenticated local caller picks both numbers
+/// otherwise: [`MAX_DRAIN`] bytes, and [`LINGER_TIMEOUT`] of silence.
+/// Nothing is kept — the bytes pass through one stack buffer and are dropped
+/// — so a route that was never going to read a body still never allocates
+/// one for it.
+fn hang_up(stream: &mut TcpStream) {
+    if stream.shutdown(Shutdown::Write).is_err() {
+        // Already gone; there is nobody left to be polite to.
+        return;
+    }
+    let _ = stream.set_read_timeout(Some(LINGER_TIMEOUT));
+    let mut scratch = [0u8; 4096];
+    let mut drained = 0;
+    while drained < MAX_DRAIN {
+        match stream.read(&mut scratch) {
+            // EOF, a timeout, or a peer that hung up first: done either way.
+            Ok(0) | Err(_) => break,
+            Ok(read) => drained += read,
+        }
+    }
 }
 
 #[cfg(test)]
