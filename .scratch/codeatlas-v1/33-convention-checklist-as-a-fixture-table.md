@@ -386,9 +386,13 @@ is carrying the other.
 
 62 pass, 22 not-applicable, 0 filed, 0 vacuous — story 2's checklist is
 complete in all six languages. `Verdict::Filed` and `Verdict::Vacuous` are
-therefore constructed nowhere and are kept behind an `#[allow(dead_code)]`
-with the reason written above the enum: they are the vocabulary the next gap
-needs, and both carry assertions no other verdict makes.
+therefore constructed by no *row*, and are kept for the reason written above
+the enum: they are the vocabulary the next gap needs, and both carry
+assertions no other verdict makes. Ticket 37's `/crosscheck` then made them
+constructed by something — two tests build synthetic cells of both kinds and
+assert that each objects once the gap it names has closed — so the escape
+hatch is exercised on every run rather than waiting untested for the gap that
+needs it, and needs no `#[allow(dead_code)]` to survive `-D warnings`.
 
 ### How the amended cells were proved able to fail
 

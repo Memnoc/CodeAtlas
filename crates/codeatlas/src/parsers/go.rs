@@ -26,6 +26,20 @@
 //! file's imports say, so [`local_bindings`] collects the function's own
 //! names and a call through one of them is not recorded at all.
 //!
+//! That second check suppresses **more** than a strict reading of Go's scopes
+//! would, and the extra reach is worth stating rather than discovering. It is
+//! whole-function, blind to declaration order, and it extends through every
+//! nested function literal — so a *closure parameter* named after a package
+//! suppresses that package for the length of the enclosing function, not just
+//! inside the closure. Three shapes of legal Go therefore lose an edge:
+//! `cfg := cfg.Load()`, where the right-hand side really is the package
+//! because a `:=` name's scope begins only after the statement; a shadowing
+//! declaration in a sibling block that the call never enters; and the closure
+//! case above. Each costs one edge, where following a shadowed receiver would
+//! invent one between two files with no relationship at all — the bug ticket
+//! 21 shipped. With the error directions that asymmetric, the approximation
+//! leans.
+//!
 //! **Dot imports.** `import . "p"` binds every exported name of `p`
 //! unqualified, and one file cannot know which names those are — so
 //! [`bind_dot_imports`] offers every callee the file does not define to the
@@ -287,12 +301,16 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Collected) {
     }
 
     // A function is where names get declared, so it is where a qualifier can
-    // be shadowed. Anything else inherits its enclosing function's set.
-    let scope_names = matches!(
-        node.kind(),
-        "function_declaration" | "method_declaration" | "func_literal"
-    )
-    .then(|| local_bindings(node, source, ctx.shadowed));
+    // be shadowed. Anything else inherits its enclosing function's set —
+    // including a nested `func_literal`, which needs no set of its own:
+    // `gather_bindings` already recursed into it when the enclosing
+    // declaration was walked, so re-collecting there could only reproduce what
+    // was inherited, at the price of a `HashSet` clone per literal. A literal
+    // at *package* scope (`var f = func(){…}`) has no enclosing declaration
+    // and so no set either, and needs none: with no enclosing function there
+    // is no caller to attribute a call to, and the walk records nothing.
+    let scope_names = matches!(node.kind(), "function_declaration" | "method_declaration")
+        .then(|| local_bindings(node, source, ctx.shadowed));
     let child_ctx = Ctx {
         enclosing_fn: pushed_fn.or(ctx.enclosing_fn),
         shadowed: scope_names.as_ref().unwrap_or(ctx.shadowed),
@@ -353,14 +371,22 @@ fn callee_of(
 /// type-switch and channel-receive binding anywhere inside it — unioned with
 /// whatever the enclosing scope already shadowed.
 ///
+/// "Anywhere inside it" includes every nested function literal, because
+/// [`gather_bindings`] recurses unconditionally. So the set a function is
+/// walked with is already closed over its closures, and a literal needs no
+/// set of its own — which is also why a closure's parameters shadow a package
+/// qualifier for the whole enclosing function and not merely inside the
+/// closure.
+///
 /// Deliberately whole-function rather than block-scoped, and deliberately
-/// blind to declaration order. Both approximations err the same way: they
-/// call a name shadowed where a stricter reading might not, and a shadowed
-/// name only ever *declines* to follow a receiver. The cost of declining
-/// wrongly is a missing edge — a name declared after the call that uses it,
-/// or in a sibling block — and the cost of following wrongly is an edge
-/// between two files with no relationship at all, which is the bug ticket 21
-/// shipped and ticket 33 built `goproj/value.go` to catch.
+/// blind to declaration order. All three approximations err the same way:
+/// they call a name shadowed where a stricter reading might not, and a
+/// shadowed name only ever *declines* to follow a receiver. The cost of
+/// declining wrongly is a missing edge — a name declared after the call that
+/// uses it, or in a sibling block, or in a closure — and the cost of
+/// following wrongly is an edge between two files with no relationship at
+/// all, which is the bug ticket 21 shipped and ticket 33 built
+/// `goproj/value.go` to catch.
 fn local_bindings(node: TsNode, source: &[u8], inherited: &HashSet<String>) -> HashSet<String> {
     let mut names = inherited.clone();
     gather_bindings(node, source, &mut names);
@@ -435,6 +461,15 @@ fn package_qualifier(specifier: &str) -> Option<String> {
 /// exports, so a name the package does not publish resolves to nothing rather
 /// than to a guess, and a name the file defines itself is never offered at
 /// all (in valid Go it could not collide with a dot import anyway).
+///
+/// One residual, inherited with the shape. "Defines itself" means a
+/// *top-level* symbol: the shadow check that [`local_bindings`] performs is
+/// consulted for selector receivers only, never for an unqualified callee, so
+/// a local of func type whose name collides with a dot-imported export —
+/// `F := func() {}; F()` — is still offered and resolves to the package's
+/// `F`. It needs an uppercase local (Go exports only capitalised names) whose
+/// name a dot-imported package also publishes, which is contrived, and it is
+/// the same class of over-offer the C header handling already carries.
 fn bind_dot_imports(out: &mut Collected) {
     if out.dot_imports.is_empty() {
         return;

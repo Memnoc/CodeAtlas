@@ -139,7 +139,10 @@ defines it, wherever in the package directory that is.
       inside a ~3% within-arm spread and disagreeing on the sign, as ticket
       21's rounds did. The two binaries emit a byte-identical map on that
       probe. The Go cost is real and reported in the write-up rather than
-      hidden here.
+      hidden here. **The criterion is corrected below** — see *What
+      `/crosscheck` found*. C cannot reach this change at all, so these
+      numbers are a non-regression check on the five languages the work was
+      not supposed to touch, not a test of the work.
 
 ## Design note carried in from filing
 
@@ -287,3 +290,143 @@ took it to +75%, and hoisting a per-node cursor allocation out of the shadow
 walk took it to +69%. That is the only performance work here, and it was found
 by measuring rather than by reading — the C probe says nothing about it,
 because C never reaches the branch.
+
+## What `/crosscheck` found
+
+No severe defects. The two non-edge guards, the dot-import binding, the blast
+radius on the other five languages and the table itself were all re-verified
+correct. What follows are the judgement calls.
+
+**A branch of the walk could not change an outcome, and paid an allocation per
+closure to do it.** `collect` computed a fresh binding set at every
+`func_literal` as well as at every function and method declaration, and the
+literal arm cannot matter — for two reasons that between them cover every
+literal Go can write. Inside a declaration, `gather_bindings` had already
+recursed unconditionally into the literal when the enclosing function was
+walked, so the inherited set is a superset of anything the literal could add
+and `local_bindings(literal, …, inherited)` returns `inherited`, after a
+`HashSet<String>` clone and a second traversal of the subtree. Outside one —
+`var f = func(…) {…}` at package scope — there is no enclosing declaration to
+inherit from, but there is also no enclosing *function*, and a call with no
+caller is never recorded, so the set is never consulted. The arm is gone.
+
+Checked rather than argued. A probe seeding closures in five shapes — a
+parameter shadowing a package, a package call in a function that later
+declares a closure of that name, a `:=` inside a literal, a literal that
+shadows nothing, and two levels of nesting — plus a package-scope literal with
+no enclosing function, plus all twelve committed fixtures, emits a
+byte-identical map either way, and every Go cell keeps its verdict.
+
+It is also faster, which is the point: the only performance work this ticket
+did was hoisting a per-node allocation out of this same walk. Interleaved A/B
+on a regenerated 561-file / 160,000-call-site Go probe with func literals in a
+third of the caller functions, 16 runs per arm, twice with the arm order
+swapped: **1.949s → 1.878s** (−3.6%) and **1.947s → 1.875s** (−3.7%), the
+after arm holding the tighter within-arm spread in both rounds, maps
+byte-identical.
+
+**The escape hatch had become untested machinery.** `Verdict::Filed` and
+`Verdict::Vacuous` are constructed by no row, which is the state the table
+exists to reach — but it left the two arms of `Cell::check` that implement
+them, and `status()`, `ticket()` and `expectations()` with them, run by
+nothing. `Vacuous` is the mechanism that stops an unfalsifiable cell rendering
+as a pass. It only works if it *objects*, and an escape hatch that has quietly
+stopped objecting looks exactly like one with nothing to object to. Two tests
+now build synthetic cells of both kinds and run them in both directions: each
+passes while the gap it names is open, and fails once that gap has closed.
+Three tampers, one per arm — the filed arm no longer objecting to a closed
+gap, the vacuous arm no longer noticing it can now fail, the vacuous arm
+skipping its guard — redden exactly the right test and nothing else.
+
+The `#[allow(dead_code)]` is therefore **gone rather than narrowed**. The
+review's objection was that it sat on the whole enum and so also silenced
+future unused fields on `Holds` and `NotApplicable`, wider than the reason
+written above it. With both arms now constructed and read, nothing is dead and
+no allow of any width is needed: deleting the two tests and re-running clippy
+prints *variants `Filed` and `Vacuous` are never constructed*, which is the
+tests standing in for the attribute rather than sitting beside it. The prose
+above the enum stays, because why the vocabulary is kept is a different
+question from why the compiler tolerates it.
+
+The synthetic cells sit on the `simple` fixture, on one call edge and on that
+same pair reversed. The first draft used `goproj` and reused the shadowed
+`value.go` receiver as its still-open gap; dropping the shadow check then
+reddened three tests instead of one, two of them announcing *this row now
+PASSES. Close ticket 99* about a fabricated edge. An edge absent because
+nothing in the fixture writes that call cannot be closed by a bug, so a real
+regression stays on the row that owns it.
+
+**Three approximations that were true and unwritten.** None is a defect; each
+is something the next reader should not have to rediscover.
+
+The shadow suppression is wider than the write-up above disclosed. Because
+`gather_bindings` recurses into nested literals, a *closure parameter* named
+after a package suppresses that package for the whole enclosing function — the
+probe shows `a := util.Format("outer")` losing its edge to a closure declared
+on the next line. Two further shapes of legal Go lose an edge the same way:
+`cfg := cfg.Load()`, where the right-hand side really is the package because a
+`:=` name's scope begins only after the statement, and a shadowing declaration
+in a sibling block the call never enters. All three lean the safe way, which
+is the reason to keep them; the module doc now says so, and says the
+suppression reaches through literals.
+
+The widening treats every `.go` file in a directory as one package, and Go
+allows `package foo_test` beside `package foo`, so an exported name defined
+only in an external test package could answer a production call. No parser
+here reads a `package` clause, and the sibling search already assumed the same
+thing from the caller's side, so this widens a standing approximation rather
+than introducing one. `resolve_in_module` says that where it explains itself.
+
+A dot-import residual. The shadow check is consulted for selector receivers
+only, never for an unqualified callee, so an uppercase local of func type
+whose name a dot-imported package also exports — `F := func() {}; F()` —
+resolves to the package's `F`. Contrived, and the same class of over-offer the
+C header handling already carries. One sentence in `bind_dot_imports`.
+
+**The performance criterion named a language this change cannot reach.** The
+last acceptance criterion asks for no measurable regression on the C family,
+and the measurement is real and was taken honestly. But five of the six
+languages return early on `directory_shares_scope`, so C never enters the new
+code path, and the C probe was structurally incapable of failing the criterion
+it was written for. That is the shape the table itself calls `Vacuous`, sitting
+in an acceptance criterion, in the ticket that emptied the table of vacuous
+cells.
+
+The criterion stands as written and is corrected here rather than reworded
+there. What the C numbers are is a non-regression check: they say the change
+did not leak into the five languages it was not supposed to touch, which is
+worth having and is not a test of this work. The test of this work is the Go
+probe, and it was measured — 1.00s → 1.67s, +69%, buying 160,000 call edges
+that did not previously exist, with the halves isolated at +29% for resolution
+and +40% for construction. A budget written against Go would have had to say
+that the cost of *looking* is small beside the cost of the edges the looking
+finds; +29% against +40% passes that, and the first cut at +171% would have
+failed it loudly, which is the discrimination the C probe never had. Nothing
+needs re-measuring. What was missing was the sentence saying which probe
+answers which question.
+
+**`bind_dot_imports` stays a copy of `bind_includes`, deliberately.** The two
+are the same shape — the same `defined` set from symbols, the same
+undefined-callee candidates, the same sort and dedup, the same `ImportedName`
+fan-out — differing in one filter (`receiver.is_empty()`) and in which imports
+receive the names. A shared helper in `parsers/mod.rs` taking a predicate and
+a list of target indices was sketched and declined on the condition the review
+set, that it be as easy to reason about as the two copies. It is not. The C
+call site has to say "all of them", which cannot be written inline —
+`helper(&mut analysis, 0..analysis.imports.len(), |_| true)` is E0502, so it
+needs a length bound hoisted out or a materialised `Vec<usize>`, on the path
+this ticket measured. More to the point, the invariant the Go copy keeps is
+that *only* dot imports may receive names: a plain Go import that got them
+would bind every callee in the file unqualified and fabricate edges across the
+whole language. Today that is impossible to get wrong, because
+`out.dot_imports` is the only list in scope. Behind a helper taking a target
+list it becomes a caller's responsibility. Two readable copies on an
+edge-fabrication path beat one clever one.
+
+**The overlap between
+`a_go_package_qualifier_names_the_whole_directory_and_nothing_outside_it` and
+four table cells is kept.** Its doc comment already justifies it: no cell can
+say "and nothing else", and pinning the complete outgoing call set of all
+eight selector-calling functions is what catches `fmt.Println` and
+`strings.TrimSpace` becoming edges. Re-asserting the four edges it shares with
+the table is what makes that set readable in one sitting.

@@ -361,6 +361,14 @@ fn resolve_calls(paths: &[String], facts: &[FileFacts], edges: &mut Vec<Edge>, r
     // It cannot widen into an invented edge: the specifier had to resolve into
     // the map first, the file has to sit in the resolved file's own directory
     // and be of the caller's language, and the name has to be exported there.
+    //
+    // What it does assume is that every `.go` file in a directory is the same
+    // package, and Go allows one exception: a `package foo_test` may sit
+    // beside `package foo` in the same directory. So an exported name defined
+    // only in an external test package can answer a production call. No parser
+    // here reads a `package` clause, and the sibling search below already
+    // makes the identical assumption from the other side, so this widens a
+    // pre-existing approximation rather than introducing one.
     let resolve_in_module =
         |parser: &dyn parsers::Parser, target: &str, name: &str| -> Option<(String, String)> {
             if let Some(found) = resolve_exported(target, name) {

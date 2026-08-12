@@ -28,7 +28,9 @@
 //! As of ticket 37 every cell is `Holds` or `NotApplicable`. The last three
 //! filed and three vacuous cells were all Go's, and all six turned on one
 //! missing binding between a package qualifier and the directory it names.
-//! The two unused arms stay for the next gap — see the note above [`Verdict`].
+//! The two arms no row uses stay for the next gap — see the note above
+//! [`Verdict`] — and are exercised on synthetic cells at the foot of this
+//! file, so the escape hatch is tested machinery rather than kept machinery.
 //!
 //! One test per convention, so a failure names the row. Assertions are at
 //! seam 1 — run the binary over a committed fixture, read the emitted map —
@@ -173,17 +175,22 @@ struct Cell {
     verdict: Verdict,
 }
 
-// Every cell holds as of ticket 37, so nothing constructs `Filed` or
-// `Vacuous` today. That is the state the table exists to reach, not a reason
-// to delete the vocabulary that reaches it. `Filed` is the escape hatch ticket
-// 33 was agreed on — a failing row is filed against a ticket rather than
-// quietly fixed or quietly ignored — and `Vacuous` is what stops a cell that
-// cannot fail from rendering beside cells that can. Both carry assertions no
-// other verdict makes (a filed row's gap must still be there; a vacuous row's
-// reason must still be true), so deleting them would mean the next walk that
-// finds a gap has to re-invent the classification, and the likeliest thing it
-// would do instead is leave the row silently red or silently green.
-#[allow(dead_code)]
+// Every cell in `CHECKLIST` holds as of ticket 37, so no *row* constructs
+// `Filed` or `Vacuous` today. That is the state the table exists to reach, not
+// a reason to delete the vocabulary that reaches it. `Filed` is the escape
+// hatch ticket 33 was agreed on — a failing row is filed against a ticket
+// rather than quietly fixed or quietly ignored — and `Vacuous` is what stops a
+// cell that cannot fail from rendering beside cells that can. Both carry
+// assertions no other verdict makes (a filed row's gap must still be there; a
+// vacuous row's reason must still be true), so deleting them would mean the
+// next walk that finds a gap has to re-invent the classification, and the
+// likeliest thing it would do instead is leave the row silently red or
+// silently green.
+//
+// Kept honest rather than merely kept: `a_filed_cell_…` and `a_vacuous_cell_…`
+// at the foot of this file construct both arms and run them, so the machinery
+// the next gap will reach for is exercised on every run instead of waiting
+// untested for the gap that needs it.
 enum Verdict {
     /// The row passes: scan `fixture` and `expect` must hold of its map.
     Holds {
@@ -1782,4 +1789,163 @@ fn the_table_holds_one_reasoned_cell_for_every_convention_in_every_language() {
         }
     }
     println!("{rendered}");
+}
+
+// ---------------------------------------------------------------------------
+// The escape hatches, exercised
+// ---------------------------------------------------------------------------
+//
+// No row is `Filed` or `Vacuous` since ticket 37, which leaves the arms of
+// [`Cell::check`] that implement them run by nothing. That is the wrong state
+// for this particular machinery: `Vacuous` is what stops an unfalsifiable cell
+// rendering as a pass, and `Filed` is what stops a fix landing while the table
+// still calls the row broken. Both only work if they *object*, and an escape
+// hatch that has quietly stopped objecting looks exactly like one that has
+// nothing to object to.
+//
+// So both are run here on synthetic cells, in both directions: each passes
+// while the gap it names is open, and each fails once that gap has closed.
+//
+// The substrate is one call edge of the `simple` fixture and the same pair
+// reversed, deliberately. A synthetic cell needs an expectation that holds and
+// one that does not, and the tempting choice for the second is an edge some
+// guard suppresses — but then breaking that guard reddens these two tests
+// alongside the row that owns it, and does it while saying "this row now
+// PASSES. Close ticket 99", which is a worse message than the row's own. An
+// edge that is absent because nothing in the fixture writes that call cannot
+// be closed by a bug, so a real regression stays where it belongs.
+
+/// An edge `simple` really has: `main.ts` imports and calls `greet`.
+const A_PRESENT_EDGE: Expect = Expect::Edges(&[(
+    "calls",
+    "function:src/main.ts:main",
+    "function:src/util.ts:greet",
+)]);
+
+/// The same pair, reversed. `util.ts` names nothing in `main.ts`, so no
+/// resolver could produce this — while both nodes exist, so [`Cell::preflight`]
+/// passes and the cell is asserting a missing *edge* rather than a missing
+/// node.
+const AN_ABSENT_EDGE: Expect = Expect::Edges(&[(
+    "calls",
+    "function:src/util.ts:greet",
+    "function:src/main.ts:main",
+)]);
+
+/// A non-edge guard that holds: the reversed pair again, as an absence.
+const A_GUARD_THAT_HOLDS: Expect = Expect::NoEdge {
+    kind: "calls",
+    source: "function:src/util.ts:greet",
+    decoy: "function:src/main.ts:main",
+};
+
+/// A non-edge guard that does not hold: that edge is real and wanted.
+const A_GUARD_THAT_FAILS: Expect = Expect::NoEdge {
+    kind: "calls",
+    source: "function:src/main.ts:main",
+    decoy: "function:src/util.ts:greet",
+};
+
+fn synthetic(verdict: Verdict) -> Cell {
+    Cell {
+        language: Language::TypeScript,
+        convention: Convention::QualifiedCall,
+        form: "synthetic cell — exercises the verdict, not the language",
+        verdict,
+    }
+}
+
+#[test]
+fn a_filed_cell_passes_while_its_gap_is_open_and_fails_once_it_has_closed() {
+    let open = synthetic(Verdict::Filed {
+        ticket: "99",
+        fixture: "simple",
+        want: AN_ABSENT_EDGE,
+    });
+    assert_eq!(
+        open.status(),
+        "ticket 99",
+        "a filed cell renders its ticket"
+    );
+    assert_eq!(open.ticket(), Some("99"));
+    assert_eq!(
+        open.expectations().len(),
+        1,
+        "a filed cell names one expectation: what it will assert once the ticket lands"
+    );
+    assert_eq!(
+        open.check(),
+        Ok(()),
+        "the gap is still open, so the row is correctly filed"
+    );
+
+    let closed = synthetic(Verdict::Filed {
+        ticket: "99",
+        fixture: "simple",
+        want: A_PRESENT_EDGE,
+    });
+    let why = closed
+        .check()
+        .expect_err("a filed row whose gap has closed must fail rather than stay filed");
+    assert!(
+        why.contains("this row now PASSES") && why.contains("ticket 99"),
+        "the failure must name the ticket to close and the move to make: {why}"
+    );
+}
+
+#[test]
+fn a_vacuous_cell_asserts_its_guard_and_fails_once_the_guard_could_fail() {
+    let vacuous = synthetic(Verdict::Vacuous {
+        ticket: "99",
+        fixture: "simple",
+        guard: A_GUARD_THAT_HOLDS,
+        vacuous_until: AN_ABSENT_EDGE,
+        because: "synthetic: nothing in this map can trip the guard",
+    });
+    assert_eq!(
+        vacuous.status(),
+        "vacuous (99)",
+        "a vacuous cell must not render as a pass"
+    );
+    assert_eq!(vacuous.ticket(), Some("99"));
+    assert_eq!(
+        vacuous.expectations().len(),
+        2,
+        "a vacuous cell names two: the guard, and the arrival that ends the vacuity"
+    );
+    assert_eq!(vacuous.check(), Ok(()));
+
+    // The guard is asserted anyway — that is the half that separates a vacuous
+    // cell from a cell that runs nothing at all.
+    let broken = synthetic(Verdict::Vacuous {
+        ticket: "99",
+        fixture: "simple",
+        guard: A_GUARD_THAT_FAILS,
+        vacuous_until: AN_ABSENT_EDGE,
+        because: "synthetic: nothing in this map can trip the guard",
+    });
+    let why = broken
+        .check()
+        .expect_err("a vacuous cell still asserts its guard");
+    assert!(
+        why.contains("fabricated calls edge"),
+        "the failure must be the guard's own, not the vacuity's: {why}"
+    );
+
+    // And the moment the awaited expectation holds, the cell stops being
+    // vacuous and says so rather than sliding into a silent pass.
+    let arrived = synthetic(Verdict::Vacuous {
+        ticket: "99",
+        fixture: "simple",
+        guard: A_GUARD_THAT_HOLDS,
+        vacuous_until: A_PRESENT_EDGE,
+        because: "synthetic: nothing in this map can trip the guard",
+    });
+    let why = arrived
+        .check()
+        .expect_err("a cell that can now fail must not go on calling itself vacuous");
+    assert!(
+        why.contains("no longer vacuous") && why.contains("ticket 99"),
+        "the failure must name the ticket that landed and demand a re-proof: {why}"
+    );
 }
