@@ -41,6 +41,11 @@ describe("folding the side panel", () => {
     await user.click(screen.getByRole("button", { name: "Hide the side panel" }));
 
     expect(panel()).toBeNull();
+    // The class is the jsdom half of story 22's space claim: this proves the
+    // gesture applies it, and tests/stylesheet-contract.test.ts proves the
+    // class narrows the grid track it names. Neither alone says the canvas
+    // grew; together they leave only the CSS engine to trust.
+    expect(document.querySelector(".workspace")?.classList.contains("workspace-folded")).toBe(true);
     // The rail is the whole point: a fold with no visible way back is a
     // feature that loses the reader their panel permanently.
     const back = screen.getByRole("button", { name: /Panel/ });

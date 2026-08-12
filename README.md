@@ -114,18 +114,82 @@ There are two providers, chosen with `--provider` or
 
 - **`claude`** — the Claude API. Credentials resolve like the official SDKs:
   `ANTHROPIC_API_KEY` first, then an `ant auth login` profile. The default
-  model is `claude-opus-5` (`--model` overrides).
+  model is `claude-opus-5` (`--model` overrides). Billed per token, to the
+  key's account.
 - **`cli:claude`** — the Claude CLI you are already logged into, spawned as a
   one-shot completion with no tools and no MCP servers. CodeAtlas never
   handles a credential, which is the point: an API key is out of reach in
-  plenty of organisations.
+  plenty of organisations. Draws on the CLI's own subscription allowance;
+  `ANTHROPIC_API_KEY` is deliberately stripped from the child's environment.
 
-Prompts are bounded on both — the model receives the slots being filled and
-summarized topology, never the serialized graph and never file contents.
+**Name the provider.** On a default build, plain `scan --enrich` falls
+through to `claude` — the API-key path — because that is the build's default
+backend. If you mean your subscription, say so; the absence of a flag is not
+a choice:
+
+```sh
+codeatlas scan . --enrich --provider cli:claude
+```
+
+### Running it
+
+Ask what it would cost before spending anything:
+
+```sh
+codeatlas scan . --enrich --dry-run --provider cli:claude
+```
+
+Every enrichment run states its price up front and reports progress as it
+goes — one line per batch, the same on a terminal and in a log. The shape
+(the numbers are one repository on one day, not a promise):
+
+```text
+mapped 287 files
+enriching: 1651 slots in 67 calls: roughly 146k–194k tokens of prompt,
+plus perhaps 41k–74k more coming back
+  batch 1/67 — 25 slots filled
+  batch 2/67 — 50 slots filled
+  …
+enriched 1651 slots
+```
+
+The token figure is a range because there is no local tokenizer and a single
+number would be a guess wearing a lab coat; the call count is exact, computed
+by the same code that then makes the calls. No price is ever printed — rates
+move, and on `cli:claude` there is no monetary price at all.
+
+Batches run four at a time, and **every answered batch is saved as it
+lands**. Interrupting a run — Ctrl-C, a rate limit, a dropped connection —
+keeps everything already bought: the failure message says how much survived,
+and the next `--enrich` re-purchases only what is missing. A re-run after an
+edit costs only the edited files' slots, which the estimate line will show
+you before it spends:
+
+```text
+enriching: 9 slots in 1 calls: roughly 782–1k tokens of prompt, …
+```
+
+Prompts are bounded on both providers — the model receives the slots being
+filled and summarized topology, never the serialized graph and never file
+contents.
+
+### Asking the map questions
 
 `serve --ask` reaches the same providers for a different purpose: a question
-about the map, answered from a bounded slice of the map alone, citing the node
-IDs the answer came from.
+about the map, answered from a bounded slice of the map alone, citing the
+node IDs the answer came from. Same rule as `--enrich` — name the provider,
+or the default build quietly picks the API key:
+
+```sh
+codeatlas serve . --port 4173 --ask --provider cli:claude
+```
+
+The dashboard notices by itself (`GET /api/capabilities`): the search field
+grows an **Ask** button and its placeholder says a question is welcome.
+Without `--ask` the feature is hidden entirely — a server that cannot answer
+must not advertise — and the terminal tells you the flag exists instead.
+Every question is one provider call; an enriched map answers far better than
+a structural one, because the answer is drawn from the map's own prose.
 
 ## Security
 

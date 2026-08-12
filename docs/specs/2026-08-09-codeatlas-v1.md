@@ -486,9 +486,9 @@ for the model. No walk step called a real model or spent anything.
 | 17 | Dashboard zero external requests | **pass** | netns egress suite live; artifact grep 0 external refs |
 | 18 | Enrichment arrives with the repository | **pass** | **new axis**: plain `git clone` + credential-free scan → 1127 nodes and the layer names carry committed prose |
 | 19 | CLI enrichment, no credential handled | **pass²** | `ANTHROPIC_API_KEY` set in the parent, `UNSET` in the child's recorded environment, twice |
-| 20 | Interface walkthrough | **unverifiable** | behaviour suite-tested; *placement* — the exact property that failed twice on 2026-08-12 — unseen since the second fix (`64b442b`) |
+| 20 | Interface walkthrough | **fail → fixed, pass³** | the user's walk falsified "unverifiable" within the hour: step 7 painted the card *under* the lit canvas (`[data-walkthrough-lit]` at z-101 rose above the overlay's 100, so the card's local 102 lost at root). Third placement bug in two days, third distinct cause. Fixed by deleting the raise — the dim is a box-shadow ring, the hole is transparent, nothing needed raising |
 | 21 | Ask the map a question | **pass** | user-witnessed live answer with citations (2026-08-12 screenshot, real `cli:claude`); plus full seam walk — real citation kept, invented citation dropped, 415 without JSON content type, 405 without `--ask`, honest capabilities both ways |
-| 22 | Panel and chips fold away | **unverifiable** | by the story's own text: fold behaviour suite-tested, but whether the canvas *gets the space* is visible only to eyes |
+| 22 | Panel and chips fold away | **pass³** | the chain closed: gesture → `.workspace-folded` (jsdom) → 30px vs 360px first grid track (stylesheet contract) → second track is `1fr`, so every surrendered pixel is the canvas's |
 | 23 | Plain serve says how to turn questions on | **pass** | hint printed by this walk's default binary; sealed binary's silence + control liveness inside the 11-check probe |
 
 ¹ data and behaviour walked against real binaries and real maps; layout and
@@ -497,6 +497,21 @@ items, with what *wrong* looks like for each, are
 `.scratch/codeatlas-v1/browser-walk.md`.
 ² through the `fake:`/`cli-exec:` seams: real spawn, real argv, real
 environment, no real model and no spend.
+³ by a closed chain rather than a browser: component tests prove the gesture
+produces the state, and `tests/stylesheet-contract.test.ts` proves the state
+means the geometry/stacking claimed, against the real `styles.css` with its
+comments stripped. What remains untested is the CSS engine itself. The
+contract file exists because three walkthrough bugs in two days each lived in
+the one link no jsdom test could see; each of its assertions names the
+shipped bug that returns if it reds, and all four tampers redden.
+
+**Addendum, same day.** Story 20's "unverifiable" did not survive contact
+with the user's eyes: the sixth walk's table originally carried it, the user
+walked the feature, and step 7 failed in a way none of the placement
+arithmetic could catch — a stacking-context loss, not a coordinate. The
+verdicts above are the post-fix state. The lesson already in this section
+sharpened: the ¹ stories' paint halves are not "probably fine", they are
+exactly where three consecutive real bugs lived.
 
 **Failures: none.** Nothing to file, nothing to route to `/debug`.
 
@@ -513,8 +528,8 @@ answer citing that map's nodes (4+21); four enrichment failures leaving a
 servable map (14); edit → diff → overlay served (7); share built from the
 enriched map (8+10).
 
-**Unverifiable, and what accepting them means:** stories 20 and 22 outright,
-plus the paint half of every ¹ story. All of it is one fifteen-minute session
+**Unverifiable, and what accepting them means:** the paint half of every
+¹ story (stories 20 and 22 have since closed — see ³ and the addendum). All of it is one fifteen-minute session
 at `http://127.0.0.1:4173/` following `browser-walk.md` — a checklist whose
 suspects each name a specific reason to distrust, not a once-over. On
 2026-08-12 exactly this gap hid two real clipping bugs behind 181 green

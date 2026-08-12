@@ -2018,11 +2018,18 @@ button.crumb:hover {
 
 /* The lit control keeps its own colours: the point of a spotlight on the
  * live interface rather than a picture of it is that the reader is looking
- * at the thing they will use. */
-[data-walkthrough-lit] {
-  position: relative;
-  z-index: 101;
-}
+ * at the thing they will use.
+ *
+ * `[data-walkthrough-lit]` deliberately has NO rule, and the absence is a
+ * guarded invariant (tests/stylesheet-contract.test.ts), because the rule it
+ * used to have is a shipped bug: `z-index: 101` raised the lit element above
+ * the whole overlay (100), and since the card's 102 is *local* to the
+ * overlay's stacking context, the target painted over the card wherever the
+ * two overlapped. Only the canvas step has a target the card cannot avoid,
+ * so eleven steps looked fine and step 7 cut the card off at the canvas's
+ * top edge. The raise was always redundant: the dim is the spotlight's
+ * box-shadow ring, the hole in it is genuinely transparent, and the target
+ * shows through at its natural layer with nothing raised at all. */
 
 /* The card is never larger than the window less a gap at each edge. That is
  * not cosmetic: `Walkthrough.tsx` clamps the card's `top` and `left` into
