@@ -440,7 +440,89 @@ boundaries; no test reaches into pipeline internals.
 
 ## Verification
 
-`/harden` has walked all 17 user stories against the assembled system five
+`/harden` has walked the user stories against the assembled system six times
+— five walks of the original 17 stories, then a sixth walk (**2026-08-12**,
+baseline `21bd4ed`) of all **23**, after the second implementation run closed
+tickets 26–35, 37, 39–42 and 44 and stories 18–23 entered the spec.
+
+### The sixth walk — 2026-08-12, baseline `21bd4ed`
+
+**Preflight deviation, stated rather than buried:** tickets 36, 38 and 43 are
+not `done` but `deferred — after V1`, each by the user's recorded decision of
+2026-08-12. Descoped is not half-built, so the walk proceeded.
+
+The fifth walk told the sixth to probe an axis no earlier walk had touched.
+Two existed for the first time and both were probed to the bottom:
+**real model-written prose through the share redaction** (walks 1–5 predate
+the committed annotation store; this repository now carries 403 KB of prose
+bought from a real `cli:claude` run), and **enrichment economics** — the
+delta re-purchase, the hash gate, and failure behaviour, all of which gained
+machinery (tickets 40 and 42) after the fifth walk.
+
+Everything was driven through real binaries built at `21bd4ed` — a default
+release, a sealed `--no-default-features` release, and a `test-provider`
+debug build for the enrichment seam — against fresh `git clone`s, over real
+HTTP on 127.0.0.1, with the `fake:`, `fail` and `cli-exec:` seams standing in
+for the model. No walk step called a real model or spent anything.
+
+| # | Story | Verdict | Evidence, one line |
+|---|-------|---------|--------------------|
+| 1 | Structural map in seconds, no LLM | **pass** | fresh clone, 287 files mapped in 0.16 s, no provider in the environment |
+| 2 | Relationship conventions checklist | **pass** | the 84-cell fixture table: every cell pass or n/a, 0 filed, 0 vacuous; the filed-cell mechanism has its own guard |
+| 3 | Interactive dashboard | **pass¹** | data paths walked (map served, search/detail/grouping via the 190-test suite at `21bd4ed`); paint unseen |
+| 4 | Opt-in enrichment fills prose slots | **pass** | 1651 slots — 1307 summaries, 8 layers, 324 flows, 12 tour — filled through `fake:`, all four kinds flipped to `llm` |
+| 5 | Re-runs re-purchase only the delta | **pass** | one edited file → `enriching: 9 slots in 1 calls`, exactly that file's nodes; estimate printed by the run itself |
+| 6 | Domain flows and ordered tour | **pass¹** | 12/12 tour steps and 324 flows in the walked map; ordering and panel behaviour by suite; paint unseen |
+| 7 | Diff blast radius | **pass¹** | real edit → 15 changed + 10 affected; every id resolves; all 3 one-hop importers marked; overlay paint unseen |
+| 8 | Self-contained redacted export | **pass¹** | **new axis**: 3 real enriched sentences + 2 enriched layer names verbatim-absent from a 1.3 MB artifact; 0 external refs; `file://` rendering unseen |
+| 9 | Sealed build + egress suite | **pass** | 11-check probe against this walk's binaries, controls live; 6 netns egress tests green |
+| 10 | Artifact discloses redaction | **pass** | binary reported `×1127/×6/×302/×9` redacted; disclosure text present in artifact |
+| 11 | Graph rebuilt from scratch | **pass** | deleted file's 8 nodes gone on next scan; new file arrives `structural` |
+| 12 | Reattach only on unchanged hash | **pass** | edited file's 9 nodes reverted, 1299 untouched kept prose; walked twice after a probe error was caught and redone |
+| 13 | Schema-guaranteed structured output | **pass²** | `--json-schema` in recorded argv; well-formed envelope lands in typed slots; garbage refused with no repair |
+| 14 | Enrichment failure leaves valid map | **pass²** | four modes (garbage, exit 3, not installed, `fail`) — actionable message + byte-identical map each time |
+| 15 | Unparseable files still map | **pass** | broken-syntax `.rs` and a `.f90` both present as file nodes |
+| 16 | Published semver schema | **pass** | `urn:codeatlas:map-contract:0.3.1`; walked map validates (contract suite) |
+| 17 | Dashboard zero external requests | **pass** | netns egress suite live; artifact grep 0 external refs |
+| 18 | Enrichment arrives with the repository | **pass** | **new axis**: plain `git clone` + credential-free scan → 1127 nodes and the layer names carry committed prose |
+| 19 | CLI enrichment, no credential handled | **pass²** | `ANTHROPIC_API_KEY` set in the parent, `UNSET` in the child's recorded environment, twice |
+| 20 | Interface walkthrough | **unverifiable** | behaviour suite-tested; *placement* — the exact property that failed twice on 2026-08-12 — unseen since the second fix (`64b442b`) |
+| 21 | Ask the map a question | **pass** | user-witnessed live answer with citations (2026-08-12 screenshot, real `cli:claude`); plus full seam walk — real citation kept, invented citation dropped, 415 without JSON content type, 405 without `--ask`, honest capabilities both ways |
+| 22 | Panel and chips fold away | **unverifiable** | by the story's own text: fold behaviour suite-tested, but whether the canvas *gets the space* is visible only to eyes |
+| 23 | Plain serve says how to turn questions on | **pass** | hint printed by this walk's default binary; sealed binary's silence + control liveness inside the 11-check probe |
+
+¹ data and behaviour walked against real binaries and real maps; layout and
+paint have never been seen by anyone for these stories — the specific look
+items, with what *wrong* looks like for each, are
+`.scratch/codeatlas-v1/browser-walk.md`.
+² through the `fake:`/`cli-exec:` seams: real spawn, real argv, real
+environment, no real model and no spend.
+
+**Failures: none.** Nothing to file, nothing to route to `/debug`.
+
+**Walk errors corrected mid-walk, recorded because verification that hides
+its own misfires is worth less:** the S12 probe first *created* a file where
+it meant to edit one (walking "new file arrives structural" by accident —
+also true, also recorded) and was redone against a genuinely edited file; the
+S13 stub first emitted the wrong envelope shape and the "failure" was the
+probe's, not the product's.
+
+**Between the slices**, walked end-to-end rather than per story: clone →
+scan → reattach → serve (18+3); scan → enrich → serve → ask on one map, the
+answer citing that map's nodes (4+21); four enrichment failures leaving a
+servable map (14); edit → diff → overlay served (7); share built from the
+enriched map (8+10).
+
+**Unverifiable, and what accepting them means:** stories 20 and 22 outright,
+plus the paint half of every ¹ story. All of it is one fifteen-minute session
+at `http://127.0.0.1:4173/` following `browser-walk.md` — a checklist whose
+suspects each name a specific reason to distrust, not a once-over. On
+2026-08-12 exactly this gap hid two real clipping bugs behind 181 green
+tests. **Shipped means these are walked, or accepted by name below.**
+
+*Acceptance:* — pending.
+
+`/harden` had previously walked the original 17 stories five
 times. The first walk (**2026-08-09**, baseline `0a523da`) found one failure,
 story 6, and filed it as ticket 16. The second walk (**2026-08-10**, baseline
 `be320b1`, after ticket 16 landed) re-walked every story, not just the failed
