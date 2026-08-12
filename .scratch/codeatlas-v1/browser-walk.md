@@ -51,6 +51,55 @@ map instead of reading JSON"*
   — `structural` twice, once meaning the grouping mode and once the
   provenance. Known wart, undecided; judge whether it actually confuses.
 
+### Story 3, continued — the FILES tab
+
+Changed 2026-08-12 and never looked at. It used to render all 285 files flat,
+with `.scratch`'s 45 pushing the other seven regions off the bottom.
+
+7. Open **FILES**. It should show **eight folded headings** with counts, and
+   **no file rows at all**.
+8. Press a heading. It expands; press again, it folds. Open two at once and
+   close one — the other stays open.
+9. Type `serve` into **Filter these files by path…**. Only matching rows
+   survive, regions with no matches disappear entirely, and the counts of the
+   ones left switch to `2 of 159`.
+10. Clear the filter. Everything should go back to folded — not to
+    all-expanded.
+11. Expand `.scratch` (45 files) and scroll it.
+
+**Suspect:**
+- **Does the folded default read as "expand me" or as "nothing here"?** This
+  is the biggest risk in the change and the one thing no test can see. Eight
+  headings and eight counts is meant to be the shape of the repository; if it
+  reads as an empty panel, the default is wrong and should flip.
+- **The sticky filter's offset.** It pins directly beneath the tab strip, and
+  the first version guessed `42px` against a strip that measures 48 — which
+  parked the filter *underneath* a bar with a higher z-index. Both now read
+  one `--tabs-height`, so they cannot drift, but 48 is arithmetic off the CSS
+  rather than anything anyone has seen rendered. **Scroll a long region and
+  watch the boundary**: a sliver of file row visible above the filter, or a
+  gap of panel background under the tabs, means the number is wrong.
+- **Two search boxes on one screen.** The header's *Search nodes* and this
+  *Filter these files by path…* now sit within a few hundred pixels of each
+  other and do different things — the first leaves and takes you somewhere,
+  the second narrows what is in front of you. The distinction is argued at
+  length in the code and has never been seen by anyone. If you cannot tell
+  which one you are typing into, the argument was wrong.
+- **`2 of 159` wrapping** the heading onto a second line, or colliding with a
+  long model-written region name.
+- **The chevron at 9px** — legible, or a smudge?
+- **Truncated paths.** `.scratch/codeatlas-v1/01-walking-skeleton-scan-to-ma…`
+  was already ellipsised before this change. With rows now appearing only when
+  asked for, is the truncation more annoying or less?
+
+**Known, and a judgement call rather than a defect:** the filter and which
+regions you expanded are component state, and the panel is **unmounted** both
+when you switch to INFO and when you fold the sidebar (story 22 folds by
+unmounting, deliberately, so the walkthrough skips the step). So switching
+tabs or folding the panel resets the filter and re-folds every region. That is
+cheap to change — hoist the state into `MapExplorer` — and has not been
+changed, because nobody has yet found it annoying. Decide whether you do.
+
 ## Story 6 — domain flows and the guided tour
 
 *"so that I learn the architecture in the order it makes sense"*

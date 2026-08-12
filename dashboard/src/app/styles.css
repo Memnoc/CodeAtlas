@@ -1166,18 +1166,25 @@ button.crumb:hover {
 /* ── Right panel ──────────────────────────────────────────────────────── */
 
 .rightpanel {
+  --tabs-height: 48px;
   overflow-y: auto;
   padding: 0 16px 24px;
   background: var(--panel);
   border-right: 1px solid var(--border);
 }
 
+/* The height is stated rather than left to the content because the files
+   filter sticks directly beneath it and needs the number. Two rules sharing
+   one custom property cannot drift; a literal in each could, and did — the
+   first version guessed 42px against a strip that measures 48, which parked
+   the filter underneath a bar with a higher z-index. */
 .tabs {
   position: sticky;
   top: 0;
   z-index: 5;
   display: flex;
   gap: 4px;
+  height: var(--tabs-height);
   padding: 10px 0;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
@@ -1395,7 +1402,7 @@ button.crumb:hover {
    and a filter you have to scroll back up to change is one you stop using. */
 .files-filter {
   position: sticky;
-  top: 42px;
+  top: var(--tabs-height);
   z-index: 4;
   width: 100%;
   margin-top: 10px;
