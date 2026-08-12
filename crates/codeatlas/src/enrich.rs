@@ -43,6 +43,9 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc;
+use std::thread;
 
 use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
@@ -72,6 +75,20 @@ pub const PROVIDER_ENV: &str = "CODEATLAS_ENRICH_PROVIDER";
 /// prompt at a few KB and the structured response comfortably inside one
 /// completion; larger repos simply make more requests.
 pub const BATCH_SIZE: usize = 25;
+
+/// How many batches are in flight at once.
+///
+/// Deliberately small. The ceiling here is not this machine — it is the
+/// reader's rate limit, and the cost of guessing too high is their money or
+/// their subscription allowance, not a slow run: a backend that starts
+/// refusing turns a long enrichment into a failed one. Four takes a measured
+/// 44-minute run on this repository (64 batches at ~41s) to something under
+/// twelve, which is enough of a win not to need pushing.
+///
+/// Every backend this can drive is a network call or a process spawn, so the
+/// threads are asleep almost all of the time; this is not sized against cores
+/// and must not be.
+pub const ENRICH_CONCURRENCY: usize = 4;
 
 /// The most step function names a flow slot carries into a prompt. A flow's
 /// chain walks everything reachable from its entry point, so its length
@@ -239,11 +256,17 @@ pub trait EnrichmentProvider {
 /// A provider ready to be shared between the threads of `serve --ask`.
 ///
 /// The auto-trait bounds live on the boxed selection rather than on
-/// [`EnrichmentProvider`] itself: every spec-selectable backend holds a
-/// string or a path and is trivially both, while the in-process test doubles
-/// record what they were asked through a `RefCell` and are neither. Putting
-/// the bounds here keeps the server sound without making every test double
-/// pay for a thread it will never cross.
+/// [`EnrichmentProvider`] itself: every spec-selectable backend holds a string
+/// or a path and is trivially both, and a trait that demanded them of every
+/// implementor would be demanding them of implementors outside this crate for
+/// no reason of its own.
+///
+/// `Sync` alone is not confined here, and the comment that used to say so was
+/// made false by [`fill_slots_with`] running batches concurrently: the test
+/// doubles that record what they were asked used to do it through a `RefCell`,
+/// and now do it through a `Mutex`. That is the whole cost, and it is the
+/// right side of the trade — a double that cannot cross a thread cannot
+/// observe the concurrency it is being used to test.
 pub type SelectedProvider = Box<dyn EnrichmentProvider + Send + Sync>;
 
 /// The same provider once `serve --ask` has to hand it to every connection
@@ -696,8 +719,16 @@ pub fn run(root: &Path, graph: &mut KnowledgeGraph, choice: ProviderChoice<'_>) 
         return Ok(Outcome::NothingToEnrich);
     }
     let provider = resolve_provider(choice)?;
-    let count = fill_slots(graph, provider.as_ref())?;
-    save_store(root, graph, provider.identity())?;
+    let identity = provider.identity();
+    // The store is written after every batch, so an interrupted or failed run
+    // keeps everything it already paid for: the next `--enrich` reattaches
+    // those annotations by content hash and asks only for what is left. The
+    // *map* is still written once, at the end, and only on success — so a
+    // partially enriched `knowledge-graph.json` is never observable, which is
+    // the guarantee the old all-or-nothing version was really defending.
+    let count = fill_slots_with(graph, provider.as_ref(), &mut |graph| {
+        save_store(root, graph, identity.clone())
+    })?;
     crate::scan::save(root, graph)?;
     Ok(Outcome::Enriched(count))
 }
@@ -822,26 +853,124 @@ fn answered<'a>(answers: &'a BTreeMap<String, String>, key: &str) -> Option<&'a 
 /// slot key (see [`EnrichmentSlot::key`]), so an answer can only land in
 /// the slot it was written for. Any batch error fails the whole step: the
 /// caller never saves a partially-purchased run.
-pub fn fill_slots(graph: &mut KnowledgeGraph, provider: &dyn EnrichmentProvider) -> Result<usize> {
+pub fn fill_slots(
+    graph: &mut KnowledgeGraph,
+    provider: &(dyn EnrichmentProvider + Sync),
+) -> Result<usize> {
+    fill_slots_with(graph, provider, &mut |_| Ok(()))
+}
+
+/// [`fill_slots`], plus a `checkpoint` invoked after each batch's answers have
+/// been applied to `graph`.
+///
+/// **The checkpoint is the point of this function.** Before it existed, every
+/// answer accumulated in memory and nothing was durable until all of them had
+/// landed — so a `Ctrl-C` thirty minutes into a thirty-five minute run threw
+/// away all sixty-four purchases, and so did one transient failure on batch
+/// sixty-three. `fill_slots`'s own doc comment defended that as never saving a
+/// partially-purchased run, and the intent was right while the conclusion was
+/// not: refusing to ship a *half-enriched map* and discarding *sixty-three
+/// successful answers* are different things, and they separate cleanly. The
+/// caller checkpoints the annotation store, which is keyed and idempotent, and
+/// still writes the map exactly once when the whole run has succeeded.
+///
+/// Batches run [`ENRICH_CONCURRENCY`] at a time. Answers are addressed by slot
+/// key, so which order they come back in cannot change the result — but they
+/// are applied on this thread as they arrive, in completion order, because
+/// `graph` is `&mut` and the checkpoint has to see each batch's work.
+pub fn fill_slots_with(
+    graph: &mut KnowledgeGraph,
+    provider: &(dyn EnrichmentProvider + Sync),
+    checkpoint: &mut dyn FnMut(&KnowledgeGraph) -> Result<()>,
+) -> Result<usize> {
     let slots = collect_slots(graph);
     if slots.is_empty() {
         return Ok(0);
     }
-    let mut answers: BTreeMap<String, String> = BTreeMap::new();
-    for batch in slots.chunks(BATCH_SIZE) {
-        let request = EnrichmentRequest {
+    let requests: Vec<EnrichmentRequest> = slots
+        .chunks(BATCH_SIZE)
+        .map(|batch| EnrichmentRequest {
             project: graph.project.name.clone(),
             slots: batch.to_vec(),
-        };
-        answers.extend(provider.enrich(&request)?.answers);
-    }
+        })
+        .collect();
 
+    let mut count = 0;
+    let mut failure: Option<anyhow::Error> = None;
+    let next = AtomicUsize::new(0);
+    // Set by the first failure. In-flight batches are allowed to finish and be
+    // applied — they are already paid for — but no new one is started, because
+    // the realistic reason a batch fails is a rate limit, and racing more
+    // requests at a backend that just refused one spends the reader's
+    // allowance to make the refusal worse.
+    let stop = AtomicBool::new(false);
+    let (send, results) = mpsc::channel::<Result<EnrichmentResponse>>();
+
+    thread::scope(|scope| {
+        for _ in 0..ENRICH_CONCURRENCY.min(requests.len()) {
+            let send = send.clone();
+            let next = &next;
+            let stop = &stop;
+            let requests = &requests;
+            scope.spawn(move || {
+                loop {
+                    if stop.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(request) = requests.get(index) else {
+                        return;
+                    };
+                    let outcome = provider.enrich(request);
+                    let failed = outcome.is_err();
+                    if send.send(outcome).is_err() || failed {
+                        return;
+                    }
+                }
+            });
+        }
+        // The loop below ends when every worker has dropped its sender, so
+        // this thread must not hold one of its own.
+        drop(send);
+
+        for outcome in results {
+            match outcome {
+                Ok(response) => {
+                    count += apply_answers(graph, &response.answers);
+                    if let Err(err) = checkpoint(graph) {
+                        stop.store(true, Ordering::Relaxed);
+                        failure.get_or_insert(err);
+                    }
+                }
+                Err(err) => {
+                    stop.store(true, Ordering::Relaxed);
+                    failure.get_or_insert(err);
+                }
+            }
+        }
+    });
+
+    match failure {
+        // Whatever succeeded before the failure has already been applied and
+        // checkpointed. The error still propagates, so the caller does not
+        // write a map it only half enriched.
+        Some(err) => Err(err),
+        None => Ok(count),
+    }
+}
+
+/// Fills whichever slots `answers` addresses, returning how many changed.
+/// Split out of [`fill_slots_with`] so a batch can be applied the moment it
+/// lands rather than at the end of the run. Answers are addressed by slot key,
+/// so an answer can only reach the slot it was written for and applying two
+/// batches in either order gives the same graph.
+fn apply_answers(graph: &mut KnowledgeGraph, answers: &BTreeMap<String, String>) -> usize {
     let mut count = 0;
     for node in &mut graph.nodes {
         if node.provenance != Provenance::Structural {
             continue;
         }
-        if let Some(text) = answered(&answers, &summary_key(node.id.as_str())) {
+        if let Some(text) = answered(answers, &summary_key(node.id.as_str())) {
             node.summary = text.to_string();
             node.provenance = Provenance::Llm;
             count += 1;
@@ -851,7 +980,7 @@ pub fn fill_slots(graph: &mut KnowledgeGraph, provider: &dyn EnrichmentProvider)
         if layer.provenance != Provenance::Structural {
             continue;
         }
-        if let Some(text) = answered(&answers, &layer_key(&layer.id)) {
+        if let Some(text) = answered(answers, &layer_key(&layer.id)) {
             layer.name = text.to_string();
             layer.provenance = Provenance::Llm;
             count += 1;
@@ -861,7 +990,7 @@ pub fn fill_slots(graph: &mut KnowledgeGraph, provider: &dyn EnrichmentProvider)
         if flow.provenance != Provenance::Structural {
             continue;
         }
-        if let Some(text) = answered(&answers, &flow_key(&flow.id)) {
+        if let Some(text) = answered(answers, &flow_key(&flow.id)) {
             flow.name = text.to_string();
             flow.provenance = Provenance::Llm;
             count += 1;
@@ -871,13 +1000,13 @@ pub fn fill_slots(graph: &mut KnowledgeGraph, provider: &dyn EnrichmentProvider)
         if step.provenance != Provenance::Structural {
             continue;
         }
-        if let Some(text) = answered(&answers, &tour_key(step.node.as_str())) {
+        if let Some(text) = answered(answers, &tour_key(step.node.as_str())) {
             step.label = text.to_string();
             step.provenance = Provenance::Llm;
             count += 1;
         }
     }
-    Ok(count)
+    count
 }
 
 /// How the caller wants enrichment performed: which backend, and which model
@@ -1140,7 +1269,8 @@ mod tests {
     //! typed responses (or errors), and the assertions are about what
     //! reaches the provider and what lands in the graph's slots.
 
-    use std::cell::RefCell;
+    use std::sync::Mutex;
+    use std::time::Duration;
 
     use super::*;
     use crate::map::{DomainFlow, Layer, Node, NodeKind, Project, TourStep};
@@ -1391,13 +1521,14 @@ mod tests {
     /// Canned answers plus a recording of every request's slot keys.
     struct Fake {
         answers: BTreeMap<String, String>,
-        requested: RefCell<Vec<String>>,
+        requested: Mutex<Vec<String>>,
     }
 
     impl EnrichmentProvider for Fake {
         fn enrich(&self, request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
             self.requested
-                .borrow_mut()
+                .lock()
+                .unwrap()
                 .extend(request.slots.iter().map(EnrichmentSlot::key));
             Ok(EnrichmentResponse {
                 answers: self.answers.clone(),
@@ -1413,7 +1544,7 @@ mod tests {
                 "summary:function:src/a.ts:go".to_string(),
                 "Runs the whole show.".to_string(),
             )]),
-            requested: RefCell::new(Vec::new()),
+            requested: Mutex::new(Vec::new()),
         };
 
         let count = fill_slots(&mut graph, &fake).unwrap();
@@ -1421,7 +1552,7 @@ mod tests {
 
         // The already-enriched node was never offered to the provider.
         assert_eq!(
-            *fake.requested.borrow(),
+            *fake.requested.lock().unwrap(),
             vec![
                 "summary:file:src/a.ts".to_string(),
                 "summary:function:src/a.ts:go".to_string()
@@ -1454,14 +1585,14 @@ mod tests {
                     "Start here: the app's front door.".to_string(),
                 ),
             ]),
-            requested: RefCell::new(Vec::new()),
+            requested: Mutex::new(Vec::new()),
         };
 
         let count = fill_slots(&mut graph, &fake).unwrap();
         assert_eq!(count, 3, "three semantic answers must count as enrichment");
 
         // The semantic slots were offered alongside the node slots.
-        let requested = fake.requested.borrow();
+        let requested = fake.requested.lock().unwrap();
         for key in [
             "layer-name:src",
             "flow-name:flow:function:src/a.ts:go",
@@ -1510,7 +1641,7 @@ mod tests {
                     "Unprefixed — must land nowhere.".to_string(),
                 ),
             ]),
-            requested: RefCell::new(Vec::new()),
+            requested: Mutex::new(Vec::new()),
         };
 
         fill_slots(&mut graph, &fake).unwrap();
@@ -1548,14 +1679,14 @@ mod tests {
                     "MUST NOT APPLY".to_string(),
                 ),
             ]),
-            requested: RefCell::new(Vec::new()),
+            requested: Mutex::new(Vec::new()),
         };
 
         let count = fill_slots(&mut graph, &fake).unwrap();
         assert_eq!(count, 0);
 
         // Carried-over semantics are never re-sent (ADR-0005) …
-        for key in fake.requested.borrow().iter() {
+        for key in fake.requested.lock().unwrap().iter() {
             assert!(
                 key.starts_with("summary:"),
                 "an enriched semantic slot was re-offered: {key}"
@@ -1574,12 +1705,13 @@ mod tests {
     fn flow_slots_stay_bounded_however_long_the_chain_grows() {
         /// Records every slot offered, answering nothing.
         struct Recording {
-            slots: RefCell<Vec<EnrichmentSlot>>,
+            slots: Mutex<Vec<EnrichmentSlot>>,
         }
         impl EnrichmentProvider for Recording {
             fn enrich(&self, request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
                 self.slots
-                    .borrow_mut()
+                    .lock()
+                    .unwrap()
                     .extend(request.slots.iter().cloned());
                 Ok(EnrichmentResponse::default())
             }
@@ -1591,11 +1723,11 @@ mod tests {
             .collect();
 
         let provider = Recording {
-            slots: RefCell::new(Vec::new()),
+            slots: Mutex::new(Vec::new()),
         };
         fill_slots(&mut graph, &provider).unwrap();
 
-        let slots = provider.slots.borrow();
+        let slots = provider.slots.lock().unwrap();
         let flow = slots
             .iter()
             .find_map(|s| match s {
@@ -1617,11 +1749,11 @@ mod tests {
         /// of each request — the bounded-prompt property observed at the
         /// provider seam.
         struct Batching {
-            request_sizes: RefCell<Vec<usize>>,
+            request_sizes: Mutex<Vec<usize>>,
         }
         impl EnrichmentProvider for Batching {
             fn enrich(&self, request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
-                self.request_sizes.borrow_mut().push(request.slots.len());
+                self.request_sizes.lock().unwrap().push(request.slots.len());
                 Ok(EnrichmentResponse {
                     answers: request
                         .slots
@@ -1648,12 +1780,12 @@ mod tests {
             .collect();
 
         let provider = Batching {
-            request_sizes: RefCell::new(Vec::new()),
+            request_sizes: Mutex::new(Vec::new()),
         };
         let count = fill_slots(&mut graph, &provider).unwrap();
         assert_eq!(count, total);
 
-        let sizes = provider.request_sizes.borrow();
+        let sizes = provider.request_sizes.lock().unwrap();
         assert!(
             sizes.iter().all(|&n| n <= BATCH_SIZE),
             "a request exceeded the batch bound {BATCH_SIZE}: {sizes:?}"
@@ -1680,7 +1812,7 @@ mod tests {
                     " \n\t ".to_string(),
                 ),
             ]),
-            requested: RefCell::new(Vec::new()),
+            requested: Mutex::new(Vec::new()),
         };
 
         let count = fill_slots(&mut graph, &fake).unwrap();
@@ -1706,7 +1838,7 @@ mod tests {
                 ),
                 ("tour-label:file:src/a.ts".to_string(), "\n\t".to_string()),
             ]),
-            requested: RefCell::new(Vec::new()),
+            requested: Mutex::new(Vec::new()),
         };
 
         let count = fill_slots(&mut graph, &fake).unwrap();
@@ -1731,7 +1863,7 @@ mod tests {
                 "summary:file:src/b.ts".to_string(),
                 "Sneaky overwrite.".to_string(),
             )]),
-            requested: RefCell::new(Vec::new()),
+            requested: Mutex::new(Vec::new()),
         };
 
         let count = fill_slots(&mut graph, &fake).unwrap();
@@ -1955,6 +2087,215 @@ mod tests {
             assert!(node.summary.starts_with("Mechanical summary"));
         }
         assert_eq!(graph.nodes[0].provenance, Provenance::Structural);
+    }
+
+    /// A graph of `files` file nodes and nothing else, so the batch count is
+    /// `files / BATCH_SIZE` and the arithmetic in these tests is legible.
+    fn files_graph(files: usize) -> KnowledgeGraph {
+        let mut graph = graph();
+        graph.layers.clear();
+        graph.domain_flows.clear();
+        graph.tour.clear();
+        graph.nodes = (0..files)
+            .map(|i| {
+                let path = format!("src/f{i}.ts");
+                node(
+                    NodeId::file(&path),
+                    NodeKind::File,
+                    &format!("f{i}.ts"),
+                    &path,
+                    Provenance::Structural,
+                )
+            })
+            .collect();
+        graph
+    }
+
+    /// Answers every slot it is offered, counting calls. `after` batches in,
+    /// it starts failing — which is how a rate limit arrives partway through a
+    /// long run, and the case in which throwing away what was already bought
+    /// costs the reader real money.
+    struct FailsAfter {
+        after: usize,
+        calls: Mutex<usize>,
+    }
+
+    impl FailsAfter {
+        fn new(after: usize) -> Self {
+            Self {
+                after,
+                calls: Mutex::new(0),
+            }
+        }
+        fn calls(&self) -> usize {
+            *self.calls.lock().unwrap()
+        }
+    }
+
+    impl EnrichmentProvider for FailsAfter {
+        fn enrich(&self, request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
+            let mine = {
+                let mut calls = self.calls.lock().unwrap();
+                *calls += 1;
+                *calls
+            };
+            if mine > self.after {
+                return Err(anyhow!("injected failure on call {mine}"));
+            }
+            Ok(EnrichmentResponse {
+                answers: request
+                    .slots
+                    .iter()
+                    .map(|s| (s.key(), format!("Prose for {}", s.key())))
+                    .collect(),
+            })
+        }
+    }
+
+    #[test]
+    fn a_failed_batch_does_not_discard_the_batches_that_succeeded() {
+        // The defect this is about: every answer used to accumulate in memory
+        // and nothing was durable until all of them landed, so one failure on
+        // the last batch of a sixty-four batch run threw away sixty-three
+        // purchases. The provider still fails and the error still propagates —
+        // what changed is that the work already bought survives it.
+        let mut graph = files_graph(4 * BATCH_SIZE);
+        let provider = FailsAfter::new(2);
+        let mut checkpointed: Vec<usize> = Vec::new();
+
+        let err = fill_slots_with(&mut graph, &provider, &mut |graph| {
+            checkpointed.push(
+                graph
+                    .nodes
+                    .iter()
+                    .filter(|n| n.provenance == Provenance::Llm)
+                    .count(),
+            );
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert!(err.to_string().contains("injected failure"));
+        // Two batches answered, so two checkpoints, and the last of them saw
+        // every node those two batches covered. Asserting only "a checkpoint
+        // happened" would pass over one that ran before any answer was
+        // applied and saved nothing.
+        assert_eq!(checkpointed.len(), 2, "checkpoints: {checkpointed:?}");
+        assert_eq!(
+            checkpointed.last().copied(),
+            Some(2 * BATCH_SIZE),
+            "the last checkpoint must hold both answered batches: {checkpointed:?}"
+        );
+    }
+
+    #[test]
+    fn a_resumed_run_asks_only_for_what_it_does_not_already_have() {
+        // What the checkpoint buys. Half the graph is already enriched — the
+        // state a re-run finds after `AnnotationStore::reattach` has restored
+        // the previous run's work — so only the remainder may be bought again.
+        let half = 2 * BATCH_SIZE;
+        let mut graph = files_graph(4 * BATCH_SIZE);
+        for node in graph.nodes.iter_mut().take(half) {
+            node.provenance = Provenance::Llm;
+        }
+
+        let provider = FailsAfter::new(usize::MAX);
+        let count = fill_slots(&mut graph, &provider).unwrap();
+
+        assert_eq!(count, half, "only the unenriched half may be filled");
+        assert_eq!(
+            provider.calls(),
+            half / BATCH_SIZE,
+            "a resumed run re-bought work it already had"
+        );
+    }
+
+    #[test]
+    fn batches_run_concurrently() {
+        // Asserted on calls *in flight*, which is the only observation that
+        // can fail: elapsed time is flaky, and the finished map is identical
+        // either way — a result assertion passes over a sequential run and
+        // proves nothing about the thing this test is named for.
+        //
+        // Each call parks until `ENRICH_CONCURRENCY` of them are parked
+        // together, so a sequential implementation cannot reach the barrier
+        // and times out rather than passing.
+        #[derive(Default)]
+        struct Flight {
+            now: usize,
+            /// Monotonic. Waiting on this rather than on `now` is the
+            /// difference between a test and a deadlock: the last arrival
+            /// decrements `now` on its way out, so a waiter re-checking it
+            /// sees the count fall back below the target and sleeps forever.
+            /// A high-water mark never goes backwards. The first draft of
+            /// this test did wait on `now`, and hung for three ten-second
+            /// timeouts while still reporting a pass.
+            peak: usize,
+        }
+        struct Barrier {
+            flight: Mutex<Flight>,
+            reached: std::sync::Condvar,
+        }
+        impl EnrichmentProvider for Barrier {
+            fn enrich(&self, request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
+                {
+                    let mut flight = self.flight.lock().unwrap();
+                    flight.now += 1;
+                    flight.peak = flight.peak.max(flight.now);
+                    self.reached.notify_all();
+                    while flight.peak < ENRICH_CONCURRENCY {
+                        let (guard, timeout) = self
+                            .reached
+                            .wait_timeout(flight, Duration::from_secs(5))
+                            .unwrap();
+                        flight = guard;
+                        if timeout.timed_out() {
+                            break;
+                        }
+                    }
+                    flight.now -= 1;
+                }
+                Ok(EnrichmentResponse {
+                    answers: request
+                        .slots
+                        .iter()
+                        .map(|s| (s.key(), format!("Prose for {}", s.key())))
+                        .collect(),
+                })
+            }
+        }
+
+        let batches = 2 * ENRICH_CONCURRENCY;
+        let mut graph = files_graph(batches * BATCH_SIZE);
+        let provider = Barrier {
+            flight: Mutex::new(Flight::default()),
+            reached: std::sync::Condvar::new(),
+        };
+
+        let count = fill_slots(&mut graph, &provider).unwrap();
+
+        assert_eq!(count, batches * BATCH_SIZE);
+        assert_eq!(
+            provider.flight.lock().unwrap().peak,
+            ENRICH_CONCURRENCY,
+            "batches did not overlap: the run is still sequential"
+        );
+    }
+
+    #[test]
+    fn concurrency_does_not_change_the_result() {
+        // Answers are addressed by slot key, so completion order cannot reach
+        // the graph — but "should hold by construction" is how the other
+        // eleven defects in this project got in.
+        let build = || {
+            let mut graph = files_graph(3 * BATCH_SIZE + 7);
+            let filled = fill_slots(&mut graph, &FailsAfter::new(usize::MAX)).unwrap();
+            (filled, serde_json::to_string(&graph).unwrap())
+        };
+        let (first_count, first) = build();
+        let (second_count, second) = build();
+        assert_eq!(first_count, second_count);
+        assert_eq!(first, second, "two runs of the same input disagreed");
     }
 }
 
