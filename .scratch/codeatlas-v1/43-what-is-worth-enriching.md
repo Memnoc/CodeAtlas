@@ -43,11 +43,15 @@ and how well the map answers, and it should be argued with evidence rather
 than assumed. Anyone picking this up should be prepared to close it as
 *won't do*.
 
-**Ticket 42 may dissolve the problem.** Most of the pain measured today was
-*wall-clock* and *risk of total loss*, not cost as such. Four-way concurrency
-turns 35 minutes into under ten; checkpointing makes an interrupted run cheap
-to finish. If both land, "it costs 70% more than it needs to" is a much
-weaker complaint than "it takes half an hour and one hiccup wastes all of it".
+**Ticket 42 has landed, and it did dissolve most of the problem.** Most of the
+pain measured on 2026-08-12 was *wall-clock* and *risk of total loss*, not cost
+as such. Four-way concurrency and per-batch checkpointing shipped in `394112f`;
+ticket 40's estimate and progress shipped in `311ec74` and `5c7799f`. What is
+left of the original complaint is only "it costs 70% more than it needs to",
+which is much weaker than "it takes 44 minutes and one hiccup wastes all of
+it" — and the reader is now told the figure before agreeing to it, which was
+the actual grievance. **Re-read the case against this ticket before starting
+it; closing it as won't-do is now the more likely right answer.**
 
 ## What to build, if the evidence supports it
 

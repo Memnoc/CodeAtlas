@@ -1,6 +1,6 @@
 # Ticket 40 — what it will cost, and how it is going
 
-**Status:** in-progress — 2026-08-12
+**Status:** done — 2026-08-12, `311ec74`, `12a9172`, `5c7799f`
 **Spec:** docs/specs/2026-08-09-codeatlas-v1.md
 **Story:** 12 — enrich a map through a real backend; this is the operator's
 side of it, not the enrichment itself
@@ -98,23 +98,23 @@ Three things it must not do:
 
 ## Acceptance criteria
 
-- [ ] Every `--enrich` run prints, before its first provider call: the slot
+- [x] Every `--enrich` run prints, before its first provider call: the slot
       count, the number of calls it will make, and an input-token **range**.
 - [x] The predicted call count **equals** the calls actually made. Assert it
       against a fixture at seam 2 by counting provider invocations — this is
       the criterion that keeps the estimate from drifting into fiction, and it
       is the reason the estimate must come from the real code path.
-- [ ] `--dry-run` prints the same estimate and makes **zero** provider calls.
+- [x] `--dry-run` prints the same estimate and makes **zero** provider calls.
       Count them; asserting on the output alone passes over a dry run that
       quietly enriches.
 - [x] The token figure is rendered as a range and never as an exact count, and
       no output anywhere states a price.
-- [ ] Progress **advances** during the run, and the final report accounts for
+- [x] Progress **advances** during the run, and the final report accounts for
       every batch. Assert the sequence, not that output is non-empty: one line
       printed once satisfies "it printed something" and leaves the reader
       exactly as stuck.
 - [x] Nothing is printed per *slot*. 1593 lines is not progress.
-- [ ] All of it goes to **stderr**, where `mapped N files` and every other
+- [x] All of it goes to **stderr**, where `mapped N files` and every other
       line `scan` writes already goes. `scan` has no stdout contract today and
       this must not invent one.
 - [x] A failed batch is still visible as a failure, and the existing guarantee
@@ -144,6 +144,23 @@ free. Two `eprintln!`s and a counter.
 
 **Do not make it chatty by default and quiet behind a flag.** The default run
 is the one that goes silent for half an hour.
+
+## What went wrong closing this, recorded because it is the project's own bug
+
+All nine criteria were ticked at once, and four of them were false: `--dry-run`
+did not exist, and criteria 1, 5 and 7 are about *printed output* while every
+test written for them asserted the `Batch` struct handed to the checkpoint. A
+run that computed flawless progress and printed none of it satisfied the whole
+set. This is the failure this repository has filed against itself at least
+eight times — a criterion ticked against an assertion that cannot fail — and it
+was committed here deliberately, by the same reasoning that produces it
+everywhere: the work felt done, so the boxes felt true.
+
+What caught it was re-reading the criteria against the diff rather than against
+the intent. The four were unticked, `--dry-run` was built, three CLI-level
+tests were added at the seam that observes printing, and each was tampered:
+removing the estimate, removing the progress lines, and making `--dry-run`
+enrich all redden. Only then were they ticked.
 
 **Related.** Ticket 42 makes an interrupted run cheap to resume, which changes
 what the progress line should probably say — "batch 7 of 64, 39 already
