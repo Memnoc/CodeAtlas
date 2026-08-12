@@ -205,7 +205,7 @@ describe("the files tab filters what it shows", () => {
 });
 
 describe("the filter and the header's search are different things", () => {
-  it("does not match a file by a symbol name the header would find", async () => {
+  it("matches paths only, leaving summaries to the header's search", async () => {
     // Both boxes are on screen at once and the distinction is the only reason
     // having two is defensible: the header searches the whole map and takes
     // you somewhere, this narrows what is already in front of you. A filter
@@ -215,16 +215,21 @@ describe("the filter and the header's search are different things", () => {
     render(<MapExplorer map={map} />);
     await openFiles(user);
 
-    // A word that appears in a node's *summary* and in no path. The header's
-    // search reads summaries; this filter reads paths, and that is the whole
-    // difference stated as one word going to one box and not the other.
-    const word = "greets";
-    const described = map.nodes.filter((n) =>
-      (n.summary ?? "").toLowerCase().includes(word),
+    // A word in a **file's own** summary and in no path.
+    //
+    // It has to be a file's summary, and the first version of this test got
+    // that wrong: it used a word from a *function's* summary, which the filter
+    // could never have matched whatever it did, because it only ever looks at
+    // file rows. Tampering the filter to read summaries left the test green.
+    // The word has to be one the tampered version would find.
+    const word = "lines";
+    const described = map.nodes.filter(
+      (n) => n.kind === "file" && (n.summary ?? "").toLowerCase().includes(word),
     );
-    expect(described.length, `no node's summary says "${word}"`).toBeGreaterThan(
-      0,
-    );
+    expect(
+      described.length,
+      `no *file* summary says "${word}", so a filter reading summaries would still find nothing`,
+    ).toBeGreaterThan(0);
     expect(
       map.nodes.every((n) => !n.path.toLowerCase().includes(word)),
       `"${word}" is in a path, so this proves nothing`,
