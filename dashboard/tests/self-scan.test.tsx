@@ -14,6 +14,27 @@ import { openLearn, openRegion } from "./drive.js";
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 let map: KnowledgeGraph;
 
+/**
+ * The chip label for a layer, found by the one part of it that does not move.
+ *
+ * A layer's **id** is the directory that derived it and is mechanical; its
+ * **name** starts out as that same string and is replaced by a model-written
+ * one the moment the repository is enriched — which is the entire point of
+ * enriching it. Two tests here searched for a chip reading `crates`, and both
+ * went red the day `.codeatlas/annotations.json` was committed and the chip
+ * started reading "Rust Core Crates" instead. Reaching for the id keeps them
+ * true whichever kind of map this repository is carrying.
+ */
+function layerName(id: string): string {
+  const layer = (map.layers ?? []).find((l) => l.id === id);
+  if (layer === undefined) {
+    throw new Error(
+      `no layer ${id}; saw ${(map.layers ?? []).map((l) => l.id).join(", ")}`,
+    );
+  }
+  return layer.name;
+}
+
 describe("CodeAtlas's own self-scan map", () => {
   beforeAll(() => {
     execFileSync("cargo", ["run", "-q", "-p", "codeatlas", "--", "scan", "."], {
@@ -54,7 +75,7 @@ describe("CodeAtlas's own self-scan map", () => {
     render(<MapExplorer map={map} />);
 
     // main.rs lives under crates/, which is a layer of this repository.
-    await openRegion(user, "crates");
+    await openRegion(user, layerName("crates"));
     expect(
       screen.getAllByText("main.rs", { selector: ".react-flow__node *" })
         .length,
@@ -221,7 +242,7 @@ describe("CodeAtlas's own self-scan map", () => {
     render(<MapExplorer map={map} />);
 
     // A file of the crates/ layer, reached the way a reader reaches it.
-    await openRegion(user, "crates");
+    await openRegion(user, layerName("crates"));
     const anyNode = map.nodes.find(
       (n) => n.kind === "file" && (n.layer ?? "root") === "crates",
     );

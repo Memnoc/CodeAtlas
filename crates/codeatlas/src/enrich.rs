@@ -695,6 +695,139 @@ fn content_hash(bytes: &[u8]) -> String {
     format!("fnv1a64:{hash:016x}")
 }
 
+/// What an enrichment run is about to do, worked out before any of it is
+/// done: the batches it will send, and therefore what it will cost.
+///
+/// **Built by the same function that runs it.** [`fill_slots_with`] enriches
+/// exactly `requests`, and both it and the estimate reach them through
+/// [`Plan::of`], so the number a reader is quoted cannot drift from the number
+/// of calls they are charged for. A separate estimator would agree today and
+/// be a confident lie the first time batching changed, which is worse than
+/// quoting nothing.
+pub struct Plan {
+    pub requests: Vec<EnrichmentRequest>,
+    slots: usize,
+}
+
+impl Plan {
+    /// The batches needed to fill every structural-provenance slot in `graph`.
+    pub fn of(graph: &KnowledgeGraph) -> Self {
+        let slots = collect_slots(graph);
+        Self {
+            requests: slots
+                .chunks(BATCH_SIZE)
+                .map(|batch| EnrichmentRequest {
+                    project: graph.project.name.clone(),
+                    slots: batch.to_vec(),
+                })
+                .collect(),
+            slots: slots.len(),
+        }
+    }
+
+    /// How many slots will be filled.
+    pub fn slots(&self) -> usize {
+        self.slots
+    }
+
+    /// How many provider calls will be made.
+    pub fn calls(&self) -> usize {
+        self.requests.len()
+    }
+
+    /// Characters of prompt this run will send, counted off the real thing:
+    /// every backend composes its request through [`prompt::for_enrichment`],
+    /// and this measures what that returns. The schema is serialized rather
+    /// than guessed at because it is sent on every call and is not small.
+    ///
+    /// Absent from a sealed build, along with the prompt builder itself. That
+    /// is the honest shape: a binary compiled without any backend has no
+    /// prompt to measure, and a zero here would be a number rather than an
+    /// absence. It is unreachable there in any case — `run` resolves a
+    /// provider, and fails, before it estimates anything.
+    #[cfg(any(feature = "network", feature = "agent-cli"))]
+    pub fn prompt_chars(&self) -> usize {
+        self.requests
+            .iter()
+            .map(|request| {
+                let completion = prompt::for_enrichment(request);
+                completion.system_prompt.len()
+                    + completion.user_message.len()
+                    + completion.schema.to_string().len()
+            })
+            .sum()
+    }
+
+    /// One line saying what the run will do, for a reader deciding whether to
+    /// let it. Three things it deliberately does not say:
+    ///
+    /// - **An exact token count.** There is no local Anthropic tokenizer, and
+    ///   adding a crate for one is what ADR-0006's bound on the dependency
+    ///   surface exists to prevent. So this is characters over a divisor, and
+    ///   it is rendered as a range because that is what it is. A single
+    ///   figure would be quoted back as though it had been measured.
+    /// - **A price.** Rates change, so a number compiled in here is a future
+    ///   false claim — and on `cli:claude` there is no monetary cost at all,
+    ///   only subscription allowance. Calls and tokens are the facts; what
+    ///   they are worth is the reader's to know.
+    /// - **A total.** The prompt figure is computed from real prompts. The
+    ///   output figure is a guess about how long a model's sentence runs.
+    ///   Adding them would launder the second into the first.
+    pub fn describe(&self) -> String {
+        #[cfg(any(feature = "network", feature = "agent-cli"))]
+        {
+            let chars = self.prompt_chars();
+            format!(
+                "{} slots in {} calls: roughly {}–{} tokens of prompt, plus perhaps \
+                 {}–{} more coming back",
+                self.slots,
+                self.calls(),
+                thousands(chars / TOKEN_CHARS_HIGH),
+                thousands(chars / TOKEN_CHARS_LOW),
+                thousands(self.slots * ANSWER_TOKENS_LOW),
+                thousands(self.slots * ANSWER_TOKENS_HIGH),
+            )
+        }
+        // A sealed build knows the two exact numbers and has no prompt builder
+        // to measure the rest with, so it says the two and stops. Unreachable
+        // in practice — nothing gets past `resolve_provider` there — and it is
+        // still better for this to be a shorter true sentence than a longer
+        // one with an invented figure in it.
+        #[cfg(not(any(feature = "network", feature = "agent-cli")))]
+        {
+            format!("{} slots in {} calls", self.slots, self.calls())
+        }
+    }
+}
+
+/// The character-per-token divisors bracketing the estimate. English prose
+/// runs near four and dense punctuated JSON nearer three, and slot payloads
+/// are both — so the two are used as the ends of a range rather than one of
+/// them being picked and presented as the answer.
+#[cfg(any(feature = "network", feature = "agent-cli"))]
+const TOKEN_CHARS_LOW: usize = 3;
+#[cfg(any(feature = "network", feature = "agent-cli"))]
+const TOKEN_CHARS_HIGH: usize = 4;
+
+/// How long one filled slot's answer runs. A guess, and labelled as one
+/// wherever it surfaces: the schema bounds an answer to a sentence, which is
+/// a shape rather than a length.
+#[cfg(any(feature = "network", feature = "agent-cli"))]
+const ANSWER_TOKENS_LOW: usize = 25;
+#[cfg(any(feature = "network", feature = "agent-cli"))]
+const ANSWER_TOKENS_HIGH: usize = 45;
+
+/// `137672` as `138k`. Precision this estimate does not have would read as
+/// precision it does.
+#[cfg(any(feature = "network", feature = "agent-cli"))]
+fn thousands(n: usize) -> String {
+    if n < 1000 {
+        format!("{n}")
+    } else {
+        format!("{}k", n / 1000)
+    }
+}
+
 /// What the `--enrich` step did — the CLI words its success message from
 /// this, so "no provider was needed" and "the provider answered" stay
 /// distinguishable.
@@ -720,14 +853,30 @@ pub fn run(root: &Path, graph: &mut KnowledgeGraph, choice: ProviderChoice<'_>) 
     }
     let provider = resolve_provider(choice)?;
     let identity = provider.identity();
+    // Before the first call, not behind a flag. This is the longest thing
+    // CodeAtlas does and the only thing that spends the reader's money or
+    // subscription allowance, and a reader who has to know to ask for the
+    // figure is a reader who finds it out afterwards — which is exactly how
+    // this run was agreed to on an estimate of "about a dozen calls" when the
+    // real number was sixty-four.
+    eprintln!("enriching: {}", Plan::of(graph).describe());
     // The store is written after every batch, so an interrupted or failed run
     // keeps everything it already paid for: the next `--enrich` reattaches
     // those annotations by content hash and asks only for what is left. The
     // *map* is still written once, at the end, and only on success — so a
     // partially enriched `knowledge-graph.json` is never observable, which is
     // the guarantee the old all-or-nothing version was really defending.
-    let count = fill_slots_with(graph, provider.as_ref(), &mut |graph| {
-        save_store(root, graph, identity.clone())
+    let count = fill_slots_with(graph, provider.as_ref(), &mut |graph, batch| {
+        save_store(root, graph, identity.clone())?;
+        // One line per batch, the same on a terminal and in a log. A
+        // `\r`-updating line would be prettier on a TTY and unreadable when
+        // piped, and the branch would leave one of the two forms asserted by
+        // nothing; sixty-four lines over ten minutes is not spam.
+        eprintln!(
+            "  batch {}/{} — {} slots filled",
+            batch.done, batch.total, batch.filled
+        );
+        Ok(())
     })?;
     crate::scan::save(root, graph)?;
     Ok(Outcome::Enriched(count))
@@ -857,7 +1006,21 @@ pub fn fill_slots(
     graph: &mut KnowledgeGraph,
     provider: &(dyn EnrichmentProvider + Sync),
 ) -> Result<usize> {
-    fill_slots_with(graph, provider, &mut |_| Ok(()))
+    fill_slots_with(graph, provider, &mut |_, _| Ok(()))
+}
+
+/// A batch that has just landed: where the run has got to, for a caller that
+/// wants to save it, say so, or both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Batch {
+    /// Batches answered so far, counting this one. Completion order, not
+    /// issue order — batches overlap, so `done` says how many are finished
+    /// and never which.
+    pub done: usize,
+    /// Batches in the whole run, known before the first call.
+    pub total: usize,
+    /// Slots filled so far across every batch.
+    pub filled: usize,
 }
 
 /// [`fill_slots`], plus a `checkpoint` invoked after each batch's answers have
@@ -881,20 +1044,14 @@ pub fn fill_slots(
 pub fn fill_slots_with(
     graph: &mut KnowledgeGraph,
     provider: &(dyn EnrichmentProvider + Sync),
-    checkpoint: &mut dyn FnMut(&KnowledgeGraph) -> Result<()>,
+    checkpoint: &mut dyn FnMut(&KnowledgeGraph, Batch) -> Result<()>,
 ) -> Result<usize> {
-    let slots = collect_slots(graph);
-    if slots.is_empty() {
+    let Plan { requests, .. } = Plan::of(graph);
+    if requests.is_empty() {
         return Ok(0);
     }
-    let requests: Vec<EnrichmentRequest> = slots
-        .chunks(BATCH_SIZE)
-        .map(|batch| EnrichmentRequest {
-            project: graph.project.name.clone(),
-            slots: batch.to_vec(),
-        })
-        .collect();
 
+    let mut done = 0;
     let mut count = 0;
     let mut failure: Option<anyhow::Error> = None;
     let next = AtomicUsize::new(0);
@@ -937,7 +1094,13 @@ pub fn fill_slots_with(
             match outcome {
                 Ok(response) => {
                     count += apply_answers(graph, &response.answers);
-                    if let Err(err) = checkpoint(graph) {
+                    done += 1;
+                    let batch = Batch {
+                        done,
+                        total: requests.len(),
+                        filled: count,
+                    };
+                    if let Err(err) = checkpoint(graph, batch) {
                         stop.store(true, Ordering::Relaxed);
                         failure.get_or_insert(err);
                     }
@@ -2168,7 +2331,8 @@ mod tests {
         let provider = FailsAfter::new(2);
         let mut checkpointed: Vec<usize> = Vec::new();
 
-        let err = fill_slots_with(&mut graph, &provider, &mut |graph| {
+        let mut reported: Vec<Batch> = Vec::new();
+        let err = fill_slots_with(&mut graph, &provider, &mut |graph, batch| {
             checkpointed.push(
                 graph
                     .nodes
@@ -2176,6 +2340,7 @@ mod tests {
                     .filter(|n| n.provenance == Provenance::Llm)
                     .count(),
             );
+            reported.push(batch);
             Ok(())
         })
         .unwrap_err();
@@ -2197,6 +2362,18 @@ mod tests {
             checkpointed.last().copied(),
             Some(2 * BATCH_SIZE),
             "the last checkpoint must hold both answered batches: {checkpointed:?}"
+        );
+        // Progress *advances*, and knows the whole size of the run from the
+        // first report. A single report, or one that counted only itself,
+        // satisfies "something was reported" and tells the reader nothing.
+        assert_eq!(
+            reported.iter().map(|b| b.done).collect::<Vec<_>>(),
+            vec![1, 2],
+            "progress did not advance: {reported:?}"
+        );
+        assert!(
+            reported.iter().all(|b| b.total == 4),
+            "the total must be known before the run ends: {reported:?}"
         );
     }
 
@@ -2292,6 +2469,84 @@ mod tests {
             ENRICH_CONCURRENCY,
             "batches did not overlap: the run is still sequential"
         );
+    }
+
+    #[test]
+    fn the_estimate_predicts_exactly_what_the_run_spends() {
+        // The criterion the whole estimate rests on. A figure quoted to a
+        // reader before they agree to spend has to be the figure they are
+        // charged, and the only way to keep it so is for both to come out of
+        // `Plan::of` — an estimator of its own would agree today and be a
+        // confident lie the first time batching changed.
+        let mut graph = files_graph(3 * BATCH_SIZE + 4);
+        let plan = Plan::of(&graph);
+        let predicted = plan.calls();
+        let slots = plan.slots();
+
+        let provider = FailsAfter::new(usize::MAX);
+        let filled = fill_slots(&mut graph, &provider).unwrap();
+
+        assert_eq!(
+            provider.calls(),
+            predicted,
+            "the run made a call the estimate did not predict"
+        );
+        assert_eq!(
+            filled, slots,
+            "the estimate counted slots the run did not fill"
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "network", feature = "agent-cli"))]
+    fn the_estimate_measures_the_prompt_a_backend_will_really_send() {
+        // Not a proxy for the prompt — the prompt. Every backend composes its
+        // request through `prompt::for_enrichment`, and so does this, so a
+        // change to the system prompt or the schema moves the estimate with
+        // it rather than leaving it quietly stale.
+        let graph = files_graph(BATCH_SIZE);
+        let plan = Plan::of(&graph);
+        assert_eq!(plan.calls(), 1);
+        let real = prompt::for_enrichment(&plan.requests[0]);
+        let expected =
+            real.system_prompt.len() + real.user_message.len() + real.schema.to_string().len();
+        assert_eq!(plan.prompt_chars(), expected);
+        // And it is a real prompt, not an empty one being compared to itself.
+        assert!(
+            plan.prompt_chars() > 1000,
+            "a batch of {BATCH_SIZE} slots cannot be this small: {}",
+            plan.prompt_chars()
+        );
+    }
+
+    #[test]
+    #[cfg(any(feature = "network", feature = "agent-cli"))]
+    fn the_estimate_is_a_range_and_never_a_price() {
+        // Three things this project has been bitten by, kept out by assertion
+        // rather than by intention: a single figure that reads as measured, a
+        // rate that goes stale, and one total that launders the guessed half
+        // of the estimate into the computed half.
+        let graph = files_graph(4 * BATCH_SIZE);
+        let described = Plan::of(&graph).describe();
+
+        assert!(described.contains('–'), "not a range: {described}");
+        assert!(
+            described.contains(&format!("{} slots", 4 * BATCH_SIZE))
+                && described.contains("in 4 calls"),
+            "the two exactly-known numbers must be stated: {described}"
+        );
+        for money in ['$', '£', '€'] {
+            assert!(
+                !described.contains(money),
+                "a price cannot survive a rate change: {described}"
+            );
+        }
+        for word in ["cost", "USD", "price"] {
+            assert!(
+                !described.to_lowercase().contains(&word.to_lowercase()),
+                "{word:?} promises something this cannot know: {described}"
+            );
+        }
     }
 
     #[test]
