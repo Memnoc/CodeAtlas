@@ -1391,15 +1391,68 @@ button.crumb:hover {
 
 /* ── Files tab ────────────────────────────────────────────────────────── */
 
+/* Sticky, because the list it narrows is the only thing that scrolls past it
+   and a filter you have to scroll back up to change is one you stop using. */
+.files-filter {
+  position: sticky;
+  top: 42px;
+  z-index: 4;
+  width: 100%;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.files-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
 .files-region h3 {
   margin: 18px 0 6px;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--muted);
+}
+
+/* The whole heading is the control: the name says what would open and the
+   count says how much of it, so two targets side by side would only be two
+   ways to do one thing. */
+.files-region-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  text-transform: inherit;
+  letter-spacing: inherit;
+}
+
+.files-region-toggle:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+}
+
+.files-region-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.files-region-chevron {
+  font-size: 9px;
 }
 
 .files-region-count {
