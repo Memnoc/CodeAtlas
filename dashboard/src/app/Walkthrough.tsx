@@ -9,7 +9,13 @@
 // that `Escape` can close this in the same one cascade as everything else that
 // opens (ticket 22) and so that starting it can put the codebase tour back to
 // its starting line.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { useFocusReturn } from "./focus.js";
 import { scrollBehaviour } from "./motion.js";
 import {
@@ -28,6 +34,15 @@ const FOCUSABLE = "button:not([disabled]), [href], input, select, textarea";
 
 /** How far the card sits from the element it is describing. */
 const CARD_GAP = 14;
+
+/** The custom property `.walkthrough-card` reads to place itself horizontally.
+ * Exported so the drift test can check the stylesheet still consumes the name
+ * this emits: a custom property nothing reads is silent, and the failure it
+ * would restore — the card off the right edge of the screen — is one no test
+ * in this project can see, because jsdom never loads `styles.css` and lays
+ * nothing out. The name is the only part of that coupling anything can check,
+ * so it gets checked. */
+export const CARD_LEFT = "--walkthrough-card-left";
 
 /** Roughly how tall the card gets. Only used to decide whether it fits below
  * the lit element or has to go above it, so an estimate is the right kind of
@@ -193,21 +208,27 @@ export function Walkthrough({
 
   // Below the lit element where there is room, above it where there is not.
   // The card is `position: fixed`, so both are stated against the viewport.
+  //
+  // The horizontal axis is deliberately *not* finished here. This says where
+  // the card would like to sit; `.walkthrough-card` in `styles.css` bounds it
+  // against the right edge, because the card's width is a `min()` the
+  // stylesheet resolves and this code cannot read. Setting an inline `left`
+  // would win over that rule and put the bug back, so the desired position
+  // travels as a custom property instead.
   const viewport = typeof window === "undefined" ? 800 : window.innerHeight;
   const below =
     geometry === null ||
     geometry.top + geometry.height + CARD_GAP + CARD_HEIGHT_ESTIMATE < viewport;
-  const placement =
-    geometry === null
-      ? { top: `${CARD_GAP}px`, left: `${CARD_GAP}px` }
-      : {
-          left: `${Math.max(CARD_GAP, geometry.left)}px`,
-          ...(below
-            ? { top: `${geometry.top + geometry.height + CARD_GAP}px` }
-            : {
-                bottom: `${Math.max(CARD_GAP, viewport - geometry.top + CARD_GAP)}px`,
-              }),
-        };
+  const placement: CSSProperties & Record<`--${string}`, string> = {
+    [CARD_LEFT]: `${geometry === null ? CARD_GAP : Math.max(CARD_GAP, geometry.left)}px`,
+    ...(geometry === null
+      ? { top: `${CARD_GAP}px` }
+      : below
+        ? { top: `${geometry.top + geometry.height + CARD_GAP}px` }
+        : {
+            bottom: `${Math.max(CARD_GAP, viewport - geometry.top + CARD_GAP)}px`,
+          }),
+  };
 
   return (
     <div

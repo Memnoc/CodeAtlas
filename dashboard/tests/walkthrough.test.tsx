@@ -16,11 +16,14 @@
 //   - *reduced motion* — asserted on the argument passed to `scrollIntoView`,
 //     which is observable; the transition itself is CSS, which jsdom does not
 //     run and this file does not pretend to check.
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeGraph } from "../src/index.js";
 import { MapExplorer } from "../src/app/MapExplorer.js";
+import { CARD_LEFT } from "../src/app/Walkthrough.js";
 import {
   WALKTHROUGH_MARKER,
   WALKTHROUGH_SEEN_KEY,
@@ -701,6 +704,59 @@ describe("the spotlight against a page that moves", () => {
     expect(reflow(identity), "nothing was observing the lit element").toBe(1);
 
     expect(geometryOf()).toBe("240px 500px 320px 44px");
+  });
+
+  it("leaves the horizontal bound to the stylesheet that knows the width", async () => {
+    // The bug this is about: the card lighting a control at the right end of
+    // the toolbar hung off the edge of the screen, prose truncated and the
+    // Back and Next buttons cut away. Seen by eye at step 6 of 12, because
+    // nothing here could see it — jsdom lays nothing out, so the card's real
+    // width is zero and any arithmetic this file did against it would be a
+    // sum about a fiction.
+    //
+    // So this asserts the one thing that *is* observable and is what actually
+    // broke: the component states a desired left and stops, leaving the clamp
+    // to the rule that resolved the width. An inline `left` would win over
+    // that rule, silently, and put the card back off the screen.
+    const user = userEvent.setup();
+    renderEverything();
+    const identity = document.querySelector<HTMLElement>(
+      `[${WALKTHROUGH_MARKER}="identity"]`,
+    );
+    if (identity === null) {
+      throw new Error("no element to measure");
+    }
+    vi.spyOn(identity, "getBoundingClientRect").mockImplementation(() =>
+      rect(10, 1180, 100, 30),
+    );
+
+    await startWalkthrough(user);
+    const card = walkthrough().querySelector<HTMLElement>(".walkthrough-card");
+    if (card === null) {
+      throw new Error("no card rendered");
+    }
+
+    expect(card.style.getPropertyValue(CARD_LEFT)).toBe("1180px");
+    expect(
+      card.style.left,
+      "an inline left overrides the stylesheet's clamp",
+    ).toBe("");
+  });
+
+  it("emits the custom property the stylesheet actually reads", async () => {
+    // The coupling the test above depends on, and the only part of it anything
+    // can check: `styles.css` is never loaded here, so a renamed property on
+    // either side would leave the component setting a variable nobody reads
+    // and every other test in this file still green.
+    // Resolved against the vitest root rather than `import.meta.url`, which
+    // under jsdom is an http URL. A wrong path throws, which fails loudly —
+    // the one thing this must not do is quietly find nothing and pass.
+    const css = await readFile(
+      resolve(process.cwd(), "src/app/styles.css"),
+      "utf8",
+    );
+    const rule = css.slice(css.indexOf(".walkthrough-card {"));
+    expect(rule.slice(0, rule.indexOf("}"))).toContain(`var(${CARD_LEFT}`);
   });
 
   it("stops watching an element it has moved off", async () => {
