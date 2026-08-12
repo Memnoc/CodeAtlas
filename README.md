@@ -1,26 +1,22 @@
-# CodeAtlas
-
-Map a codebase: its structure, and the relationships between its parts.
-
-CodeAtlas scans a repository and emits a knowledge graph — files, functions,
-classes, and the import/export/call edges between them — then renders it as an
-interactive map you can search, walk, and share. It runs offline by default:
-scanning, serving, diffing, and sharing never open a non-loopback socket. Two
-flags are the only exceptions — `scan --enrich` and `serve --ask` — and a
-sealed build exists in which egress is not a forbidden action but a compile
-error.
-
-Scanning CodeAtlas itself takes one command and no model: `codeatlas scan .`
-writes every file, function and class in the repository — and the edges
-between them — to `.codeatlas/knowledge-graph.json`. Run it and look. The
-counts belong to whatever the repository is on the day you run it and the
-timing to your machine, so neither is written down here.
-
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/plate-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="docs/images/plate-light.png">
   <img alt="CodeAtlas — a map of your codebase: regions, routes between them, and the elevation of what everything rests on" src="docs/images/plate-dark.png" width="100%">
 </picture>
+
+# CodeAtlas
+
+One command turns a repository into a knowledge graph — files, functions,
+classes, and the import/export/call edges between them — rendered as an
+interactive map you can search, walk through, and ask questions of. It runs
+offline by default: scanning, serving, diffing, and sharing never open a
+non-loopback socket, and a sealed build exists in which egress is not a
+forbidden action but a compile error.
+
+The map itself needs no model and no key: `codeatlas scan .` writes the
+whole picture to `.codeatlas/knowledge-graph.json`; enrichment and questions
+are opt-in flags on top. Run it and look — the counts belong to whatever the
+repository is on the day you run it, so none are written down here.
 
 ## Quick start
 
@@ -34,19 +30,11 @@ cargo build --release
 ./target/release/codeatlas serve .    # opens the map on http://127.0.0.1:4173/
 ```
 
-Everything CodeAtlas writes lands in `.codeatlas/` under the scanned root, and
-a scan puts a `.gitignore` there so you do not have to: the regenerated map is
-ignored, the annotation store is not. That one exception is deliberate — see
-[Enrichment](#enrichment-optional). The file is written when it is missing and
-never overwritten, so editing it is how you change the arrangement.
-
-If your repository already ignores `.codeatlas/` outright, remove that line or
-narrow it to `**/.codeatlas/*` — which is what CodeAtlas's own `.gitignore`
-says. Git will not let a nested file re-include anything under a directory the
-parent excluded, so an outright exclusion keeps enrichment unpublished no
-matter what the nested file says; ignoring the *contents* lets the nested file
-do its job. Keep the `**/` or the rule stops applying at the root, and a scan
-run from a subdirectory leaves a `.codeatlas/` there that nothing ignores.
+Everything CodeAtlas writes lands in `.codeatlas/` under the scanned root,
+and a scan puts a `.gitignore` there so you do not have to: the regenerated
+map is ignored, the annotation store is published. That one exception is
+deliberate — [Enrichment](#enrichment-optional) explains it, along with the
+one `.gitignore` interaction worth knowing.
 
 ## How it works
 
@@ -213,8 +201,15 @@ and runs a plain `codeatlas scan` — no credential, no network, no flags — an
 gets the map with all its prose. The store records which provider, which
 model, and what date produced it, so a reviewer reading the diff can see where
 the prose came from. If you would rather not publish it, delete the
-`!annotations.json` line from `.codeatlas/.gitignore`; scans leave your edit
-alone.
+`!annotations.json` line from `.codeatlas/.gitignore`; scans write that file
+only when it is missing and never overwrite it, so your edit stands.
+
+One interaction to check: if your repository already ignores `.codeatlas/`
+outright, narrow that line to `**/.codeatlas/*` — CodeAtlas's own rule. Git
+never lets a nested file re-include anything under an excluded *directory*,
+so an outright exclusion keeps the store unpublished no matter what the
+nested `.gitignore` says; ignoring the contents lets it do its job. The
+`**/` keeps the rule alive for scans run from a subdirectory.
 
 There are two providers, chosen with `--provider` or
 `CODEATLAS_ENRICH_PROVIDER`:
@@ -361,3 +356,11 @@ The agenda for what comes next is
 its headline is the dashboard at scale — layout currently places nodes on a
 fixed grid within each layer, which reads well for small repositories and
 becomes crowded for large ones.
+
+## Thanks
+
+CodeAtlas is openly and strongly inspired by
+[Understand Anything](https://github.com/Egonex-AI/Understand-Anything) by
+Yuxiang Lin, and its execution was shaped throughout by studying that
+project's. If you want the original, larger take on making a codebase
+explain itself, start there.
