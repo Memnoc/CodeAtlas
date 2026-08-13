@@ -184,6 +184,17 @@ citations-first (unit, then wire), both build clamps, the prompt transcript.
   "expected { question: 'what calls it?' } to deeply equal { question:
   'what calls it?', …(1) }".
 
+**Residuals from the crosscheck (2026-08-13), accepted without send-back:**
+carried `citations` arrays ride per-field unbounded — only `MAX_BODY` bounds
+them, harmless today because they never reach the prompt and slice entry is
+capped, recorded here so the fact is stated; and a structurally-wrong turn
+(missing field, non-array `citations`) draws the malformed-JSON 400 — the
+right side of the clamp/reject line since clamping is for over-bound
+*well-formed* input, but the path is untested and is a subtle tightening
+(serde previously ignored an unknown `turns` key of any shape). The stale
+400 hint (`{"question": "…"}` with no mention of turns) was handed to
+ticket 09, which owns the next pass over this route.
+
 Suites, measured 2026-08-13 after the mutations were restored: default
 `cargo test --workspace` 243 passed / 0 failed; sealed
 `--no-default-features` 210 / 0; `--no-default-features --features
