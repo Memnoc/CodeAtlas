@@ -93,6 +93,68 @@ describe("rendering a map file", () => {
   });
 });
 
+// Story 5: the projection spreading anchors is only half of it — React Flow
+// measures the handles a card actually renders, so a card that still exposed
+// one point per side would draw the knot the projection had already undone.
+describe("a card's edges land at their own points", () => {
+  /** One region: `hub.ts` importing four files, so four edges leave one card. */
+  const fanMap: KnowledgeGraph = {
+    version: "0.4.0",
+    project: { name: "fan" },
+    layers: [{ id: "app", name: "app", provenance: "structural" }],
+    nodes: ["hub.ts", "a.ts", "b.ts", "c.ts", "d.ts"].map((name) => ({
+      id: `file:app/${name}`,
+      kind: "file" as const,
+      name,
+      path: `app/${name}`,
+      summary: "",
+      layer: "app",
+      provenance: "structural" as const,
+    })),
+    edges: ["a.ts", "b.ts", "c.ts", "d.ts"].map((name) => ({
+      source: "file:app/hub.ts",
+      target: `file:app/${name}`,
+      kind: "imports" as const,
+      weight: 1,
+    })),
+  };
+
+  it("renders one handle per point, named the way the projection named it", async () => {
+    const user = userEvent.setup();
+    render(<MapExplorer map={fanMap} />);
+    await openRegion(user, "app");
+
+    const hub = screen.getByTitle("app/hub.ts");
+    const points = [...hub.querySelectorAll("[data-handleid]")].map((h) => [
+      h.getAttribute("data-handleid"),
+      Math.round(parseFloat((h as HTMLElement).style.left)),
+    ]);
+
+    // Four points, evenly spread across a 200px card between the 14px it
+    // keeps clear at each corner — the four the projection placed, where it
+    // placed them. Rounded: the pixels are a third of a pixel apart and the
+    // assertion is about the spread, not about binary floating point.
+    expect(points).toEqual([
+      ["s0", 14],
+      ["s1", 71],
+      ["s2", 129],
+      ["s3", 186],
+    ]);
+  });
+
+  it("draws every edge, none dropped for want of the point it names", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<MapExplorer map={fanMap} />);
+    await openRegion(user, "app");
+
+    // React Flow drops an edge whose named handle the card does not expose.
+    // Four imports, four lines.
+    await waitFor(() => {
+      expect(container.querySelectorAll(".react-flow__edge")).toHaveLength(4);
+    });
+  });
+});
+
 describe("a panel with nothing to rank", () => {
   /** A one-file map whose only file either scored zero or was never scored:
    * `significance` is optional in the contract (ADR-0010), so both maps are

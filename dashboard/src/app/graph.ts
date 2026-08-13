@@ -6,16 +6,19 @@
 // of things is not a picture. Drilling into a region draws that region's
 // files and nothing else.
 import {
-  Position,
   type Edge as FlowEdge,
   type Node as FlowNode,
 } from "@xyflow/react";
 import type { KnowledgeGraph, Node as MapNode } from "../index.js";
+import { type Anchor, fanOut, handlesOf } from "./anchors.js";
 import type { Region, RegionLink } from "./regions.js";
 import { bySignificance } from "./significance.js";
 
 export type EntityData = {
   node: MapNode;
+  /** The points edges land on, which the card renders as its handles. Absent
+   * only on a card no edge touches. */
+  anchors?: readonly Anchor[];
   /** Caption under the name, when the label preset asks for one. */
   caption?: string;
   /** Diff-overlay highlight, set only while the overlay toggle is on. */
@@ -31,6 +34,9 @@ export type RegionData = {
   region: Region;
   /** Which of the six accents this region is drawn in. */
   colorIndex: number;
+  /** The points edges land on, which the card renders as its handles. Absent
+   * only on a card no edge touches. */
+  anchors?: readonly Anchor[];
   /** Caption under the description, when the label preset asks for one. */
   caption?: string;
 };
@@ -100,28 +106,42 @@ function push(index: Map<string, string[]>, key: string, value: string): void {
   }
 }
 
-/** Static handle geometry lets React Flow draw edges without measuring the
- * DOM — the same mechanism its own SSR guidance uses, and what makes the
- * canvas render under jsdom in the tests. */
-function handles(width: number, height: number) {
-  return [
-    {
-      type: "target" as const,
-      position: Position.Top,
-      x: width / 2,
-      y: 0,
-      width: 6,
-      height: 6,
-    },
-    {
-      type: "source" as const,
-      position: Position.Bottom,
-      x: width / 2,
-      y: height,
-      width: 6,
-      height: 6,
-    },
-  ];
+/** The last pass of either view: every edge is given its own landing point on
+ * both cards it touches, and every card the handles those points need.
+ *
+ * Last, because the ranking that keeps a fan from crossing itself reads where
+ * the other end of each edge was drawn — so the cards have to be placed first.
+ * The rule itself, and what happens past a card's capacity, is
+ * [`fanOut`](./anchors.ts). */
+function fanned(
+  nodes: readonly AppFlowNode[],
+  edges: readonly FlowEdge[],
+): { nodes: AppFlowNode[]; edges: FlowEdge[] } {
+  const fan = fanOut(
+    nodes.map((n) => ({ id: n.id, x: n.position.x, width: n.width ?? 0 })),
+    edges,
+  );
+  return {
+    nodes: nodes.map((node): AppFlowNode => {
+      const anchors = fan.anchors.get(node.id) ?? [];
+      const handles = handlesOf(anchors, node.height ?? 0);
+      // The two arms are the same code twice on purpose: `AppFlowNode` is a
+      // union discriminated on `type`, and rebuilding a member of it without
+      // narrowing first widens `data` to neither half's shape. The anchors go
+      // into `data` as well as into `handles` because React Flow hands a node
+      // component its `data` and nothing else — the card has to be able to
+      // render the very points the projection placed.
+      return node.type === "region"
+        ? { ...node, handles, data: { ...node.data, anchors } }
+        : { ...node, handles, data: { ...node.data, anchors } };
+    }),
+    edges: edges.map((edge) => {
+      const ends = fan.ends.get(edge.id);
+      return ends === undefined
+        ? edge
+        : { ...edge, sourceHandle: ends.source, targetHandle: ends.target };
+    }),
+  };
 }
 
 /** The overview: one card per region, banded by how far down the dependency
@@ -167,7 +187,6 @@ export function regionFlow(
         },
         width: REGION_WIDTH,
         height: REGION_HEIGHT,
-        handles: handles(REGION_WIDTH, REGION_HEIGHT),
         data: {
           region,
           colorIndex: colorIndex.get(region.id) ?? 0,
@@ -189,7 +208,7 @@ export function regionFlow(
     }))
     .filter((e) => drawn.has(e.source) && drawn.has(e.target));
 
-  return { nodes, edges };
+  return fanned(nodes, edges);
 }
 
 /** Canvas node ID for a region. Region IDs come from directory names, which
@@ -585,7 +604,6 @@ export function fileFlow(
     position: at.get(node.id) ?? { x: 0, y: 0 },
     width: NODE_WIDTH,
     height: cardHeight,
-    handles: handles(NODE_WIDTH, cardHeight),
     data: { node, ...caption(captionOf?.(node)) },
   }));
 
@@ -598,7 +616,7 @@ export function fileFlow(
     target: e.target,
   }));
 
-  return { nodes, edges };
+  return fanned(nodes, edges);
 }
 
 /** The map's nodes by ID — the lookup every panel needs to turn a node

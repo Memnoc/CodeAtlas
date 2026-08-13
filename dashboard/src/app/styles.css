@@ -1962,6 +1962,18 @@ button.crumb:hover {
   color: var(--muted);
 }
 
+/* The points edges land on, unpainted. A card exposes one handle per edge
+ * touching it (story 5, ADR-0011) rather than the two V1 exposed, so React
+ * Flow's own painted dot — unobtrusive twice — would draw a dotted rule along
+ * the edge of every well-connected card and compete with the very lines the
+ * spread exists to pull apart. The end of the line is the mark; the handle is
+ * only where React Flow measures, and the canvas is not connectable, so
+ * nothing is ever dragged from one. */
+.react-flow__handle {
+  background: transparent;
+  border: 0;
+}
+
 .react-flow__edge-text {
   font-size: 10px;
 }

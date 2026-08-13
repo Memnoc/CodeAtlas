@@ -3,6 +3,7 @@
 // complexity word, the two rankings — so the rules live in the dashboard and
 // are pinned here. A panel showing a number nobody can reproduce is worse
 // than a panel showing none.
+import type { Edge as FlowEdge } from "@xyflow/react";
 import { describe, expect, it } from "vitest";
 import type { KnowledgeGraph } from "../src/index.js";
 import { mapFilename } from "../src/app/export.js";
@@ -14,10 +15,13 @@ import {
   projectCounts,
 } from "../src/app/insights.js";
 import {
+  type AppFlowNode,
   DRILL_DEFAULT_CARDS,
   fileFlow,
   NODE_HEIGHT,
+  NODE_WIDTH,
   regionFlow,
+  regionNodeId,
   regionsHiding,
 } from "../src/app/graph.js";
 import {
@@ -28,6 +32,7 @@ import {
   regionCaptionOf,
 } from "../src/app/labels.js";
 import { shortestPath } from "../src/app/paths.js";
+import { byPath } from "../src/app/significance.js";
 import {
   complexityOf,
   domainRegions,
@@ -1015,6 +1020,271 @@ describe("the default drill view", () => {
         ).toEqual(drawn.has(file.id) ? [] : ["app"]);
       }
     });
+  });
+});
+
+// Story 5 (ADR-0011): every edge touching a card lands at its own point along
+// that card's edge, so a well-connected file reads as a fan rather than as one
+// smear that says nothing about which file connects to which. Seam 3 — the
+// pure projection, asserted as geometry.
+describe("a fan rather than a knot", () => {
+  /** A one-region map: `hub.ts` importing `spokes` files, each named so path
+   * order and index order agree. Every one of those edges leaves the same
+   * card, which is exactly the case that used to converge on one pixel. */
+  function hubAndSpokes(spokes: number): KnowledgeGraph {
+    const names = ["hub.ts", ...Array.from({ length: spokes }, (_, i) => spoke(i))];
+    return {
+      version: "0.4.0",
+      project: { name: "fan" },
+      layers: [{ id: "app", name: "app", provenance: "structural" }],
+      nodes: names.map((name) => ({
+        id: `file:app/${name}`,
+        kind: "file" as const,
+        name,
+        path: `app/${name}`,
+        summary: "",
+        layer: "app",
+        provenance: "structural" as const,
+      })),
+      edges: Array.from({ length: spokes }, (_, i) => ({
+        source: "file:app/hub.ts",
+        target: `file:app/${spoke(i)}`,
+        kind: "imports" as const,
+        weight: 1,
+      })),
+    };
+  }
+
+  /** The same shape, but with the three spokes listed — and so drawn — in an
+   * order that is neither the order the map lists its edges in nor the order
+   * their IDs sort in. */
+  function threeDrawnOutOfOrder(): KnowledgeGraph {
+    const map = hubAndSpokes(0);
+    const file = (name: string) => ({
+      id: `file:app/${name}`,
+      kind: "file" as const,
+      name,
+      path: `app/${name}`,
+      summary: "",
+      layer: "app",
+      provenance: "structural" as const,
+    });
+    return {
+      ...map,
+      nodes: [...map.nodes, ...["b.ts", "c.ts", "a.ts"].map(file)],
+      edges: ["a.ts", "b.ts", "c.ts"].map((name) => ({
+        source: "file:app/hub.ts",
+        target: `file:app/${name}`,
+        kind: "imports" as const,
+        weight: 1,
+      })),
+    };
+  }
+
+  const spoke = (i: number) => `s${String(i).padStart(3, "0")}.ts`;
+  const HUB = "file:app/hub.ts";
+
+  function onlyRegion(map: KnowledgeGraph) {
+    const region = structuralRegions(map)[0];
+    if (region === undefined) {
+      throw new Error("fixture has no region");
+    }
+    return region;
+  }
+
+  /** The card the projection drew for `id`. */
+  function cardOf(nodes: readonly AppFlowNode[], id: string) {
+    const card = nodes.find((n) => n.id === id);
+    if (card === undefined) {
+      throw new Error(`${id} was not drawn`);
+    }
+    return card;
+  }
+
+  /** Where an edge meets a card, resolved the way React Flow resolves it:
+   * the handle the edge names, looked up among the points that card exposes.
+   * Returned in canvas coordinates so two edges landing on the same pixel is
+   * a fact about the drawing, not about handle bookkeeping. */
+  function landing(
+    nodes: readonly AppFlowNode[],
+    cardId: string,
+    handleId: string | null | undefined,
+  ): { x: number; y: number } {
+    const card = cardOf(nodes, cardId);
+    const anchor = (card.data.anchors ?? []).find((a) => a.id === handleId);
+    if (anchor === undefined) {
+      throw new Error(
+        `${cardId} exposes no point named ${String(handleId)}; it has ` +
+          `${(card.data.anchors ?? []).map((a) => a.id).join(", ") || "none"}`,
+      );
+    }
+    return {
+      x: card.position.x + anchor.x,
+      y: card.position.y + (anchor.type === "source" ? (card.height ?? 0) : 0),
+    };
+  }
+
+  /** Every point an edge leaves the hub at, in the order the edges are drawn. */
+  function leavingHub(flow: { nodes: AppFlowNode[]; edges: FlowEdge[] }) {
+    return flow.edges
+      .filter((e) => e.source === HUB)
+      .map((e) => landing(flow.nodes, HUB, e.sourceHandle));
+  }
+
+  /** How far along the hub's own edge each line leaves, read left to right by
+   * where the line arrives — the fan as the reader sees it. */
+  function fanAcrossHub(flow: { nodes: AppFlowNode[]; edges: FlowEdge[] }) {
+    const hub = cardOf(flow.nodes, HUB);
+    return flow.edges
+      .filter((e) => e.source === HUB)
+      .map((e) => ({
+        leaves: landing(flow.nodes, HUB, e.sourceHandle).x - hub.position.x,
+        arrives: landing(flow.nodes, e.target, e.targetHandle).x,
+      }))
+      .sort((one, two) => one.arrives - two.arrives)
+      .map((run) => run.leaves);
+  }
+
+  it("gives every edge leaving one card its own point", () => {
+    const map = hubAndSpokes(6);
+    const flow = fileFlow(map, onlyRegion(map));
+
+    const points = leavingHub(flow);
+
+    expect(points).toHaveLength(6);
+    expect(new Set(points.map((p) => p.x)).size).toBe(6);
+  });
+
+  it("ranks the points by where the other card is drawn, so the fan does not cross", () => {
+    // The fixture is built to tell the rules apart: the hub's three targets
+    // are drawn b, c, a left to right, while both the order the map lists its
+    // edges in and the order their IDs sort in say a, b, c. A rule reading
+    // either list would send the leftmost line to the rightmost card, which
+    // is lines that start apart and then cross — not a fan.
+    const map = threeDrawnOutOfOrder();
+    const flow = fileFlow(map, onlyRegion(map));
+
+    const spokes = flow.nodes
+      .filter((n) => n.id !== HUB)
+      .sort((one, two) => one.position.x - two.position.x)
+      .map((n) => n.id.replace("file:app/", ""));
+    expect(spokes, "the fixture must draw them out of listed order").toEqual([
+      "b.ts",
+      "c.ts",
+      "a.ts",
+    ]);
+
+    const runs = flow.edges
+      .map((e) => ({
+        leaves: landing(flow.nodes, HUB, e.sourceHandle).x,
+        arrives: landing(flow.nodes, e.target, e.targetHandle).x,
+      }))
+      .sort((one, two) => one.arrives - two.arrives);
+
+    // The line reaching furthest left leaves furthest left, all the way
+    // across: that, and not merely starting apart, is what reads as a fan.
+    for (let i = 1; i < runs.length; i += 1) {
+      expect(
+        runs[i]?.leaves ?? 0,
+        `the line to the card at ${runs[i]?.arrives} leaves left of the one at ${runs[i - 1]?.arrives}`,
+      ).toBeGreaterThan(runs[i - 1]?.leaves ?? 0);
+    }
+  });
+
+  it("repeats points in ascending runs once the card is full, never off it", () => {
+    // Twenty-four edges on a two-hundred-pixel card. Fourteen pixels stay
+    // clear at each corner and no two points sit closer than twelve, so the
+    // card holds fifteen; the twenty-four ranks are scaled onto those
+    // fifteen. Every extra edge therefore shares a point with the neighbour
+    // beside it in the fan — the degradation is repetition in order, not an
+    // anchor drawn past the card's corner and not a collapse to the centre.
+    const map = hubAndSpokes(24);
+    const offsets = fanAcrossHub(fileFlow(map, onlyRegion(map)));
+
+    expect(offsets).toHaveLength(24);
+    expect(new Set(offsets).size).toBe(15);
+
+    for (const x of offsets) {
+      expect(x, "an anchor was drawn off the card").toBeGreaterThanOrEqual(14);
+      expect(x).toBeLessThanOrEqual(NODE_WIDTH - 14);
+    }
+    for (let i = 1; i < offsets.length; i += 1) {
+      expect(
+        offsets[i] ?? 0,
+        "the fan went backwards, so two of its lines cross",
+      ).toBeGreaterThanOrEqual(offsets[i - 1] ?? 0);
+    }
+    const distinct = [...new Set(offsets)].sort((one, two) => one - two);
+    for (let i = 1; i < distinct.length; i += 1) {
+      expect(
+        (distinct[i] ?? 0) - (distinct[i - 1] ?? 0),
+        "two points sit closer than a reader can tell apart",
+      ).toBeGreaterThanOrEqual(12);
+    }
+  });
+
+  it("draws the same anchors however the map orders its edges", () => {
+    // Determinism, at the place it usually dies in a change like this: an
+    // anchor decided by the order a list happened to arrive in, or by
+    // iteration over a hash map, moves when the producer emits the same
+    // relationships in another order. Reversing the map's edge list is the
+    // probe — same map, same state, byte-identical positions and anchors.
+    const map = hubAndSpokes(9);
+    const reversed: KnowledgeGraph = { ...map, edges: [...map.edges].reverse() };
+    const drawing = (m: KnowledgeGraph) => {
+      const flow = fileFlow(m, onlyRegion(m));
+      return JSON.stringify({
+        cards: [...flow.nodes]
+          .sort((one, two) => byPath(one.id, two.id))
+          .map((n) => [n.id, n.position, n.data.anchors]),
+        edges: [...flow.edges]
+          .sort((one, two) => byPath(one.id, two.id))
+          .map((e) => [e.id, e.sourceHandle, e.targetHandle]),
+      });
+    };
+
+    expect(drawing(map)).toBe(drawing(map));
+    expect(drawing(reversed)).toBe(drawing(map));
+  });
+
+  it("spreads the overview's region cards, not only the drill view's", () => {
+    // Both views draw cards, and the overview's are the ones a reader meets
+    // first: a region every other region leans on knots exactly the same way.
+    const map: KnowledgeGraph = {
+      version: "0.4.0",
+      project: { name: "overview" },
+      layers: ["r0", "r1", "r2", "r3"].map((id) => ({
+        id,
+        name: id,
+        provenance: "structural" as const,
+      })),
+      nodes: ["r0", "r1", "r2", "r3"].map((layer) => ({
+        id: `file:${layer}/a.ts`,
+        kind: "file" as const,
+        name: "a.ts",
+        path: `${layer}/a.ts`,
+        summary: "",
+        layer,
+        provenance: "structural" as const,
+      })),
+      edges: [],
+    };
+    const flow = regionFlow(
+      structuralRegions(map),
+      ["r1", "r2", "r3"].map((target) => ({
+        source: "r0",
+        target,
+        count: 1,
+        label: "1 import",
+      })),
+    );
+
+    const points = flow.edges.map(
+      (e) => landing(flow.nodes, regionNodeId("r0"), e.sourceHandle).x,
+    );
+
+    expect(points).toHaveLength(3);
+    expect(new Set(points).size).toBe(3);
   });
 });
 

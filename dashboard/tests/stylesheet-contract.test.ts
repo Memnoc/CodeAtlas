@@ -96,6 +96,22 @@ describe("story 20 — the walkthrough paints above the page, all of it", () => 
   });
 });
 
+describe("story 5 — a fan rather than a knot", () => {
+  it("leaves the points edges land on unpainted", () => {
+    // The bug this stops before it ships: a card used to expose two handles
+    // and now exposes one per edge touching it, so React Flow's painted 6px
+    // dot — fine twice — becomes a dotted rule along the edge of every
+    // well-connected card, competing with the very lines the spread exists to
+    // pull apart. The line's own end is the mark; the handle is only where
+    // React Flow measures, and the canvas is not connectable, so nothing is
+    // ever dragged from one.
+    const handle = blocks().find((b) => b.selector === ".react-flow__handle");
+    expect(handle, ".react-flow__handle must be styled here").toBeDefined();
+    expect(handle?.body).toMatch(/background:\s*transparent/);
+    expect(handle?.body).toMatch(/border:\s*0/);
+  });
+});
+
 describe("story 22 — folding really gives the canvas the space", () => {
   // The component tests prove the gesture toggles the class and the panel
   // unmounts; these prove the class *means* something. Together the chain is

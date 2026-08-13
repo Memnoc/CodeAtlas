@@ -1,10 +1,36 @@
-import { Handle, Position, type NodeProps } from "@xyflow/react";
+import { Handle, type NodeProps } from "@xyflow/react";
+import type { Anchor } from "./anchors.js";
 import type { EntityFlowNode, RegionFlowNode } from "./graph.js";
+
+/** The points edges land on, as the handles React Flow measures.
+ *
+ * One per edge rather than one per side: a card used to expose a single
+ * point per side and every edge touching it arrived at that pixel. The
+ * projection decides where they sit (`anchors.ts`); this only renders what it
+ * decided, and it must render all of them — React Flow re-measures handles
+ * from the DOM as soon as a card has a real bounding box, so a card that drew
+ * fewer handles than the projection placed would put the knot straight back
+ * in a browser while every test still passed. */
+function Anchors({ anchors }: { anchors: readonly Anchor[] }) {
+  return (
+    <>
+      {anchors.map((anchor) => (
+        <Handle
+          key={anchor.id}
+          id={anchor.id}
+          type={anchor.type}
+          position={anchor.position}
+          style={{ left: `${anchor.x}px` }}
+        />
+      ))}
+    </>
+  );
+}
 
 /** One region card on the overview: coloured spine, the complexity word, the
  * name, the mechanical description, and the file count. */
 export function RegionNode({ data, selected }: NodeProps<RegionFlowNode>) {
-  const { region, colorIndex, caption } = data;
+  const { region, colorIndex, caption, anchors } = data;
   const fileCount = region.files.length;
   return (
     <div
@@ -12,7 +38,7 @@ export function RegionNode({ data, selected }: NodeProps<RegionFlowNode>) {
       data-testid={`region-${region.id}`}
       data-accent={colorIndex % 6}
     >
-      <Handle type="target" position={Position.Top} />
+      <Anchors anchors={anchors ?? []} />
       <div className="region-top">
         <span className="region-eyebrow">Region</span>
         <span
@@ -30,14 +56,13 @@ export function RegionNode({ data, selected }: NodeProps<RegionFlowNode>) {
       <span className="region-count">
         {fileCount} {fileCount === 1 ? "file" : "files"}
       </span>
-      <Handle type="source" position={Position.Bottom} />
     </div>
   );
 }
 
 /** One file inside a drilled-into region. */
 export function EntityNode({ data }: NodeProps<EntityFlowNode>) {
-  const { node, caption, highlight, onPath, neighbour, dim } = data;
+  const { node, caption, highlight, onPath, neighbour, dim, anchors } = data;
   const classes = [
     "entity",
     `entity-${node.kind}`,
@@ -50,13 +75,12 @@ export function EntityNode({ data }: NodeProps<EntityFlowNode>) {
     .join(" ");
   return (
     <div className={classes} title={node.path}>
-      <Handle type="target" position={Position.Top} />
+      <Anchors anchors={anchors ?? []} />
       <span className="entity-kind">{node.kind}</span>
       <span className="entity-name">{node.name}</span>
       {caption !== undefined && (
         <span className="entity-caption">{caption}</span>
       )}
-      <Handle type="source" position={Position.Bottom} />
     </div>
   );
 }
