@@ -45,6 +45,12 @@ The dashboard's word for one group on the canvas — a layer under the
 structural grouping, or a domain under the domain grouping. A view-side
 concept; the contract does not know it.
 
+**Drill view**:
+The dashboard's view of one region's files, entered from the overview. The
+default drill view shows the top files by significance; revealing the rest
+is one gesture.
+_Avoid_: detail view, region view (ambiguous with the overview's cards)
+
 **Domain flow**:
 One entry point's call chain, walked depth-first and deterministically. The
 map publishes one flow per entry point.
