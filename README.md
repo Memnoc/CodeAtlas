@@ -36,6 +36,24 @@ map is ignored, the annotation store is published. That one exception is
 deliberate — [Enrichment](#enrichment-optional) explains it, along with the
 one `.gitignore` interaction worth knowing.
 
+### Optional: shell aliases
+
+The binary targets whatever repository you run it in, so a handful of
+aliases make it a global tool — adjust the first path to your clone. The
+model-touching pair carry `--provider cli:claude` on purpose: baking the
+flag in makes the bare-flag trap described in
+[Enrichment](#enrichment-optional) impossible to hit from muscle memory.
+
+```sh
+alias codeatlas='$HOME/Code/CodeAtlas/target/release/codeatlas'
+alias cas='codeatlas scan .'                                        # map this repo
+alias cav='codeatlas serve .'                                       # view it (127.0.0.1:4173)
+alias caq='codeatlas serve . --ask --provider cli:claude'           # view it + questions
+alias cae='codeatlas scan . --enrich --provider cli:claude'         # buy prose for what changed
+alias caed='codeatlas scan . --enrich --dry-run --provider cli:claude'  # say the price, spend nothing
+alias cakill='pkill -x codeatlas'                                   # stop a running server
+```
+
 ## How it works
 
 <picture>
