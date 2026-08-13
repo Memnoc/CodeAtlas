@@ -623,6 +623,20 @@ export function MapExplorer({
           // both be called `crates`. Carrying a reveal across would open a
           // region the reader never asked to see in full.
           setRevealed(new Set<string>());
+          // And the selection goes with it. Auto-reveal is a one-shot call
+          // made by whatever pointed at the file — a search hit, a tour
+          // stop, a row in a panel — not a standing instruction, so the
+          // reveal that put the selected card on the canvas does not
+          // re-apply under the new grouping. Keeping the selection while
+          // dropping both the open region and the reveal that served it is
+          // the asymmetry: the reader drills back down and finds the detail
+          // panel describing a card the canvas is not drawing, which is
+          // story 3's failure arriving by the back door. Letting go is the
+          // honest half — the switch already discards where the reader was
+          // standing, and this makes it discard what they were pointed at
+          // too, rather than re-opening a region they never asked to see in
+          // full on the strength of a selection made under another grouping.
+          setSelectedId(null);
         }}
         pathOpen={pathOpen}
         onTogglePath={() => setPathOpen(!pathOpen)}

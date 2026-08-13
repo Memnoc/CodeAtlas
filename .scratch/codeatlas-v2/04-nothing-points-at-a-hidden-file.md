@@ -70,6 +70,23 @@ FILES-tab row and the tour stop each left `file:wide/f000.ts` off the canvas
 with nothing selected, and the diff overlay reported the file it had marked
 as `not drawn`.
 
+Repaired after review (2026-08-13): the grouping change was asymmetric. It
+cleared the revealed set — correct, a layer ID and a domain ID can collide —
+but kept the selection, and the one-shot reveal that had put the selected
+card on the canvas does not re-fire. A reader who searched a hidden file,
+regrouped and drilled back to it met a detail panel describing a card the
+canvas was no longer drawing: story 3's own failure, arriving by the back
+door. **Let-go**, not re-apply: the switch already discards where the reader
+was standing, so the selection goes with the open region and the reveal that
+served it. Re-apply was the other defensible shape and was rejected — it
+would need a second, state-driven write into `revealed` that fires on every
+change of `regions`, which is the mechanism that re-opens a region the reader
+has just collapsed, and it would still leave the selection invisible until
+they drilled back in. Two tests now hold the line, each proven able to fail
+by breaking the behaviour first: the asymmetry itself, and the
+collapse-stays-collapsed the overlay's effect had only ever been checked by
+hand.
+
 Also un-bent: `shows detail for a real node from the self-scan` had been
 rewritten in ticket 03 to take whichever card the canvas happened to be
 drawing, dodging this gap. It chooses off the map again — the first crates

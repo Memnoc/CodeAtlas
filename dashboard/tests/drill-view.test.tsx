@@ -16,7 +16,12 @@ import { describe, expect, it } from "vitest";
 import type { KnowledgeGraph } from "../src/index.js";
 import { MapExplorer } from "../src/app/MapExplorer.js";
 import type { DiffOverlay } from "../src/app/overlay.js";
-import { openLearn, openRegion, selectedOnCanvas } from "./drive.js";
+import {
+  openDomainGrouping,
+  openLearn,
+  openRegion,
+  selectedOnCanvas,
+} from "./drive.js";
 
 /** A map of two regions: `wide` holds `wideCount` files, `narrow` holds
  * three. Significance rises with the index, so which forty the projection
@@ -47,6 +52,38 @@ function twoRegions(wideCount: number): KnowledgeGraph {
   };
 }
 
+/** The same map with one call flow in it, so the domain grouping has
+ * something to draw: one small domain around the flow's file, and the
+ * catch-all region holding the other sixty-two. Regrouping therefore moves
+ * every file into a region whose own default view hides most of it — which
+ * is the situation a reveal made under the other grouping has to survive or
+ * be let go of. */
+function withOneFlow(map: KnowledgeGraph): KnowledgeGraph {
+  return {
+    ...map,
+    nodes: [
+      ...map.nodes,
+      {
+        id: "function:narrow/f002.ts:go",
+        kind: "function",
+        name: "go",
+        path: "narrow/f002.ts",
+        summary: "the flow's root",
+        provenance: "structural",
+      },
+    ],
+    domain_flows: [
+      {
+        id: "flow:function:narrow/f002.ts:go",
+        domain: "greeting",
+        name: "go",
+        provenance: "structural",
+        steps: ["function:narrow/f002.ts:go"],
+      },
+    ],
+  };
+}
+
 /** How many file cards the canvas is holding. */
 function cardCount(): number {
   return document.querySelectorAll(".react-flow__node .entity").length;
@@ -69,6 +106,20 @@ function highlightOf(id: string): string {
     return "changed";
   }
   return el.classList.contains("entity-affected") ? "affected" : "none";
+}
+
+/** The file the detail panel is describing while the canvas holds no card
+ * for it — the contradiction story 3 exists to prevent, named rather than
+ * thrown on. `null` when the panel and the canvas agree, which includes the
+ * panel not being there at all. Asked this way round on purpose: it is the
+ * one thing that must not be true whichever way a grouping change resolves
+ * the selection, so the assertion does not presume the resolution. */
+function describedButUndrawn(): string | null {
+  const path = document.querySelector(".detail .detail-path")?.textContent;
+  if (path === undefined || path === null || path === "") {
+    return null;
+  }
+  return onCanvas(`file:${path}`) ? null : path;
 }
 
 /** `wide`'s least significant file, and so one of the twenty its default
@@ -295,6 +346,40 @@ describe("nothing points at a hidden file", () => {
     expect(highlightOf("file:narrow/f000.ts")).toBe("affected");
   });
 
+  it("leaves a region the reader collapsed collapsed, overlay and all", async () => {
+    // The overlay reveals from an effect rather than from a handler, because
+    // its marks have to outlive a grouping change — which makes it the one
+    // reveal in the product that can fire more than once. A reader who has
+    // put the region back to its readable forty has said what they want, and
+    // the next render of anything at all must not talk them out of it.
+    const user = userEvent.setup();
+    const overlay: DiffOverlay = {
+      version: 1,
+      changed: [HIDDEN],
+      affected: [],
+      unmapped_paths: [],
+    };
+    render(<MapExplorer map={twoRegions(60)} overlay={overlay} />);
+
+    await user.click(screen.getByLabelText("Diff overlay"));
+    await openRegion(user, "wide");
+    expect(cardCount()).toBe(60);
+    expect(highlightOf(HIDDEN)).toBe("changed");
+
+    await user.click(screen.getByRole("button", { name: "Show the top 40" }));
+    expect(cardCount()).toBe(40);
+
+    // Something else entirely: a look at the FILES tab and back. The overlay
+    // is still on and still marks a file behind the cut — neither of which
+    // is news, and neither of which is a reason to re-open what the reader
+    // just closed.
+    await user.click(screen.getByRole("tab", { name: "Files" }));
+    await user.click(screen.getByRole("tab", { name: "Info" }));
+
+    expect(cardCount()).toBe(40);
+    expect(highlightOf(HIDDEN)).toBe("not drawn");
+  });
+
   it("puts an auto-reveal on the same control the reader already has", async () => {
     // One mechanism: what a pointer revealed, the affordance can put back,
     // because both wrote the same projection input. A second reveal path with
@@ -359,5 +444,30 @@ describe("nothing points at a hidden file", () => {
     // the cut while they were still reading about it.
     await openRegion(user, "narrow");
     expect(cardCount()).toBe(53);
+  });
+
+  it("does not leave the reader pointed at a file the new grouping hides", async () => {
+    // Changing the grouping clears the revealed set, deliberately: the two
+    // groupings draw their region IDs from the same well. The reveal that a
+    // pointer made goes with it — it was a one-shot call, not a standing
+    // instruction — so a selection that outlived it would be a detail panel
+    // describing a card the canvas is no longer drawing.
+    const user = userEvent.setup();
+    render(<MapExplorer map={withOneFlow(twoRegions(60))} />);
+
+    await user.type(screen.getByLabelText("Search nodes"), "wide/f000.ts");
+    await user.click(
+      within(screen.getByLabelText("Search results")).getByText("wide/f000.ts"),
+    );
+    expect(selectedOnCanvas()).toBe(HIDDEN);
+
+    // Regroup, then walk back down to where that file now lives: the
+    // catch-all domain, whose own default view holds it back just as `wide`
+    // did.
+    await openDomainGrouping(user);
+    await openRegion(user, "No call flow");
+
+    expect(describedButUndrawn()).toBeNull();
+    expect(selectedOnCanvas()).toBe(onCanvas(HIDDEN) ? HIDDEN : null);
   });
 });
