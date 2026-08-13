@@ -9,7 +9,11 @@ import {
   type Edge as FlowEdge,
   type Node as FlowNode,
 } from "@xyflow/react";
-import type { KnowledgeGraph, Node as MapNode } from "../index.js";
+import type {
+  Edge as MapEdge,
+  KnowledgeGraph,
+  Node as MapNode,
+} from "../index.js";
 import { type Anchor, fanOut, handlesOf } from "./anchors.js";
 import type { Region, RegionLink } from "./regions.js";
 import { bySignificance } from "./significance.js";
@@ -557,7 +561,86 @@ export function fileFlow(
       inside.has(e.source) &&
       inside.has(e.target),
   );
+  return layeredFlow(files, links, cardHeight, captionOf);
+}
 
+/** The magnified set: the focused file and its direct neighbours — the files
+ * it imports and the files that import it. One hop, `imports` edges only.
+ *
+ * One hop with no control, because depth two is most of the region again on
+ * the files that need this most; the next hop is one more magnify. Imports
+ * only, though `calls` is also a relating kind: every canvas this dashboard
+ * draws relates files by imports alone — the drill view's links, and the
+ * dim-in-place focus that lights them — so the lens agreeing with them means
+ * the two focus modes can never name different neighbours; and `calls` edges
+ * run symbol-to-symbol, which would need a roll-up rule no other drawing
+ * has. The info panel already names what a file calls. */
+export function neighbourhoodOf(
+  map: KnowledgeGraph,
+  fileId: string,
+): Set<string> {
+  const files = new Set(
+    map.nodes.filter((n) => n.kind === "file").map((n) => n.id),
+  );
+  const neighbourhood = new Set([fileId]);
+  for (const edge of map.edges) {
+    if (edge.kind !== "imports" || edge.source === edge.target) {
+      continue;
+    }
+    const other =
+      edge.source === fileId
+        ? edge.target
+        : edge.target === fileId
+          ? edge.source
+          : null;
+    if (other !== null && files.has(other)) {
+      neighbourhood.add(other);
+    }
+  }
+  return neighbourhood;
+}
+
+/** The lens the focus mode switches to when dimming in place stops working:
+ * the induced subgraph of the magnified set — every import between two drawn
+ * files, neighbour to neighbour included — laid out by [`layeredFlow`], the
+ * drill view's own drawing, so imports still run downward.
+ *
+ * The set is an argument, never state in here, exactly as the drill view's
+ * revealed set is: same map, same magnified set, byte-identical positions.
+ * And it is the lens's whole disclosure story — this draws from the map, not
+ * through the drill view's default cut, which is how a neighbour the default
+ * view holds back appears without a reveal being written anywhere. The drill
+ * view hides what is not significant; this hides what is not connected. */
+export function magnifyFlow(
+  map: KnowledgeGraph,
+  magnified: ReadonlySet<string>,
+  cardHeight: number = NODE_HEIGHT,
+  captionOf?: (node: MapNode) => string | null,
+): { nodes: AppFlowNode[]; edges: FlowEdge[] } {
+  const files = map.nodes.filter(
+    (n) => n.kind === "file" && magnified.has(n.id),
+  );
+  const inside = new Set(files.map((f) => f.id));
+  const links = map.edges.filter(
+    (e) =>
+      e.kind === "imports" &&
+      e.source !== e.target &&
+      inside.has(e.source) &&
+      inside.has(e.target),
+  );
+  return layeredFlow(files, links, cardHeight, captionOf);
+}
+
+/** One layered drawing for both canvases that draw files — the drill view
+ * and the magnify lens. The callers decide *which* files and links; this
+ * decides where they go, so "laid out the way the drill view lays out a
+ * region" is the same code, not a promise between two copies. */
+function layeredFlow(
+  files: readonly MapNode[],
+  links: readonly MapEdge[],
+  cardHeight: number,
+  captionOf?: (node: MapNode) => string | null,
+): { nodes: AppFlowNode[]; edges: FlowEdge[] } {
   const touched = new Set(links.flatMap((l) => [l.source, l.target]));
   const connected = files.filter((f) => touched.has(f.id));
   const standalone = files.filter((f) => !touched.has(f.id));

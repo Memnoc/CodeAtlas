@@ -18,6 +18,8 @@ import {
   type AppFlowNode,
   DRILL_DEFAULT_CARDS,
   fileFlow,
+  magnifyFlow,
+  neighbourhoodOf,
   NODE_HEIGHT,
   NODE_WIDTH,
   regionFlow,
@@ -1020,6 +1022,249 @@ describe("the default drill view", () => {
         ).toEqual(drawn.has(file.id) ? [] : ["app"]);
       }
     });
+  });
+});
+
+// Stories 24 and 25: magnify draws only the focused file and its direct
+// neighbours — the files it imports and the files that import it — laid out
+// by the drill view's own layering. Seam 3 — the pure projection: which files
+// the neighbourhood holds, how they layer, and that the magnified set is an
+// argument, never state.
+describe("the magnified neighbourhood", () => {
+  /** Files across two layers, wired so every rule has a witness: an importer
+   * above the hub, an import below it, a second import in another region, a
+   * link between two neighbours, a file two hops out, an unrelated pair, a
+   * caller related by `calls` only, a self-import, and a file with no edges
+   * at all. */
+  function atlas(): KnowledgeGraph {
+    const file = (path: string) => ({
+      id: `file:${path}`,
+      kind: "file" as const,
+      name: path.split("/").pop() ?? path,
+      path,
+      summary: "",
+      layer: path.split("/")[0] ?? "root",
+      provenance: "structural" as const,
+    });
+    const imports = (from: string, to: string) => ({
+      source: `file:${from}`,
+      target: `file:${to}`,
+      kind: "imports" as const,
+      weight: 1,
+    });
+    return {
+      version: "0.4.0",
+      project: { name: "magnify" },
+      layers: [
+        { id: "app", name: "app", provenance: "structural" },
+        { id: "lib", name: "lib", provenance: "structural" },
+      ],
+      nodes: [
+        file("app/hub.ts"),
+        file("app/above.ts"),
+        file("app/below.ts"),
+        file("app/far.ts"),
+        file("app/apart.ts"),
+        file("app/other.ts"),
+        file("app/caller.ts"),
+        file("app/alone.ts"),
+        file("lib/shared.ts"),
+      ],
+      edges: [
+        imports("app/above.ts", "app/hub.ts"),
+        imports("app/hub.ts", "app/below.ts"),
+        imports("app/hub.ts", "lib/shared.ts"),
+        imports("app/above.ts", "app/below.ts"),
+        imports("app/below.ts", "app/far.ts"),
+        imports("app/apart.ts", "app/other.ts"),
+        imports("app/hub.ts", "app/hub.ts"),
+        {
+          source: "file:app/caller.ts",
+          target: "file:app/hub.ts",
+          kind: "calls" as const,
+          weight: 1,
+        },
+      ],
+    };
+  }
+
+  /** The lens drawn for one file, positions keyed by path. */
+  function lensOn(map: KnowledgeGraph, focus: string) {
+    const flow = magnifyFlow(map, neighbourhoodOf(map, `file:${focus}`));
+    return {
+      ...flow,
+      at: new Map(
+        flow.nodes.map((n) => [n.id.replace("file:", ""), n.position]),
+      ),
+    };
+  }
+
+  it("draws the focused file and its direct neighbours, wherever they live, and nothing else", () => {
+    // `lib/shared.ts` is in another region: the neighbourhood is the map's,
+    // not the open region's. The unrelated pair, the two-hop file, the
+    // calls-only caller and the loose file are all left out.
+    const { nodes } = lensOn(atlas(), "app/hub.ts");
+
+    expect(nodes.map((n) => n.id).sort()).toEqual([
+      "file:app/above.ts",
+      "file:app/below.ts",
+      "file:app/hub.ts",
+      "file:lib/shared.ts",
+    ]);
+  });
+
+  it("stops at one hop — the next hop is one more magnify", () => {
+    // `far.ts` is the neighbour's neighbour, so hub's lens leaves it out;
+    // magnifying the neighbour itself is what reaches it.
+    const map = atlas();
+
+    expect(neighbourhoodOf(map, "file:app/hub.ts").has("file:app/far.ts")).toBe(
+      false,
+    );
+    expect(
+      neighbourhoodOf(map, "file:app/below.ts").has("file:app/far.ts"),
+    ).toBe(true);
+  });
+
+  it("relates files by imports, not calls", () => {
+    // The decision the ticket records: `calls` is a relating kind, but every
+    // canvas this dashboard draws relates files by imports alone, and the
+    // dim-in-place focus lights exactly those edges — magnify agreeing with
+    // them means the two focus modes never name different neighbours.
+    const map = atlas();
+
+    expect(
+      neighbourhoodOf(map, "file:app/hub.ts").has("file:app/caller.ts"),
+    ).toBe(false);
+    // And from the caller's side the lens is honest the same way: its one
+    // relating edge is a call, so it magnifies alone.
+    expect([...neighbourhoodOf(map, "file:app/caller.ts")]).toEqual([
+      "file:app/caller.ts",
+    ]);
+  });
+
+  it("lays the neighbourhood out the way the drill view does: imports run downward", () => {
+    const { at } = lensOn(atlas(), "app/hub.ts");
+
+    // What leans on the hub sits above it; what it leans on sits below —
+    // both of its imports on the same row.
+    expect(at.get("app/above.ts")?.y ?? 0).toBeLessThan(
+      at.get("app/hub.ts")?.y ?? 0,
+    );
+    expect(at.get("app/hub.ts")?.y ?? 0).toBeLessThan(
+      at.get("app/below.ts")?.y ?? 0,
+    );
+    expect(at.get("lib/shared.ts")?.y).toBe(at.get("app/below.ts")?.y);
+  });
+
+  it("draws the induced subgraph: a link between two neighbours is drawn too", () => {
+    const { edges } = lensOn(atlas(), "app/hub.ts");
+
+    // Four imports run inside the neighbourhood — the fixture's fifth link
+    // among these files is the hub's self-import, which is a scribble, not
+    // information, on this canvas exactly as on the drill view's.
+    expect(
+      edges.map((e) => `${e.source} -> ${e.target}`).sort(),
+    ).toEqual([
+      "file:app/above.ts -> file:app/below.ts",
+      "file:app/above.ts -> file:app/hub.ts",
+      "file:app/hub.ts -> file:app/below.ts",
+      "file:app/hub.ts -> file:lib/shared.ts",
+    ]);
+  });
+
+  it("magnifies a file with no relating edges to itself alone", () => {
+    const { nodes, edges } = lensOn(atlas(), "app/alone.ts");
+
+    expect(nodes.map((n) => n.id)).toEqual(["file:app/alone.ts"]);
+    expect(edges).toEqual([]);
+  });
+
+  it("draws a neighbour the default drill view holds back", () => {
+    // Sixty files, significance rising with the index, and the top file
+    // imports the least significant one: the drill view's default cut hides
+    // the neighbour, and the lens — whose relevance test is connectivity,
+    // not significance — draws it without touching the revealed set, which
+    // it does not even take.
+    const named = (i: number) => `f${String(i).padStart(3, "0")}.ts`;
+    const wide: KnowledgeGraph = {
+      version: "0.4.0",
+      project: { name: "magnify" },
+      layers: [{ id: "app", name: "app", provenance: "structural" }],
+      nodes: Array.from({ length: 60 }, (_, i) => ({
+        id: `file:app/${named(i)}`,
+        kind: "file" as const,
+        name: named(i),
+        path: `app/${named(i)}`,
+        summary: "",
+        layer: "app",
+        provenance: "structural" as const,
+        significance: i,
+      })),
+      edges: [
+        {
+          source: "file:app/f059.ts",
+          target: "file:app/f000.ts",
+          kind: "imports" as const,
+          weight: 1,
+        },
+      ],
+    };
+    const region = structuralRegions(wide)[0];
+    if (region === undefined) {
+      throw new Error("fixture has no region");
+    }
+
+    const dflt = new Set(fileFlow(wide, region).nodes.map((n) => n.id));
+    expect(dflt.has("file:app/f000.ts"), "the fixture must hide it").toBe(
+      false,
+    );
+
+    const lens = magnifyFlow(wide, neighbourhoodOf(wide, "file:app/f059.ts"));
+    expect(lens.nodes.map((n) => n.id).sort()).toEqual([
+      "file:app/f000.ts",
+      "file:app/f059.ts",
+    ]);
+  });
+
+  it("takes the magnified set as an argument and keeps none of it", () => {
+    // Purity, asserted the way ADR-0011 relies on it: same map, same focused
+    // file, byte-identical positions — with another lens drawn in between.
+    const map = atlas();
+    const hub = neighbourhoodOf(map, "file:app/hub.ts");
+    const positions = (set: ReadonlySet<string>) =>
+      JSON.stringify(
+        magnifyFlow(map, set).nodes.map((n) => [n.id, n.position]),
+      );
+
+    const before = positions(hub);
+    const other = positions(neighbourhoodOf(map, "file:app/alone.ts"));
+    const after = positions(hub);
+
+    expect(after).toBe(before);
+    expect(other).not.toBe(before);
+  });
+
+  it("draws the same lens however the map orders its edges", () => {
+    const map = atlas();
+    const reversed: KnowledgeGraph = {
+      ...map,
+      edges: [...map.edges].reverse(),
+    };
+    const drawing = (m: KnowledgeGraph) => {
+      const flow = magnifyFlow(m, neighbourhoodOf(m, "file:app/hub.ts"));
+      return JSON.stringify({
+        cards: [...flow.nodes]
+          .sort((one, two) => byPath(one.id, two.id))
+          .map((n) => [n.id, n.position, n.data.anchors]),
+        edges: [...flow.edges]
+          .sort((one, two) => byPath(one.id, two.id))
+          .map((e) => [e.id, e.sourceHandle, e.targetHandle]),
+      });
+    };
+
+    expect(drawing(map)).toBe(drawing(map));
+    expect(drawing(reversed)).toBe(drawing(map));
   });
 });
 

@@ -30,6 +30,8 @@ import {
   DRILL_DEFAULT_CARDS,
   fileFlow,
   hiddenByDefault,
+  magnifyFlow,
+  neighbourhoodOf,
   type AppFlowNode,
   nodesById,
   regionFlow,
@@ -122,6 +124,13 @@ export function MapExplorer({
     });
   }, []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The magnify lens: the one file whose neighbourhood the canvas draws
+  // instead of the open region, or null for no lens. Deliberately the only
+  // state entering magnify touches — the view underneath (open region,
+  // revealed set, selection, grouping) is never written, so leaving is
+  // setting this back to null and there is nothing to restore. That is what
+  // makes it a lens rather than a navigation step.
+  const [magnifiedId, setMagnifiedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   // Dismissal is tracked apart from the query, because putting the results
   // away and giving up on the search are different intentions: a reader who
@@ -150,6 +159,15 @@ export function MapExplorer({
   const canvas = useRef<ReactFlowInstance<AppFlowNode, FlowEdge> | null>(null);
 
   const byId = useMemo(() => nodesById(map), [map]);
+  // The magnified set, computed once and read twice: the projection draws
+  // it, and `reveal` asks it whether a pointed-at file is on the lens. One
+  // computation, so the two can never disagree about what the lens holds.
+  const magnifiedSet = useMemo(
+    () => (magnifiedId === null ? null : neighbourhoodOf(map, magnifiedId)),
+    [map, magnifiedId],
+  );
+  const magnified =
+    magnifiedId === null ? null : (byId.get(magnifiedId) ?? null);
   const regions = useMemo(() => regionsOf(map, grouping), [map, grouping]);
   const links = useMemo(() => regionLinks(map, regions), [map, regions]);
   const openRegion = regions.find((r) => r.id === openRegionId) ?? null;
@@ -246,6 +264,15 @@ export function MapExplorer({
       }
       const target = fileIdOf(id);
       if (target !== undefined) {
+        // A pointer while the magnify lens is up: at a file the lens draws,
+        // the lens stays — the card is right there to select, and the
+        // reveal below still runs so that leaving finds it drawn rather
+        // than put back behind the cut. At anything else the lens comes
+        // down, because the pointer's destination is a canvas the lens is
+        // covering, and a highlight nobody can see is not a selection.
+        if (magnifiedSet !== null && !magnifiedSet.has(target)) {
+          setMagnifiedId(null);
+        }
         // Before the move, not after: the camera is being sent to this card,
         // and a card the default view is holding back is not there to be
         // moved to.
@@ -253,7 +280,7 @@ export function MapExplorer({
         setFocus({ id: target });
       }
     },
-    [byId, regionOfPath, fileIdOf, autoReveal],
+    [byId, regionOfPath, fileIdOf, autoReveal, magnifiedSet],
   );
 
   const searchShown = query.trim() !== "" && !searchDismissed;
@@ -291,19 +318,32 @@ export function MapExplorer({
     setWalkthrough(resolveWalkthroughSteps());
   };
 
-  // Overview → region → file is a stack, and back means one step up it, never
-  // two. The label names the destination because the same word at three
-  // depths would mean three different things, and a reader deciding whether
+  // Overview → region → file → lens is a stack, and back means one step up
+  // it, never two. The label names the destination because the same word at
+  // these depths would mean different things, and a reader deciding whether
   // to press it is deciding where they end up.
+  //
+  // The lens is the innermost rung, which is also how Escape leaves it:
+  // through the cascade's existing last step, never a second handler. It
+  // steps back to the view it was opened over — selection intact, because
+  // entering never wrote anything else to restore.
   const backStep =
-    openRegion === null
-      ? null
-      : selectedId !== null
-        ? {
-            label: `Back to ${openRegion.name}`,
-            go: () => setSelectedId(null),
-          }
-        : { label: "Back to regions", go: () => setOpenRegionId(null) };
+    magnified !== null
+      ? {
+          label:
+            openRegion === null
+              ? "Back to regions"
+              : `Back to ${openRegion.name}`,
+          go: () => setMagnifiedId(null),
+        }
+      : openRegion === null
+        ? null
+        : selectedId !== null
+          ? {
+              label: `Back to ${openRegion.name}`,
+              go: () => setSelectedId(null),
+            }
+          : { label: "Back to regions", go: () => setOpenRegionId(null) };
 
   // Escape is the same gesture without the pointer, and the whole cascade
   // lives here — one listener, on the document, so it fires wherever focus
@@ -315,7 +355,8 @@ export function MapExplorer({
   // Order is innermost-first, and it has to be written down because every
   // layer wants the same key: the walkthrough, then the search overlay, then
   // the share/export menu, then the path panel, then the answer to a
-  // question, then one step back up the overview → region → file stack.
+  // question, then one step back up the overview → region → file → lens
+  // stack.
   //
   // The walkthrough goes first because it is the only layer that is modal
   // over the others rather than beside them — while it runs the rest of the
@@ -399,12 +440,17 @@ export function MapExplorer({
     return new Set(found?.map((n) => n.id) ?? []);
   }, [map, pathFrom, pathTo]);
 
+  // The lens outranks both ordinary views: while it is up the canvas draws
+  // the neighbourhood and nothing else, and the view it covers keeps its
+  // state untouched underneath.
   const flow = useMemo(
     () =>
-      openRegion === null
-        ? regionFlow(regions, links, (region) => regionCaptionOf(region, links))
-        : fileFlow(map, openRegion, CARD_HEIGHT, captionOf, revealed),
-    [map, openRegion, regions, links, revealed],
+      magnifiedSet !== null
+        ? magnifyFlow(map, magnifiedSet, CARD_HEIGHT, captionOf)
+        : openRegion === null
+          ? regionFlow(regions, links, (region) => regionCaptionOf(region, links))
+          : fileFlow(map, openRegion, CARD_HEIGHT, captionOf, revealed),
+    [map, magnifiedSet, openRegion, regions, links, revealed],
   );
 
   // Drilling in and back out replaces every node on the canvas. React Flow's
@@ -479,6 +525,12 @@ export function MapExplorer({
       : selected.kind === "file"
         ? selected.id
         : (fileIdOfPath.get(selected.path) ?? null);
+
+  // The magnify control names its subject, and the subject is the file —
+  // selecting a symbol magnifies the file that contains it, the same
+  // roll-up the canvas marking makes.
+  const selectedFile =
+    selectedFileId === null ? null : (byId.get(selectedFileId) ?? null);
 
   // What the selected file touches on this canvas. A drawing of forty files
   // and eighty-five imports is dense however well it is laid out, so the
@@ -637,6 +689,10 @@ export function MapExplorer({
           // too, rather than re-opening a region they never asked to see in
           // full on the strength of a selection made under another grouping.
           setSelectedId(null);
+          // And the lens goes with the selection it was ground over: a
+          // neighbourhood magnified under one grouping is not something the
+          // other grouping's reader asked to be looking through.
+          setMagnifiedId(null);
         }}
         pathOpen={pathOpen}
         onTogglePath={() => setPathOpen(!pathOpen)}
@@ -750,9 +806,12 @@ export function MapExplorer({
               type="button"
               className={`region-chip${openRegionId === region.id ? " region-chip-on" : ""}`}
               data-accent={i % 6}
-              onClick={() =>
-                setOpenRegionId(openRegionId === region.id ? null : region.id)
-              }
+              onClick={() => {
+                // Moving between regions is leaving the lens: the chip is
+                // about to change the very canvas the lens is covering.
+                setMagnifiedId(null);
+                setOpenRegionId(openRegionId === region.id ? null : region.id);
+              }}
             >
               <span className="region-dot" aria-hidden="true" />
               {region.name}{" "}
@@ -887,7 +946,12 @@ export function MapExplorer({
             <button
               type="button"
               className={openRegion === null ? "crumb crumb-on" : "crumb"}
-              onClick={() => setOpenRegionId(null)}
+              onClick={() => {
+                // Jumping to the overview is leaving the lens too — same
+                // reason as the region chips.
+                setMagnifiedId(null);
+                setOpenRegionId(null);
+              }}
             >
               Project overview
             </button>
@@ -896,40 +960,76 @@ export function MapExplorer({
                 <span className="crumb-sep" aria-hidden="true">
                   ›
                 </span>
-                <span className="crumb crumb-on">{openRegion.name}</span>
-                {/* Says what the block of cards below the layers is, so it
-                    reads as a decision rather than as leftovers. Counted
-                    from the edges actually drawn, so it cannot disagree
-                    with the picture it is describing. */}
-                <span className="crumb-note">
-                  {openRegion.files.length} files
-                  {standalone > 0 &&
-                    `, ${standalone} importing nothing here`}
-                  {selectedFileId === null
-                    ? " · click one to trace it"
-                    : " · click the canvas to clear"}
-                </span>
-                {/* Disclosure, not a filter: the default view draws the
-                    files the map says carry this region, and this is the one
-                    gesture that puts the rest on the canvas. It names both
-                    true numbers — the region's size and what is being held
-                    back — so nobody has to work out what they are asking
-                    for. Absent entirely on a region the default view already
-                    draws whole. */}
-                {hidden > 0 && (
+                {magnified === null ? (
+                  <>
+                    <span className="crumb crumb-on">{openRegion.name}</span>
+                    {/* Says what the block of cards below the layers is, so
+                        it reads as a decision rather than as leftovers.
+                        Counted from the edges actually drawn, so it cannot
+                        disagree with the picture it is describing. */}
+                    <span className="crumb-note">
+                      {openRegion.files.length} files
+                      {standalone > 0 &&
+                        `, ${standalone} importing nothing here`}
+                      {selectedFileId === null
+                        ? " · click one to trace it"
+                        : " · click the canvas to clear"}
+                    </span>
+                    {/* Disclosure, not a filter: the default view draws the
+                        files the map says carry this region, and this is the
+                        one gesture that puts the rest on the canvas. It
+                        names both true numbers — the region's size and what
+                        is being held back — so nobody has to work out what
+                        they are asking for. Absent entirely on a region the
+                        default view already draws whole. */}
+                    {hidden > 0 && (
+                      <button
+                        type="button"
+                        className="reveal"
+                        title={
+                          revealed.has(openRegion.id)
+                            ? `Draw the ${DRILL_DEFAULT_CARDS} files the map says carry this region, and put the rest away`
+                            : "Draw every file in this region, however dense the picture gets"
+                        }
+                        onClick={() => toggleRevealed(openRegion.id)}
+                      >
+                        {revealed.has(openRegion.id)
+                          ? `Show the top ${DRILL_DEFAULT_CARDS}`
+                          : `Show all ${openRegion.files.length} files (${hidden} hidden)`}
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span className="crumb">{openRegion.name}</span>
+                    <span className="crumb-sep" aria-hidden="true">
+                      ›
+                    </span>
+                    <span className="crumb crumb-on">{magnified.name}</span>
+                    {/* What the lens is drawing — or, for a file that
+                        touches nothing, why one card is the whole picture
+                        rather than an empty canvas. */}
+                    <span className="crumb-note">
+                      {flow.nodes.length === 1
+                        ? "imports nothing and nothing imports it — drawn alone"
+                        : `${flow.nodes.length - 1} neighbour${
+                            flow.nodes.length === 2 ? "" : "s"
+                          } — what it leans on below, what leans on it above`}
+                    </span>
+                  </>
+                )}
+                {/* The lens's way in, and its next hop: magnify the selected
+                    file, or — already magnified — the neighbour just
+                    selected. Absent while it would only redraw the lens
+                    already up. */}
+                {selectedFile !== null && selectedFileId !== magnifiedId && (
                   <button
                     type="button"
                     className="reveal"
-                    title={
-                      revealed.has(openRegion.id)
-                        ? `Draw the ${DRILL_DEFAULT_CARDS} files the map says carry this region, and put the rest away`
-                        : "Draw every file in this region, however dense the picture gets"
-                    }
-                    onClick={() => toggleRevealed(openRegion.id)}
+                    title="Draw only this file and its direct neighbours — the files it imports and the files that import it"
+                    onClick={() => setMagnifiedId(selectedFileId)}
                   >
-                    {revealed.has(openRegion.id)
-                      ? `Show the top ${DRILL_DEFAULT_CARDS}`
-                      : `Show all ${openRegion.files.length} files (${hidden} hidden)`}
+                    Magnify {selectedFile.name}
                   </button>
                 )}
               </>
@@ -945,6 +1045,13 @@ export function MapExplorer({
             onNodeClick={(_event, node) => {
               if (node.type === "region") {
                 setOpenRegionId(node.data.region.id);
+              } else if (magnified !== null) {
+                // On the lens a card may be one the view underneath holds
+                // back, or belong to another region entirely — so the click
+                // is a pointer at a possibly-hidden file and takes the
+                // pointer path every other feature takes, not the bare
+                // selection the drill view can afford.
+                reveal(node.id);
               } else {
                 setSelectedId(node.id);
               }
