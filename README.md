@@ -371,9 +371,16 @@ spec's own Verification section
 ([`docs/specs/2026-08-09-codeatlas-v1.md`](docs/specs/2026-08-09-codeatlas-v1.md)).
 The agenda for what comes next is
 [`docs/intake/2026-08-12-codeatlas-v1-next.md`](docs/intake/2026-08-12-codeatlas-v1-next.md);
-its headline is the dashboard at scale — layout currently places nodes on a
-fixed grid within each layer, which reads well for small repositories and
-becomes crowded for large ones.
+its headline is the dashboard at scale. Files are laid out in dependency
+layers and ordered to keep the lines apart, which reads well until a region
+holds enough files that drawing all of them at once stops being a picture —
+this repository's own `crates` region is 159 cards. V2 answers that with
+disclosure rather than a different layout algorithm; the spec is
+[`docs/specs/2026-08-13-codeatlas-v2.md`](docs/specs/2026-08-13-codeatlas-v2.md).
+
+## License
+
+MIT — see [`LICENSE`](LICENSE). Copyright (c) 2026 Matteo Stara (Memnoc).
 
 ## Thanks
 
