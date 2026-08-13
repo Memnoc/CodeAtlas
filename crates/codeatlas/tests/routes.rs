@@ -25,6 +25,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use codeatlas::enrich::ask::MAX_TURNS;
 use codeatlas::serve::{ASK_ROUTE, CAPABILITIES_ROUTE};
 
 /// The dashboard module that declares both routes.
@@ -51,4 +52,24 @@ fn the_dashboard_asks_the_routes_this_binary_serves() {
              server does not serve, and says nothing about it"
         );
     }
+}
+
+/// ADR-0012's turn bound, held in step the same way. The dashboard enforces
+/// the bound itself so the server's clamp is a backstop rather than the
+/// mechanism (ticket 09 builds on this constant) — two numbers drifting
+/// apart would mean turns silently clamped away on every follow-up, which no
+/// dashboard test would notice for the same reason as above: both halves of
+/// a stubbed exchange would agree with each other and disagree with the
+/// binary.
+#[test]
+fn the_dashboard_carries_the_turn_bound_this_binary_clamps_to() {
+    let source = dashboard_routes();
+
+    let declaration = format!("export const MAX_TURNS = {MAX_TURNS};");
+    assert!(
+        source.contains(&declaration),
+        "dashboard/src/app/ask.ts must declare `{declaration}` to match \
+         `ask::MAX_TURNS` — as written, the dashboard and the server \
+         disagree about how much history a request may carry"
+    );
 }

@@ -13,7 +13,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeGraph } from "../src/index.js";
 import { App } from "../src/app/App.js";
-import { ASK_ROUTE, CAPABILITIES_ROUTE } from "../src/app/ask.js";
+import {
+  ASK_ROUTE,
+  CAPABILITIES_ROUTE,
+  askServer,
+  type Turn,
+} from "../src/app/ask.js";
 import { SHARE_DATA_ID } from "../src/app/share.js";
 import { openRegion, selectedOnCanvas } from "./drive.js";
 import smallMap from "./fixtures/small-map.json";
@@ -156,6 +161,33 @@ describe("asking the map a question", () => {
     expect(init?.headers).toEqual({ "Content-Type": "application/json" });
     expect(JSON.parse(String(init?.body))).toEqual({
       question: "what is this?",
+    });
+  });
+
+  it("carries previous turns on the wire, and no turns field without them", async () => {
+    // Ticket 08's typed wire shape (ADR-0012): ticket 09's thread hands
+    // `askServer` the conversation, and it must ride the body unchanged —
+    // while a call without turns keeps sending the exact body it always
+    // has, which the app-driven test above pins.
+    const fetchStub = servedBy({
+      ask: true,
+      answer: () => ({ status: 200, body: { answer: "ok", citations: [] } }),
+    });
+    const turns: Turn[] = [
+      {
+        question: "where does it start?",
+        answer: "In main.ts.",
+        citations: ["file:src/main.ts"],
+      },
+    ];
+
+    await askServer("what calls it?", turns);
+
+    const call = fetchStub.mock.calls.find(([url]) => url === ASK_ROUTE);
+    expect(call, "the follow-up must reach the question route").toBeDefined();
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+      question: "what calls it?",
+      turns,
     });
   });
 

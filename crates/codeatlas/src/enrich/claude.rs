@@ -478,6 +478,7 @@ mod tests {
                 path: "src/auth/session.ts".into(),
                 summary: "Issues and validates login sessions.".into(),
             }],
+            turns: Vec::new(),
         };
         let body = build_request_body(DEFAULT_MODEL, &prompt::for_question(&question));
 

@@ -339,11 +339,22 @@ fn handle(stream: TcpStream, routes: &Routes) -> std::io::Result<()> {
     }
 }
 
-/// The request body `POST /api/ask` accepts. One field, so the dashboard's
-/// half of the story (ticket 27) is a `fetch` with a one-line body.
+/// The request body `POST /api/ask` accepts: the question, and optionally
+/// the conversation so far (ADR-0012). `turns` defaults to empty, so a bare
+/// `{"question": …}` — every client that existed before conversations did —
+/// remains a valid request, answered exactly as before.
+///
+/// The turns are input to clamp, never grounds to refuse: the bounds and
+/// their enforcement live in `ask::build` beside the question's own, and the
+/// wire shape's TypeScript half is `dashboard/src/app/ask.ts` (held in step
+/// by `tests/routes.rs`). Malformed JSON and a wrong `Content-Type` keep
+/// their existing rejections — clamping is for over-bound, well-formed
+/// input.
 #[derive(serde::Deserialize)]
 struct AskBody {
     question: String,
+    #[serde(default)]
+    turns: Vec<ask::Turn>,
 }
 
 /// The content type a question must be sent as.
@@ -429,7 +440,7 @@ fn answer_question(
         }
     };
 
-    let question = match ask::build(&graph, &asked.question) {
+    let question = match ask::build(&graph, &asked.question, &asked.turns) {
         Ok(question) => question,
         Err(err) => return json_error(stream, "400 Bad Request", &format!("{err:#}")),
     };

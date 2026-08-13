@@ -37,6 +37,19 @@ const ASK_CONTENT_TYPE = "application/json";
  * shows the ones that do not resolve rather than trusting that. */
 export type Answer = { answer: string; citations: string[] };
 
+/** One previous turn as the wire carries it (ADR-0012): the reader's
+ * question, the answer, and the node IDs the answer cited. Must match
+ * `serve::AskBody`'s `turns` element — `tests/routes.rs` pins the bound
+ * below, and the serving binary clamps rather than rejects whatever this
+ * type lets through. */
+export type Turn = { question: string; answer: string; citations: string[] };
+
+/** The most previous turns a request may carry. Must match
+ * `ask::MAX_TURNS`: the dashboard drops its own oldest turns at this bound
+ * (ticket 09), so the server's clamp is a backstop rather than the
+ * mechanism. */
+export const MAX_TURNS = 6;
+
 /** What the explorer is given when questions can be answered at all. */
 export type AskFn = (question: string) => Promise<Answer>;
 
@@ -68,12 +81,20 @@ export async function readCapabilities(): Promise<Capabilities> {
  * an `error` string (400 for the question, 413, 415, 500, 502 for the
  * backend), so the reader is told what the program running on their machine
  * said rather than a status number.
+ *
+ * `turns` is the conversation so far, oldest first (ADR-0012); the thread
+ * that assembles it is ticket 09's. A call without turns sends the exact
+ * body it always has, so a first question — and every caller written before
+ * conversations existed — rides the wire unchanged.
  */
-export async function askServer(question: string): Promise<Answer> {
+export async function askServer(
+  question: string,
+  turns: Turn[] = [],
+): Promise<Answer> {
   const res = await fetch(ASK_ROUTE, {
     method: "POST",
     headers: { "Content-Type": ASK_CONTENT_TYPE },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(turns.length > 0 ? { question, turns } : { question }),
   });
   const body = (await res.json().catch(() => null)) as {
     answer?: unknown;

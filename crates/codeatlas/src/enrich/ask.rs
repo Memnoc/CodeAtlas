@@ -11,17 +11,24 @@
 //!
 //! ADR-0004's standing promise is that the model never receives the whole
 //! serialized graph. An unbounded question feeding an unbounded retrieval
-//! step is the obvious way to lose that by accident, so three limits are
+//! step is the obvious way to lose that by accident, so every limit is
 //! enforced here and nowhere else: [`MAX_QUESTION_CHARS`] on what the reader
-//! may send, [`CONTEXT_NODES`] on how many nodes may accompany it, and
-//! [`MAX_SUMMARY_CHARS`] on how large one of those nodes may be. All are
-//! hard caps rather than targets — [`select_context`] truncates on both
-//! axes, so no phrasing of a question and no map can widen the slice.
+//! may send, [`CONTEXT_NODES`] on how many nodes may accompany it,
+//! [`MAX_SUMMARY_CHARS`] on how large one of those nodes may be, and — since
+//! ADR-0012 let a request carry its conversation — [`MAX_TURNS`] on how many
+//! previous turns ride along, with a carried question clamped to
+//! [`MAX_QUESTION_CHARS`] and a carried answer to [`MAX_TURN_ANSWER_CHARS`].
+//! All are hard caps rather than targets — [`select_context`] truncates on
+//! both axes and [`build`] clamps the history, so no phrasing of a question,
+//! no map, and no client bookkeeping bug can widen the slice or the prompt.
 //!
-//! The third exists because the first two bound the prompt in *nodes* and
-//! not in *bytes*: every summary CodeAtlas writes is a sentence or less, but
-//! a map from another producer (spec story 16) may carry any string the
-//! schema allows.
+//! The summary cap exists because the first two bound the prompt in *nodes*
+//! and not in *bytes*: every summary CodeAtlas writes is a sentence or less,
+//! but a map from another producer (spec story 16) may carry any string the
+//! schema allows. The turn bounds clamp rather than refuse, and that split
+//! is ADR-0012's: the reader typed the question and can rephrase it, so its
+//! bound refuses; the dashboard assembled the history, so its bounds degrade
+//! the answer instead of erroring the reader's question.
 //!
 //! What rides along is what the enrichment prompt already carries: a node's
 //! ID, kind, name, repo-relative path, and the summary the map already holds
@@ -32,12 +39,12 @@
 //! with no provider simply has no way to reach [`answer`] (`serve --ask`
 //! refuses at startup).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, bail};
 
 use super::EnrichmentProvider;
-use crate::map::{KnowledgeGraph, NodeKind};
+use crate::map::{KnowledgeGraph, Node, NodeKind};
 
 /// The most nodes that may accompany a question. Chosen the way
 /// [`super::BATCH_SIZE`] was: large enough that a real question about a real
@@ -64,6 +71,37 @@ pub const MAX_QUESTION_CHARS: usize = 1000;
 /// Truncated rather than refused, unlike a question: a reader can rephrase a
 /// question, and can do nothing about a node's prose.
 pub const MAX_SUMMARY_CHARS: usize = 400;
+
+/// The most previous turns a request may carry (ADR-0012). History past the
+/// bound is clamped oldest-first rather than refused: the reader typed the
+/// question but the dashboard assembled the history, so a 400 would punish
+/// the wrong party. The dashboard enforces the same bound itself, making
+/// this clamp a backstop rather than the mechanism.
+pub const MAX_TURNS: usize = 6;
+
+/// The longest carried answer one turn may bring back. The ask prompt
+/// demands "a short paragraph", so 2000 characters holds any answer this
+/// route has ever produced with room to spare — while capping what
+/// [`MAX_TURNS`] answers add to the prompt at 12,000 characters, smaller
+/// than the slice itself (40 nodes × 400-character summaries). Clamped
+/// rather than refused, like a summary and unlike the current question: the
+/// reader can rephrase a question, and can do nothing about what an earlier
+/// answer said.
+pub const MAX_TURN_ANSWER_CHARS: usize = 2000;
+
+/// One previous turn as the client carries it (ADR-0012): the reader's
+/// question, the answer, and the node IDs that answer cited. Deserialized
+/// straight off the wire by `POST /api/ask`, and clamped by [`build`] before
+/// anything downstream sees it. Citations are input here, not a promise —
+/// only IDs naming real nodes reach the slice (see [`select_context`]), so a
+/// client cannot smuggle an invented node ID into the prompt's node set.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Turn {
+    pub question: String,
+    pub answer: String,
+    #[serde(default)]
+    pub citations: Vec<String>,
+}
 
 /// One node as it accompanies a question: exactly the fields the enrichment
 /// prompt already sends for a summary slot, and no others.
@@ -94,6 +132,10 @@ pub struct Question {
     pub text: String,
     /// At most [`CONTEXT_NODES`] entries.
     pub context: Vec<NodeContext>,
+    /// The carried conversation, oldest first: at most [`MAX_TURNS`] turns,
+    /// each field clamped. Empty for a bare question, which stays a valid
+    /// request answered exactly as before ADR-0012.
+    pub turns: Vec<Turn>,
 }
 
 /// An answer and the nodes it was drawn from. Every ID in `citations` is
@@ -192,32 +234,69 @@ fn kind_rank(kind: NodeKind) -> u8 {
     }
 }
 
-/// The slice of the map that accompanies a question: the best-scoring nodes,
-/// **hard-capped at [`CONTEXT_NODES`]**.
+/// One node of the graph as the prompt will carry it — the only constructor
+/// of a [`NodeContext`], so the summary clamp cannot be forgotten on one of
+/// two paths into the slice.
+fn context_for(node: &Node) -> NodeContext {
+    NodeContext {
+        id: node.id.as_str().to_string(),
+        kind: node.kind,
+        name: node.name.clone(),
+        path: node.path.clone(),
+        summary: clamp(&node.summary, MAX_SUMMARY_CHARS),
+    }
+}
+
+/// The slice of the map that accompanies a question: the carried citations
+/// first, then the best-scoring nodes, **hard-capped at [`CONTEXT_NODES`]**.
 ///
-/// This truncation is the enforcement point for ADR-0004's bound on the
-/// question path. It is deliberately unconditional — every node is scored
-/// and the list is then cut, so a question engineered to match the whole
-/// repository produces exactly the same amount of context as one that
-/// matches nothing.
+/// Citations-first is ADR-0012's retrieval rule: a follow-up like "what
+/// calls it?" carries no searchable terms, so continuity comes from the
+/// nodes the conversation is provably about — the citations earlier answers
+/// earned — never from folding earlier questions into term scoring. Newest
+/// turn first, so when the bound cuts, the oldest conversation's nodes are
+/// the ones to go. A citation is only an ID until it names a real node:
+/// one the map does not contain selects nothing, which is what keeps a
+/// client from smuggling an invented node into the slice.
 ///
-/// Ordering is total: score, then node kind, then ID. Two runs of the same
-/// question against the same map select the same nodes in the same order.
-pub fn select_context(graph: &KnowledgeGraph, question: &str) -> Vec<NodeContext> {
+/// The truncation is the enforcement point for ADR-0004's bound on the
+/// question path. It is deliberately unconditional on both paths — the
+/// citation loop stops at the bound and the scored remainder is cut to what
+/// is left — so a question engineered to match the whole repository, or a
+/// history citing all of it, produces exactly the same amount of context as
+/// a question that matches nothing.
+///
+/// Ordering is total: cited nodes in carried order, then score, node kind,
+/// ID. Two runs of the same question against the same map select the same
+/// nodes in the same order.
+pub fn select_context(graph: &KnowledgeGraph, question: &str, turns: &[Turn]) -> Vec<NodeContext> {
+    let by_id: BTreeMap<&str, &Node> = graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let mut taken = BTreeSet::new();
+    let mut context: Vec<NodeContext> = Vec::new();
+    'cited: for turn in turns.iter().rev() {
+        for id in &turn.citations {
+            if context.len() == CONTEXT_NODES {
+                break 'cited;
+            }
+            // An invented citation names no node and selects nothing.
+            let Some(node) = by_id.get(id.as_str()) else {
+                continue;
+            };
+            if taken.insert(id.as_str()) {
+                context.push(context_for(node));
+            }
+        }
+    }
+
     let terms = terms(question);
     let mut ranked: Vec<(u32, u8, NodeContext)> = graph
         .nodes
         .iter()
+        .filter(|node| !taken.contains(node.id.as_str()))
         .map(|node| {
-            let context = NodeContext {
-                id: node.id.as_str().to_string(),
-                kind: node.kind,
-                name: node.name.clone(),
-                path: node.path.clone(),
-                summary: clamp(&node.summary, MAX_SUMMARY_CHARS),
-            };
-            let score = score(&context, &terms);
-            (score, kind_rank(node.kind), context)
+            let entry = context_for(node);
+            let score = score(&entry, &terms);
+            (score, kind_rank(node.kind), entry)
         })
         .collect();
     ranked.sort_by(|a, b| {
@@ -225,14 +304,34 @@ pub fn select_context(graph: &KnowledgeGraph, question: &str) -> Vec<NodeContext
             .then_with(|| a.1.cmp(&b.1))
             .then_with(|| a.2.id.cmp(&b.2.id))
     });
-    ranked.truncate(CONTEXT_NODES);
-    ranked.into_iter().map(|(_, _, context)| context).collect()
+    ranked.truncate(CONTEXT_NODES - context.len());
+    context.extend(ranked.into_iter().map(|(_, _, entry)| entry));
+    context
+}
+
+/// The carried conversation cut to what ADR-0012 admits: the newest
+/// [`MAX_TURNS`] turns, a carried question clamped to [`MAX_QUESTION_CHARS`]
+/// and a carried answer to [`MAX_TURN_ANSWER_CHARS`]. Clamped, never
+/// refused — over-bound history is the dashboard's bookkeeping slipping, and
+/// erroring the reader's question would punish the wrong party (story 14).
+fn clamped_turns(turns: &[Turn]) -> Vec<Turn> {
+    turns[turns.len().saturating_sub(MAX_TURNS)..]
+        .iter()
+        .map(|turn| Turn {
+            question: clamp(&turn.question, MAX_QUESTION_CHARS),
+            answer: clamp(&turn.answer, MAX_TURN_ANSWER_CHARS),
+            citations: turn.citations.clone(),
+        })
+        .collect()
 }
 
 /// Builds a bounded question, or explains why the text is not one. Blank and
 /// over-long questions are refused here rather than deeper down, so nothing
-/// downstream has to wonder whether a `Question` is fit to send.
-pub fn build(graph: &KnowledgeGraph, text: &str) -> Result<Question> {
+/// downstream has to wonder whether a `Question` is fit to send. The carried
+/// turns take the opposite treatment — clamped, never refused (see
+/// [`clamped_turns`]) — and the clamp runs before the slice is built, so a
+/// dropped turn's citations cannot still steer it.
+pub fn build(graph: &KnowledgeGraph, text: &str, turns: &[Turn]) -> Result<Question> {
     let text = text.trim();
     if text.is_empty() {
         bail!("the question is empty");
@@ -241,10 +340,12 @@ pub fn build(graph: &KnowledgeGraph, text: &str) -> Result<Question> {
     if length > MAX_QUESTION_CHARS {
         bail!("the question is {length} characters; the limit is {MAX_QUESTION_CHARS}");
     }
+    let turns = clamped_turns(turns);
     Ok(Question {
         project: graph.project.name.clone(),
         text: text.to_string(),
-        context: select_context(graph, text),
+        context: select_context(graph, text, &turns),
+        turns,
     })
 }
 
@@ -412,7 +513,7 @@ mod tests {
     #[test]
     fn the_context_is_capped_however_large_the_map_is() {
         let graph = wide_graph(200);
-        let context = select_context(&graph, "how does the widget run");
+        let context = select_context(&graph, "how does the widget run", &[]);
 
         assert_eq!(
             context.len(),
@@ -434,7 +535,7 @@ mod tests {
             .collect();
         // Long enough that `build` would refuse it; `select_context` is the
         // enforcement point being tested, so it is called directly.
-        let context = select_context(&graph, &everything);
+        let context = select_context(&graph, &everything, &[]);
 
         assert_eq!(context.len(), CONTEXT_NODES);
         assert!(
@@ -448,7 +549,7 @@ mod tests {
     #[test]
     fn a_small_map_sends_only_the_nodes_it_has() {
         let graph = wide_graph(3);
-        let context = select_context(&graph, "widget");
+        let context = select_context(&graph, "widget", &[]);
 
         assert_eq!(
             context.len(),
@@ -468,7 +569,7 @@ mod tests {
             "Issues and validates login sessions.",
         ));
 
-        let context = select_context(&graph, "where are login sessions validated?");
+        let context = select_context(&graph, "where are login sessions validated?", &[]);
 
         assert_eq!(
             context.first().map(|c| c.id.as_str()),
@@ -484,7 +585,10 @@ mod tests {
     #[test]
     fn a_context_entry_carries_the_documented_fields_and_no_contents() {
         let graph = wide_graph(1);
-        let entry = select_context(&graph, "widget").into_iter().next().unwrap();
+        let entry = select_context(&graph, "widget", &[])
+            .into_iter()
+            .next()
+            .unwrap();
 
         assert_eq!(
             entry,
@@ -506,7 +610,7 @@ mod tests {
     #[test]
     fn a_question_matching_nothing_falls_back_to_the_map_s_skeleton() {
         let graph = wide_graph(200);
-        let context = select_context(&graph, "quantum entanglement thermodynamics");
+        let context = select_context(&graph, "quantum entanglement thermodynamics", &[]);
 
         assert!(
             context.iter().all(|c| score(c, &terms("quantum")) == 0),
@@ -536,7 +640,10 @@ mod tests {
             &"prose ".repeat(20_000),
         ));
 
-        let entry = select_context(&graph, "prose").into_iter().next().unwrap();
+        let entry = select_context(&graph, "prose", &[])
+            .into_iter()
+            .next()
+            .unwrap();
         assert!(
             entry.summary.chars().count() <= MAX_SUMMARY_CHARS + 1,
             "a summary reached the prompt at {} characters",
@@ -560,11 +667,154 @@ mod tests {
         );
     }
 
+    /// ADR-0012's retrieval rule, the reason a follow-up that says "it"
+    /// works: the nodes the conversation already earned lead the slice. The
+    /// cited node here is a *function* on a map of 150 nodes and the current
+    /// question matches nothing, so the fallback (files first) would never
+    /// select it — only the carried citation can put it there.
+    #[test]
+    fn a_carried_citation_selects_a_node_the_question_alone_never_would() {
+        let graph = wide_graph(50);
+        let cited = "function:src/module3/widget3.ts:run3";
+        let question = "quantum entanglement thermodynamics";
+
+        let bare = select_context(&graph, question, &[]);
+        assert!(
+            !bare.iter().any(|c| c.id == cited),
+            "this test is only meaningful when a bare question omits the node"
+        );
+
+        let turns = vec![Turn {
+            question: "what runs third?".into(),
+            answer: "run3 does.".into(),
+            citations: vec![cited.into()],
+        }];
+        let context = select_context(&graph, question, &turns);
+
+        assert_eq!(
+            context.first().map(|c| c.id.as_str()),
+            Some(cited),
+            "the carried citation must lead the slice: {:?}",
+            context.iter().map(|c| &c.id).take(5).collect::<Vec<_>>()
+        );
+        // Term scoring fills the remainder exactly as it would have filled a
+        // bare question's slice, one seat shorter.
+        assert_eq!(context.len(), CONTEXT_NODES);
+        assert_eq!(context[1..], bare[..CONTEXT_NODES - 1]);
+    }
+
+    /// "It" in a follow-up almost always means the *last* answer's nodes, so
+    /// when the bound has to cut, the newest turn's citations are the ones
+    /// that must survive — the mirror of dropping whole turns oldest-first.
+    /// A node two answers cited enters once.
+    #[test]
+    fn the_newest_turns_citations_lead_and_a_repeat_enters_once() {
+        let graph = wide_graph(50);
+        let older = Turn {
+            question: "what runs third?".into(),
+            answer: "run3.".into(),
+            citations: vec![
+                "function:src/module3/widget3.ts:run3".into(),
+                // Also cited by the newer turn below: kept once, at the
+                // position the newer turn earned it.
+                "function:src/module7/widget7.ts:run7".into(),
+            ],
+        };
+        let newer = Turn {
+            question: "and seventh?".into(),
+            answer: "run7.".into(),
+            citations: vec!["function:src/module7/widget7.ts:run7".into()],
+        };
+
+        let context = select_context(&graph, "quantum entanglement", &[older, newer]);
+
+        let leading: Vec<&str> = context.iter().take(2).map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            leading,
+            [
+                "function:src/module7/widget7.ts:run7",
+                "function:src/module3/widget3.ts:run3",
+            ],
+            "the newest turn's citations lead, and the repeat is not doubled"
+        );
+        assert_eq!(
+            context
+                .iter()
+                .filter(|c| c.id == "function:src/module7/widget7.ts:run7")
+                .count(),
+            1
+        );
+    }
+
+    /// The hard case for the bound: a history citing more real nodes than
+    /// the slice may hold. The cap holds, the newest turns' citations are
+    /// the ones kept, and term scoring adds nothing on top.
+    #[test]
+    fn citations_alone_cannot_widen_the_slice_past_the_bound() {
+        let graph = wide_graph(50);
+        // Six turns citing 8 distinct real files each: 48 valid citations
+        // for 40 seats.
+        let turns: Vec<Turn> = (0..MAX_TURNS)
+            .map(|t| Turn {
+                question: format!("turn {t}?"),
+                answer: format!("answer {t}."),
+                citations: (0..8)
+                    .map(|i| {
+                        let n = t * 8 + i;
+                        format!("file:src/module{n}/widget{n}.ts")
+                    })
+                    .collect(),
+            })
+            .collect();
+
+        let context = select_context(&graph, "widget", &turns);
+
+        assert_eq!(context.len(), CONTEXT_NODES, "the bound is never exceeded");
+        // The newest turn's citations all survived…
+        for id in &turns[MAX_TURNS - 1].citations {
+            assert!(
+                context.iter().any(|c| c.id == *id),
+                "a newest-turn citation was cut: {id}"
+            );
+        }
+        // …and what the bound cut was the oldest turn's, entirely.
+        for id in &turns[0].citations {
+            assert!(
+                !context.iter().any(|c| c.id == *id),
+                "an oldest-turn citation survived past the bound: {id}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_invented_carried_citation_selects_nothing() {
+        let graph = wide_graph(50);
+        let turns = vec![Turn {
+            question: "what handles login?".into(),
+            answer: "A file I made up.".into(),
+            citations: vec![
+                "file:src/does/not/exist.ts".into(),
+                "function:src/module3/widget3.ts:run3".into(),
+            ],
+        }];
+
+        let context = select_context(&graph, "quantum entanglement", &turns);
+
+        assert!(
+            !context.iter().any(|c| c.id == "file:src/does/not/exist.ts"),
+            "an invented node ID must never enter the slice"
+        );
+        // The real citation still leads, and the invented one cost nothing:
+        // the slice is as full as a bare question's would be.
+        assert_eq!(context[0].id, "function:src/module3/widget3.ts:run3");
+        assert_eq!(context.len(), CONTEXT_NODES);
+    }
+
     #[test]
     fn ranking_is_deterministic_for_the_same_question_and_map() {
         let graph = wide_graph(200);
-        let once = select_context(&graph, "widget gadget run");
-        let twice = select_context(&graph, "widget gadget run");
+        let once = select_context(&graph, "widget gadget run", &[]);
+        let twice = select_context(&graph, "widget gadget run", &[]);
 
         assert_eq!(once, twice);
     }
@@ -575,13 +825,13 @@ mod tests {
 
         for blank in ["", "   ", "\n\t "] {
             assert!(
-                build(&graph, blank).is_err(),
+                build(&graph, blank, &[]).is_err(),
                 "a blank question must not reach a provider: {blank:?}"
             );
         }
 
         let long = "a".repeat(MAX_QUESTION_CHARS + 1);
-        let err = build(&graph, &long).unwrap_err().to_string();
+        let err = build(&graph, &long, &[]).unwrap_err().to_string();
         assert!(
             err.contains(&MAX_QUESTION_CHARS.to_string()),
             "the refusal must state the limit: {err}"
@@ -589,13 +839,105 @@ mod tests {
 
         // The boundary itself is accepted, so the limit is a limit and not
         // an off-by-one.
-        assert!(build(&graph, &"a".repeat(MAX_QUESTION_CHARS)).is_ok());
+        assert!(build(&graph, &"a".repeat(MAX_QUESTION_CHARS), &[]).is_ok());
+    }
+
+    /// Story 14: over-bound history is clamped mechanically, oldest turns
+    /// first — the reader typed the question, the dashboard assembled the
+    /// history, and an error would punish the wrong party.
+    #[test]
+    fn history_beyond_the_turn_bound_is_dropped_oldest_first() {
+        let graph = wide_graph(50);
+        // Citing *functions*, which a no-match question's fallback (files
+        // first) never selects: the only road into the slice for these is
+        // the citation, so a dropped turn is observable there.
+        let turns: Vec<Turn> = (0..MAX_TURNS + 1)
+            .map(|t| Turn {
+                question: format!("turn {t}?"),
+                answer: format!("answer {t}."),
+                citations: vec![format!("function:src/module{t}/widget{t}.ts:run{t}")],
+            })
+            .collect();
+
+        let question = build(&graph, "quantum entanglement", &turns).unwrap();
+
+        assert_eq!(question.turns.len(), MAX_TURNS, "the bound is the bound");
+        assert_eq!(
+            question.turns.first().map(|t| t.question.as_str()),
+            Some("turn 1?"),
+            "the oldest turn is the one dropped"
+        );
+        // And the dropped turn's citation dropped out of the slice with it.
+        assert!(
+            !question
+                .context
+                .iter()
+                .any(|c| c.id == "function:src/module0/widget0.ts:run0"),
+            "a dropped turn must not still steer the slice"
+        );
+        assert!(
+            question
+                .context
+                .iter()
+                .any(|c| c.id == "function:src/module1/widget1.ts:run1"),
+            "a surviving turn's citation must still steer the slice"
+        );
+
+        // The boundary itself is kept whole, so the bound is a bound and
+        // not an off-by-one.
+        let exactly = build(&graph, "quantum entanglement", &turns[1..]).unwrap();
+        assert_eq!(exactly.turns.len(), MAX_TURNS);
+        assert_eq!(
+            exactly.turns.first().map(|t| t.question.as_str()),
+            Some("turn 1?")
+        );
+    }
+
+    /// The per-field bounds on carried turns clamp rather than refuse —
+    /// unlike the current question, whose refusal stands: the reader can
+    /// rephrase what they are typing, and can do nothing about what an
+    /// earlier answer said.
+    #[test]
+    fn carried_fields_are_clamped_rather_than_refused() {
+        let graph = wide_graph(2);
+        let turns = vec![Turn {
+            question: "q".repeat(MAX_QUESTION_CHARS + 50),
+            answer: "a".repeat(MAX_TURN_ANSWER_CHARS + 50),
+            citations: Vec::new(),
+        }];
+
+        let question = build(&graph, "what runs first?", &turns)
+            .expect("over-bound carried fields must never refuse the request");
+
+        let carried = &question.turns[0];
+        assert_eq!(
+            carried.question.chars().count(),
+            MAX_QUESTION_CHARS + 1,
+            "clamped to the bound plus the ellipsis"
+        );
+        assert_eq!(carried.answer.chars().count(), MAX_TURN_ANSWER_CHARS + 1);
+
+        // Fields at the bound pass untouched — the clamp is a ceiling, not
+        // a rewrite.
+        let at_bound = vec![Turn {
+            question: "q".repeat(MAX_QUESTION_CHARS),
+            answer: "a".repeat(MAX_TURN_ANSWER_CHARS),
+            citations: Vec::new(),
+        }];
+        let question = build(&graph, "what runs first?", &at_bound).unwrap();
+        assert_eq!(question.turns[0].question, at_bound[0].question);
+        assert_eq!(question.turns[0].answer, at_bound[0].answer);
+
+        // And the reader's own bound is unchanged by history being present:
+        // an over-long *current* question is still refused.
+        let long = "a".repeat(MAX_QUESTION_CHARS + 1);
+        assert!(build(&graph, &long, &at_bound).is_err());
     }
 
     #[test]
     fn a_question_is_trimmed_and_carries_the_project() {
         let graph = wide_graph(1);
-        let question = build(&graph, "  what runs first?  ").unwrap();
+        let question = build(&graph, "  what runs first?  ", &[]).unwrap();
 
         assert_eq!(question.text, "what runs first?");
         assert_eq!(question.project, "demo");
@@ -628,7 +970,7 @@ mod tests {
             terms(question)
         );
         assert!(
-            select_context(&graph, question)
+            select_context(&graph, question, &[])
                 .iter()
                 .all(|c| score(c, &terms(question)) == 0),
             "function words must contribute no evidence"
@@ -647,7 +989,7 @@ mod tests {
         let graph = prose_graph();
         let short = vec!["in".to_string()];
         assert!(
-            select_context(&graph, "invoice")
+            select_context(&graph, "invoice", &[])
                 .iter()
                 .all(|c| score(c, &short) > 0),
             "a two-character term matches every node, which is the point"
@@ -676,7 +1018,9 @@ mod tests {
             "Does a thing.",
         ));
         assert_eq!(
-            select_context(&graph, "session").first().map(|c| &*c.id),
+            select_context(&graph, "session", &[])
+                .first()
+                .map(|c| &*c.id),
             Some("function:src/other.ts:session"),
             "a node named for the term must outrank one that mentions it"
         );
@@ -700,7 +1044,7 @@ mod tests {
             "Does a thing.",
         ));
         assert_eq!(
-            select_context(&graph, "auth").first().map(|c| &*c.id),
+            select_context(&graph, "auth", &[]).first().map(|c| &*c.id),
             Some("file:src/auth/helper.ts"),
             "a node living under the term must outrank one that mentions it"
         );
@@ -731,7 +1075,7 @@ mod tests {
         // Both are files and the match sorts last by ID, so only the summary
         // weight can put it first.
         assert_eq!(
-            select_context(&graph, "how are sessions validated?")
+            select_context(&graph, "how are sessions validated?", &[])
                 .first()
                 .map(|c| &*c.id),
             Some("file:src/zzz/second.ts"),
@@ -768,7 +1112,9 @@ mod tests {
 
         let question = "how does the sealed build stop network egress?";
         assert_eq!(
-            select_context(&graph, question).first().map(|c| &*c.id),
+            select_context(&graph, question, &[])
+                .first()
+                .map(|c| &*c.id),
             Some("file:src/enrich.rs"),
             "three terms in prose must outrank one term in a name that its \
              own summary repeats"
@@ -788,7 +1134,7 @@ mod tests {
             ],
         });
 
-        let question = build(&graph, "what starts things off?").unwrap();
+        let question = build(&graph, "what starts things off?", &[]).unwrap();
         let answer = super::answer(&provider, &question).unwrap();
 
         assert_eq!(answer.text, "Widget zero starts things off.");
@@ -804,7 +1150,7 @@ mod tests {
         let graph = wide_graph(200);
         let provider = Recording::new(Answer::default());
 
-        let question = build(&graph, "widget gadget run module").unwrap();
+        let question = build(&graph, "widget gadget run module", &[]).unwrap();
         super::answer(&provider, &question).unwrap();
 
         assert_eq!(*provider.seen.borrow(), vec![CONTEXT_NODES]);
@@ -826,7 +1172,7 @@ mod tests {
         }
 
         let graph = wide_graph(2);
-        let question = build(&graph, "anything").unwrap();
+        let question = build(&graph, "anything", &[]).unwrap();
         let err = super::answer(&Failing, &question).unwrap_err();
         assert!(err.to_string().contains("boom"));
     }
@@ -846,7 +1192,7 @@ mod tests {
         }
 
         let graph = wide_graph(2);
-        let question = build(&graph, "anything").unwrap();
+        let question = build(&graph, "anything", &[]).unwrap();
         let err = super::answer(&EnrichOnly, &question).unwrap_err();
         assert!(
             err.to_string().contains("question"),

@@ -128,9 +128,17 @@ pub fn answers_schema() -> serde_json::Value {
     })
 }
 
-/// The user turn for one question: the project, the question, and the
-/// bounded slice of nodes selected to answer it. Nothing else — in
-/// particular no file contents, which this path has no way to reach.
+/// The user turn for one question: the project, the carried conversation
+/// when there is one, the question, and the bounded slice of nodes selected
+/// to answer it. Nothing else — in particular no file contents, which this
+/// path has no way to reach.
+///
+/// The transcript is what gives "it" in a follow-up its referent; the
+/// *nodes* the conversation earned arrive through the slice instead
+/// (ADR-0012's citations-first rule, enforced in `ask::select_context`).
+/// Every string in it was clamped by `ask::build`, so the block is bounded
+/// exactly as the rest of the prompt is. A bare question renders
+/// byte-identically to what it did before conversations existed.
 pub fn ask_user_message(question: &ask::Question) -> String {
     let nodes: Vec<serde_json::Value> = question
         .context
@@ -145,8 +153,17 @@ pub fn ask_user_message(question: &ask::Question) -> String {
             })
         })
         .collect();
+    let transcript = if question.turns.is_empty() {
+        String::new()
+    } else {
+        let mut block = String::from("Previous turns of this conversation, oldest first:\n\n");
+        for turn in &question.turns {
+            block.push_str(&format!("Q: {}\nA: {}\n\n", turn.question, turn.answer));
+        }
+        block
+    };
     format!(
-        "Project: {}\n\nQuestion: {}\n\nNodes:\n{}",
+        "Project: {}\n\n{transcript}Question: {}\n\nNodes:\n{}",
         question.project,
         question.text,
         serde_json::to_string_pretty(&nodes).expect("nodes serialize"),
@@ -331,6 +348,7 @@ mod tests {
                 path: "src/main.ts".into(),
                 summary: "TypeScript file, 3 lines".into(),
             }],
+            turns: Vec::new(),
         };
 
         let message = ask_user_message(&question);
@@ -356,6 +374,57 @@ mod tests {
         // Never the graph and never the repository (ADR-0009).
         assert!(!message.contains("edges"), "{message}");
         assert!(!message.contains("imports"), "{message}");
+    }
+
+    /// ADR-0012: carried turns ride the prompt as a transcript, oldest
+    /// first, so "it" in the current question has a referent — while a bare
+    /// question's message stays byte-identical to what it was before
+    /// conversations existed (the test above holds it to that).
+    #[test]
+    fn carried_turns_ride_between_the_project_and_the_question_oldest_first() {
+        let question = ask::Question {
+            project: "demo".into(),
+            text: "what calls it?".into(),
+            context: vec![ask::NodeContext {
+                id: "file:src/main.ts".into(),
+                kind: NodeKind::File,
+                name: "main.ts".into(),
+                path: "src/main.ts".into(),
+                summary: "TypeScript file, 3 lines".into(),
+            }],
+            turns: vec![
+                ask::Turn {
+                    question: "where does the program start?".into(),
+                    answer: "In src/main.ts.".into(),
+                    citations: vec!["file:src/main.ts".into()],
+                },
+                ask::Turn {
+                    question: "what does it import?".into(),
+                    answer: "The util module.".into(),
+                    citations: Vec::new(),
+                },
+            ],
+        };
+
+        let message = ask_user_message(&question);
+
+        // Asserted whole, exactly as the bare-question test does: the
+        // transcript is one block in a stated place, not sentences scattered
+        // wherever an implementation dropped them.
+        let (preamble, _) = message
+            .split_once("Nodes:\n")
+            .expect("the message has a nodes section");
+        assert_eq!(
+            preamble,
+            "Project: demo\n\n\
+             Previous turns of this conversation, oldest first:\n\n\
+             Q: where does the program start?\n\
+             A: In src/main.ts.\n\n\
+             Q: what does it import?\n\
+             A: The util module.\n\n\
+             Question: what calls it?\n\n",
+            "the transcript rides between the project and the question"
+        );
     }
 
     #[test]

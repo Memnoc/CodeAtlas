@@ -422,6 +422,7 @@ mod tests {
                 path: "src/main.ts".into(),
                 summary: "TypeScript file, 3 lines".into(),
             }],
+            turns: Vec::new(),
         }
     }
 

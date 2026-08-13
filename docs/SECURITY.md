@@ -9,6 +9,7 @@ every push and pull request.
 [ADR-0007]: adr/0007-the-annotation-store-is-a-committed-repository-artifact.md
 [ADR-0008]: adr/0008-enrichment-through-an-authenticated-claude-cli-behind-its-own-feature.md
 [ADR-0009]: adr/0009-codebase-questions-are-answered-by-the-serving-binary.md
+[ADR-0012]: adr/0012-a-conversation-is-client-carried-bounded-input.md
 
 ## The one sentence
 
@@ -166,19 +167,23 @@ summary the map already holds** — mechanical or enriched — and nothing else.
 Never file contents: the selection is a projection of the graph, and the
 module that performs it opens no file and takes no repository root.
 
-Around that slice the message carries two further things and no others: the
-**project name**, as the enrichment message does, and the **reader's own
-question**, which is the point of the request. Both are stated here because
-"per node, and nothing else" is a claim about the nodes and would otherwise
-read as a claim about the whole message
-(`crates/codeatlas/src/enrich/prompt.rs`, `ask_user_message`).
+Around that slice the message carries three further things and no others:
+the **project name**, as the enrichment message does, the **reader's own
+question**, which is the point of the request, and — only when the request
+carried one — the **conversation so far**, the previous questions and
+answers the client sent back ([ADR-0012]; the client already knew every word
+of them). All are stated here because "per node, and nothing else" is a
+claim about the nodes and would otherwise read as a claim about the whole
+message (`crates/codeatlas/src/enrich/prompt.rs`, `ask_user_message`).
 
-Three limits bound it, all in `crates/codeatlas/src/enrich/ask.rs`:
+Five limits bound it, all in `crates/codeatlas/src/enrich/ask.rs`:
 
 - **`ask::CONTEXT_NODES`** — the most nodes that may accompany a question.
   `select_context` scores every node and then truncates unconditionally, so a
   question engineered to match the whole repository sends exactly as much as
-  one that matches nothing.
+  one that matches nothing. Carried citations fill seats inside this bound,
+  never on top of it — and a citation naming no real node in the map selects
+  nothing, so a client cannot smuggle an invented node into the slice.
 - **`ask::MAX_SUMMARY_CHARS`** — the longest summary one of those nodes may
   carry. Without it the slice would be bounded in nodes and unbounded in
   bytes, because a map from another producer may hold any string the schema
@@ -186,23 +191,39 @@ Three limits bound it, all in `crates/codeatlas/src/enrich/ask.rs`:
 - **`ask::MAX_QUESTION_CHARS`** — the longest question accepted. Refused
   rather than truncated: a truncated question is a different question,
   answered without saying so.
+- **`ask::MAX_TURNS`** — the most previous turns a request may carry.
+  Clamped oldest-first rather than refused: the history is the dashboard's
+  bookkeeping, not the reader's typing ([ADR-0012]).
+- **`ask::MAX_TURN_ANSWER_CHARS`** — the longest carried answer one turn may
+  bring back, clamped like a summary; a carried question is clamped to
+  `MAX_QUESTION_CHARS`. The server holds no conversation state: the turns
+  arrive with the request, bounded here, and are forgotten with it.
 
 **Enforced by**, in `crates/codeatlas/src/enrich/ask.rs`:
 `a_context_entry_carries_the_documented_fields_and_no_contents` (the field
 list above, asserted as a whole value rather than field by field),
 `the_context_is_capped_however_large_the_map_is`,
 `a_question_crafted_to_match_everything_still_gets_one_slice`,
+`citations_alone_cannot_widen_the_slice_past_the_bound`,
+`an_invented_carried_citation_selects_nothing`,
 `one_enormous_summary_cannot_inflate_the_slice`,
+`history_beyond_the_turn_bound_is_dropped_oldest_first`,
+`carried_fields_are_clamped_rather_than_refused`,
 `the_provider_never_sees_more_than_the_bound` (at the provider seam, on what
 a backend was actually handed), and
 `a_blank_or_oversized_question_is_refused_before_any_provider_is_asked`.
 `a_question_carries_the_project_the_question_and_its_nodes_and_no_more`
 (`crates/codeatlas/src/enrich/prompt.rs`) holds the paragraph above it — the
 message *around* the nodes, asserted whole rather than by substring, because
-a per-node claim cannot see a third thing added beside them.
-`a_question_reaches_a_spawned_cli_locked_down_and_correctly_framed`
-(`crates/codeatlas/tests/serve.rs`) carries the same claim end to end, from
-an HTTP request to the argv a real child received.
+a per-node claim cannot see a third thing added beside them — and
+`carried_turns_ride_between_the_project_and_the_question_oldest_first`
+(same file) holds the carried case's message whole the same way.
+`a_question_reaches_a_spawned_cli_locked_down_and_correctly_framed` and
+`carried_turns_reach_the_model_clamped_and_in_order`
+(`crates/codeatlas/tests/serve.rs`) carry the same claims end to end, from
+an HTTP request to the argv a real child received;
+`two_conversations_interleaved_on_one_server_never_see_each_other` (same
+file) holds the no-conversation-state sentence above on the wire.
 
 ### 3. The sealed build has neither route — reaching a model is a compile error
 

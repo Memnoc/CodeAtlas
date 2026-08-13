@@ -214,6 +214,102 @@ fn ask(port: u16, question: &str) -> (String, serde_json::Value) {
     (status, parsed)
 }
 
+/// Asks a question carrying previous turns (ADR-0012): the same POST with
+/// the body's optional `turns` array populated.
+fn ask_carrying(
+    port: u16,
+    question: &str,
+    turns: serde_json::Value,
+) -> (String, serde_json::Value) {
+    let body = serde_json::json!({ "question": question, "turns": turns }).to_string();
+    let (status, _, raw) = http_post(port, "/api/ask", &body);
+    let parsed = serde_json::from_slice(&raw).unwrap_or_else(|e| {
+        panic!(
+            "ask response was not JSON ({e}): {:?}",
+            String::from_utf8_lossy(&raw)
+        )
+    });
+    (status, parsed)
+}
+
+/// A node in [`wide_repo`] whose only road into the slice is a carried
+/// citation, which is what makes conversation state observable on the wire:
+/// the fake backend's canned citation of it survives the server's
+/// validation exactly when the carried turns put it in the slice.
+const TARGET: &str = "file:src/zzz/target.ts";
+
+/// A question matching nothing in [`wide_repo`], so slice selection falls
+/// back to files in ID order — and [`TARGET`] sorts after all sixty gadget
+/// files, outside the 40-node bound.
+const NO_MATCH_QUESTION: &str = "does the quokka wander at midnight?";
+
+/// A repository bigger than the slice bound: sixty files whose IDs sort
+/// before `src/zzz/target.ts`, so on [`NO_MATCH_QUESTION`] the fallback
+/// top-40 never includes [`TARGET`] and only a carried citation can.
+fn wide_repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("src");
+    fs::create_dir_all(src.join("zzz")).unwrap();
+    for i in 0..60 {
+        fs::write(
+            src.join(format!("gadget{i:02}.ts")),
+            format!("export const gadget{i:02} = {i};\n"),
+        )
+        .unwrap();
+    }
+    fs::write(src.join("zzz/target.ts"), "export const target = 1;\n").unwrap();
+    dir
+}
+
+/// ADR-0012 on the wire: a request may carry previous turns, and the slice
+/// is built citations-first from them. The proof rides the citation
+/// validation the route already has — the fake backend's canned citation of
+/// [`TARGET`] survives `verified` exactly when the carried turns put that
+/// node in the slice, so the bare ask is the control and the carried ask is
+/// the behaviour.
+#[test]
+fn a_carried_turn_steers_the_slice_the_next_answer_is_drawn_from() {
+    let repo = wide_repo();
+    scan(repo.path());
+    let outside = tempfile::tempdir().unwrap();
+    let spec = format!(
+        "fake:{}",
+        canned(outside.path(), "The target does the work.", &[TARGET]).display()
+    );
+    let server = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+
+    // Control: a bare question stays a valid request answered exactly as
+    // today — and its slice cannot hold the target, so the canned citation
+    // is dropped.
+    let (status, body) = ask(server.port, NO_MATCH_QUESTION);
+    assert!(status.contains("200"), "bare ask status: {status} {body}");
+    assert_eq!(body["answer"], "The target does the work.");
+    assert_eq!(
+        body["citations"],
+        serde_json::json!([]),
+        "a bare question's slice must not hold the target: {body}"
+    );
+
+    // The same question carrying one turn whose answer cited the target:
+    // the citation puts the node in the slice, so the same canned citation
+    // now checks out.
+    let turns = serde_json::json!([{
+        "question": "what is the target?",
+        "answer": "src/zzz/target.ts is.",
+        "citations": [TARGET],
+    }]);
+    let (status, body) = ask_carrying(server.port, NO_MATCH_QUESTION, turns);
+    assert!(
+        status.contains("200"),
+        "carried ask status: {status} {body}"
+    );
+    assert_eq!(
+        body["citations"],
+        serde_json::json!([TARGET]),
+        "the carried citation must steer the slice: {body}"
+    );
+}
+
 fn header<'a>(headers: &'a [String], name: &str) -> Option<&'a str> {
     headers.iter().find_map(|h| {
         let (key, value) = h.split_once(':')?;
@@ -383,6 +479,161 @@ fn a_question_is_answered_and_cites_only_nodes_that_exist() {
             "cited a node the map does not have: {citation}"
         );
     }
+}
+
+/// Story 14 on the wire: over-bound history is clamped mechanically, oldest
+/// turns first, and never rejected — the reader typed the question, the
+/// dashboard assembled the history, and a 400 would punish the wrong party.
+/// Which turns survived is observable exactly as above: the canned citation
+/// of [`TARGET`] outlives `verified` only if the turn citing it did.
+#[test]
+fn history_beyond_the_bound_is_clamped_oldest_first_never_rejected() {
+    let repo = wide_repo();
+    scan(repo.path());
+    let outside = tempfile::tempdir().unwrap();
+    let spec = format!(
+        "fake:{}",
+        canned(outside.path(), "Still the target.", &[TARGET]).display()
+    );
+    let server = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+
+    // Seven turns where only the OLDEST cites the target: the clamp keeps
+    // the newest six, so the citing turn is gone and the citation with it.
+    let citing = |t: usize, cites: bool| {
+        serde_json::json!({
+            "question": format!("turn {t}?"),
+            "answer": format!("answer {t}."),
+            "citations": if cites { vec![TARGET] } else { vec![] },
+        })
+    };
+    let oldest_cites: Vec<_> = (0..7).map(|t| citing(t, t == 0)).collect();
+    let (status, body) = ask_carrying(
+        server.port,
+        NO_MATCH_QUESTION,
+        serde_json::json!(oldest_cites),
+    );
+    assert!(
+        status.contains("200"),
+        "over-bound history must never be rejected: {status} {body}"
+    );
+    assert_eq!(
+        body["citations"],
+        serde_json::json!([]),
+        "the oldest turn must be the one dropped: {body}"
+    );
+
+    // The same seven turns except the *second*-oldest cites: within the
+    // newest six, so it survives the clamp and steers the slice.
+    let second_cites: Vec<_> = (0..7).map(|t| citing(t, t == 1)).collect();
+    let (status, body) = ask_carrying(
+        server.port,
+        NO_MATCH_QUESTION,
+        serde_json::json!(second_cites),
+    );
+    assert!(status.contains("200"), "{status} {body}");
+    assert_eq!(
+        body["citations"],
+        serde_json::json!([TARGET]),
+        "a turn inside the bound must survive the clamp: {body}"
+    );
+
+    // Over-bound in every dimension a client controls short of MAX_BODY:
+    // eight turns of over-long fields, and the answer is still an answer.
+    let bloated: Vec<_> = (0..8)
+        .map(|t| {
+            serde_json::json!({
+                "question": "q".repeat(1_500),
+                "answer": "a".repeat(2_500),
+                "citations": if t == 7 { vec![TARGET] } else { vec![] },
+            })
+        })
+        .collect();
+    let (status, body) = ask_carrying(server.port, NO_MATCH_QUESTION, serde_json::json!(bloated));
+    assert!(
+        status.contains("200"),
+        "over-bound fields are clamped, never refused: {status} {body}"
+    );
+    assert_eq!(body["citations"], serde_json::json!([TARGET]), "{body}");
+}
+
+/// Story 15 on the wire: the server holds no conversation state, so two
+/// conversations interleaved on one server never see each other. If the
+/// server retained anything between requests, the bare conversation's slice
+/// would inherit the carried one's cited node and the canned citation would
+/// start surviving there too.
+#[test]
+fn two_conversations_interleaved_on_one_server_never_see_each_other() {
+    let repo = wide_repo();
+    scan(repo.path());
+    let outside = tempfile::tempdir().unwrap();
+    let spec = format!(
+        "fake:{}",
+        canned(outside.path(), "About the target.", &[TARGET]).display()
+    );
+    let server = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+
+    let carried = serde_json::json!([{
+        "question": "what is the target?",
+        "answer": "src/zzz/target.ts is.",
+        "citations": [TARGET],
+    }]);
+    for round in 1..=2 {
+        let (status, body) = ask_carrying(server.port, NO_MATCH_QUESTION, carried.clone());
+        assert!(status.contains("200"), "round {round}: {status} {body}");
+        assert_eq!(
+            body["citations"],
+            serde_json::json!([TARGET]),
+            "round {round}: the carried conversation steers its own slice: {body}"
+        );
+
+        let (status, body) = ask(server.port, NO_MATCH_QUESTION);
+        assert!(status.contains("200"), "round {round}: {status} {body}");
+        assert_eq!(
+            body["citations"],
+            serde_json::json!([]),
+            "round {round}: a bare conversation asked between two carried \
+             ones must inherit nothing from them: {body}"
+        );
+    }
+}
+
+/// The `Content-Type` gate is what keeps an arbitrary page in the reader's
+/// browser from spending their model budget cross-origin, and growing the
+/// body's shape must not weaken it (ADR-0012): a request carrying turns is
+/// refused on a browser-simple content type exactly as a bare one is.
+#[test]
+fn a_request_carrying_turns_still_faces_the_content_type_gate() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let outside = tempfile::tempdir().unwrap();
+    let spec = format!(
+        "fake:{}",
+        canned(outside.path(), "MUST NOT BE REACHED", &[]).display()
+    );
+    let server = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+
+    let body = serde_json::json!({
+        "question": "what is this?",
+        "turns": [{"question": "earlier?", "answer": "Earlier.", "citations": []}],
+    })
+    .to_string();
+    let (status, _, raw) = http_post_as(server.port, "/api/ask", &body, "text/plain");
+    assert!(
+        status.contains("415"),
+        "turns must not soften the gate: {status}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&raw).contains("MUST NOT BE REACHED"),
+        "the backend was reached anyway: {:?}",
+        String::from_utf8_lossy(&raw)
+    );
+
+    // The control: the same body with the demanded type is answered.
+    let (status, _, _) = http_post_as(server.port, "/api/ask", &body, "application/json");
+    assert!(
+        status.contains("200"),
+        "the honest request failed: {status}"
+    );
 }
 
 /// ADR-0009: without the flag the server reaches nothing but loopback and
@@ -985,6 +1236,77 @@ fn a_question_reaches_a_spawned_cli_locked_down_and_correctly_framed() {
     assert!(
         lines.contains(&"api-key=<unset>".to_string()),
         "the API key reached the child: {lines:?}"
+    );
+}
+
+/// The transcript half of ADR-0012, observed where it lands: the spawned
+/// CLI's argv. The citation tests above prove carried turns steer the
+/// *slice*; this proves the turns themselves reach the model — clamped,
+/// oldest first, ahead of the question — because a follow-up that says "it"
+/// needs the earlier turns for "it" to mean anything.
+///
+/// The newline-sensitive assertions read `\r` where the prompt had `\n`:
+/// the stand-in CLI records argv with newlines translated so one argument
+/// stays one line (see `common::fake_cli`).
+#[cfg(feature = "agent-cli")]
+#[test]
+fn carried_turns_reach_the_model_clamped_and_in_order() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let outside = tempfile::tempdir().unwrap();
+    let spec = common::fake_cli(
+        outside.path(),
+        r#"{"type":"result","subtype":"success","is_error":false,
+            "structured_output":{"answer":"It is called from main.","citations":[]}}"#,
+        0,
+    );
+    let server = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+
+    // Seven turns: the oldest must be clamped away, the survivors must ride
+    // oldest-first, and the newest turn's over-long answer must arrive cut
+    // to the stated bound.
+    let turns: Vec<serde_json::Value> = (0..7)
+        .map(|t| {
+            serde_json::json!({
+                "question": format!("MARK{t} what about step {t}?"),
+                "answer": if t == 6 { "x".repeat(3_000) } else { format!("Step {t} answers.") },
+                "citations": [],
+            })
+        })
+        .collect();
+    let (status, body) = ask_carrying(server.port, "what calls it?", serde_json::json!(turns));
+    assert!(status.contains("200"), "ask status: {status} {body}");
+
+    let args = common::recorded_args(outside.path());
+    let (prompt, _) = args.split_last().expect("there are arguments");
+
+    // The clamp, visible in what the child was handed: six turns, not seven.
+    assert!(
+        !prompt.contains("MARK0"),
+        "the oldest turn must be clamped away, oldest first: {prompt}"
+    );
+    for t in 1..=6 {
+        assert!(
+            prompt.contains(&format!("MARK{t}")),
+            "turn {t} must survive the clamp: {prompt}"
+        );
+    }
+    // Oldest first, and the whole transcript ahead of the question.
+    let position = |needle: &str| prompt.find(needle).unwrap();
+    assert!(position("MARK1") < position("MARK6"), "{prompt}");
+    assert!(
+        position("MARK6") < position("Question: what calls it?"),
+        "the transcript must ride ahead of the question: {prompt}"
+    );
+    // The carried answer arrives clamped to its bound plus the ellipsis —
+    // 2000 x's and one `…`, never 2001.
+    assert!(
+        prompt.contains(&format!("{}…", "x".repeat(2_000))),
+        "the over-long answer must arrive clamped"
+    );
+    assert!(
+        !prompt.contains(&"x".repeat(2_001)),
+        "the answer's bound did not hold"
     );
 }
 
