@@ -2598,6 +2598,13 @@ mod test_provider {
     /// with a slot address.
     const ASK_ANSWER: &str = "ask:answer";
     const ASK_CITATIONS: &str = "ask:citations";
+    /// The reserved keys scripting what this backend claims the exchange
+    /// spent (ticket 09). Both present reads as a measurement; anything less
+    /// is a backend that reports nothing — which is also the default, so
+    /// every canned file written before usage existed scripts the absent
+    /// case by construction.
+    const ASK_INPUT_TOKENS: &str = "ask:input_tokens";
+    const ASK_OUTPUT_TOKENS: &str = "ask:output_tokens";
 
     impl CannedProvider {
         fn canned(&self) -> Result<BTreeMap<String, String>> {
@@ -2622,12 +2629,24 @@ mod test_provider {
             let text = canned.get(ASK_ANSWER).ok_or_else(|| {
                 anyhow!("the canned responses {:?} hold no {ASK_ANSWER}", self.path)
             })?;
+            let usage = match (canned.get(ASK_INPUT_TOKENS), canned.get(ASK_OUTPUT_TOKENS)) {
+                (Some(input), Some(output)) => Some(ask::Usage {
+                    input_tokens: input.parse().with_context(|| {
+                        format!("{ASK_INPUT_TOKENS} in {:?} is not a count", self.path)
+                    })?,
+                    output_tokens: output.parse().with_context(|| {
+                        format!("{ASK_OUTPUT_TOKENS} in {:?} is not a count", self.path)
+                    })?,
+                }),
+                _ => None,
+            };
             Ok(ask::Answer {
                 text: text.clone(),
                 citations: canned
                     .get(ASK_CITATIONS)
                     .map(|ids| ids.split_whitespace().map(str::to_string).collect())
                     .unwrap_or_default(),
+                usage,
             })
         }
 

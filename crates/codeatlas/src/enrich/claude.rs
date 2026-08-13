@@ -83,11 +83,15 @@ impl ClaudeProvider {
 
 impl EnrichmentProvider for ClaudeProvider {
     fn enrich(&self, request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
-        prompt::parse_answers(self.complete(&prompt::for_enrichment(request))?)
+        prompt::parse_answers(self.complete(&prompt::for_enrichment(request))?.0)
     }
 
     fn ask(&self, question: &ask::Question) -> Result<ask::Answer> {
-        prompt::parse_ask_answer(self.complete(&prompt::for_question(question))?)
+        let (output, usage) = self.complete(&prompt::for_question(question))?;
+        Ok(ask::Answer {
+            usage,
+            ..prompt::parse_ask_answer(output)?
+        })
     }
 
     /// The model is always known here: [`ClaudeProvider::new`] resolves an
@@ -106,7 +110,10 @@ impl ClaudeProvider {
     /// through here so credential resolution, the POST and the envelope
     /// checks exist once — the CLI backend next door has the same shape for
     /// the same reason.
-    fn complete(&self, completion: &prompt::Completion) -> Result<serde_json::Value> {
+    fn complete(
+        &self,
+        completion: &prompt::Completion,
+    ) -> Result<(serde_json::Value, Option<ask::Usage>)> {
         let credentials = resolve_credentials()?;
         let body = build_request_body(&self.model, completion);
         let raw = post(&body, &credentials)?;
@@ -189,6 +196,12 @@ struct ApiMessage {
     content: Vec<ContentBlock>,
     #[serde(default)]
     stop_reason: Option<String>,
+    /// The token counts the API measured for this exchange (ADR-0012).
+    /// Loose on purpose — a raw value handed to [`ask::Usage::from_envelope`]
+    /// — so an envelope whose usage is missing or malformed still yields its
+    /// answer, with the display absent rather than the question failed.
+    #[serde(default)]
+    usage: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -206,8 +219,11 @@ struct ContentBlock {
 /// is an error, never a repair attempt.
 ///
 /// Shared by both request kinds: enrichment and questions differ in the
-/// schema they demand, not in how a Messages API response is read.
-fn structured_output(raw: &str) -> Result<serde_json::Value> {
+/// schema they demand, not in how a Messages API response is read. The
+/// envelope's measured token counts ride alongside, because the envelope is
+/// consumed here and the question path reports what the exchange spent
+/// (ADR-0012).
+fn structured_output(raw: &str) -> Result<(serde_json::Value, Option<ask::Usage>)> {
     let message: ApiMessage =
         serde_json::from_str(raw).context("malformed Claude Messages API response")?;
     if let Some(reason) = message.stop_reason.as_deref()
@@ -224,7 +240,9 @@ fn structured_output(raw: &str) -> Result<serde_json::Value> {
         .find(|block| block.kind == "text" && !block.text.is_empty())
         .map(|block| block.text.as_str())
         .ok_or_else(|| anyhow!("the Claude API response carries no text content"))?;
-    serde_json::from_str(text).context("the structured output was not JSON")
+    let output: serde_json::Value =
+        serde_json::from_str(text).context("the structured output was not JSON")?;
+    Ok((output, ask::Usage::from_envelope(message.usage.as_ref())))
 }
 
 /// The single network call in the binary (ADR-0006): one blocking POST to
@@ -295,7 +313,7 @@ mod tests {
     /// `enrich` method performs, named so these tests read as before the
     /// envelope step was shared with the question path.
     fn parse_response(raw: &str) -> Result<EnrichmentResponse> {
-        prompt::parse_answers(structured_output(raw)?)
+        prompt::parse_answers(structured_output(raw)?.0)
     }
 
     fn request() -> EnrichmentRequest {
@@ -514,9 +532,72 @@ mod tests {
         })
         .to_string();
 
-        let answer = prompt::parse_ask_answer(structured_output(&raw).unwrap()).unwrap();
+        let answer = prompt::parse_ask_answer(structured_output(&raw).unwrap().0).unwrap();
         assert_eq!(answer.text, "Sessions are validated in session.ts.");
         assert_eq!(answer.citations, vec!["file:src/auth/session.ts"]);
+    }
+
+    /// The recorded-envelope fixtures for usage (ticket 09, ADR-0012): a
+    /// Messages API response carries `usage.input_tokens` and
+    /// `usage.output_tokens` at the top level, beside `content` — and this
+    /// backend reads exactly those two counts.
+    #[test]
+    fn measured_usage_is_read_from_the_response_envelope() {
+        let raw = json!({
+            "content": [{"type": "text", "text": r#"{"answer": "ok", "citations": []}"#}],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 1200,
+                "output_tokens": 80,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0
+            },
+        })
+        .to_string();
+
+        let (_, usage) = structured_output(&raw).unwrap();
+        assert_eq!(
+            usage,
+            Some(ask::Usage {
+                input_tokens: 1200,
+                output_tokens: 80,
+            }),
+            "the envelope's measured counts must be the ones read"
+        );
+    }
+
+    /// An envelope reporting no usage yields an answer with none — never a
+    /// zero standing in for a measurement, and never a failed question.
+    #[test]
+    fn an_envelope_without_usage_yields_an_answer_without_usage() {
+        for (label, raw) in [
+            (
+                "no usage field at all",
+                json!({
+                    "content": [{"type": "text",
+                        "text": r#"{"answer": "ok", "citations": []}"#}],
+                    "stop_reason": "end_turn",
+                }),
+            ),
+            (
+                "a usage object missing the output count",
+                json!({
+                    "content": [{"type": "text",
+                        "text": r#"{"answer": "ok", "citations": []}"#}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 1200},
+                }),
+            ),
+        ] {
+            let (output, usage) = structured_output(&raw.to_string()).unwrap();
+            assert_eq!(usage, None, "{label} must read as absent");
+            // The answer itself is unharmed by the absence.
+            assert_eq!(
+                prompt::parse_ask_answer(output).unwrap().text,
+                "ok",
+                "{label} must not cost the reader their answer"
+            );
+        }
     }
 
     #[test]

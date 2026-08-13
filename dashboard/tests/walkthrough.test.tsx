@@ -500,7 +500,7 @@ describe("the step list against the interface it describes", () => {
     renderEverything();
     const answer = await askAQuestion(user);
     expect(
-      answer.getByRole("button", { name: "Dismiss answer" }),
+      answer.getByRole("button", { name: "Dismiss conversation" }),
     ).toBeVisible();
     expect(answer.getAllByRole("button").length).toBeGreaterThan(1);
 

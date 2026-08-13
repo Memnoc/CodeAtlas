@@ -145,6 +145,40 @@ pub struct Question {
 pub struct Answer {
     pub text: String,
     pub citations: Vec<String>,
+    /// What the exchange spent, when the backend's envelope reported it.
+    /// `None` is a backend that reported nothing, and stays `None` all the
+    /// way to the wire — the response simply has no usage field.
+    pub usage: Option<Usage>,
+}
+
+/// Token counts a provider's response envelope reported for one exchange
+/// (ADR-0012). Measured or absent — never estimated, never a zero stand-in,
+/// and never a price: the CLI envelope also carries `total_cost_usd`, which
+/// is deliberately not read here, because on subscription billing that
+/// number is notional and a wrong price is worse than no price.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Usage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+impl Usage {
+    /// Reads both token counts out of an envelope's `usage` object, or
+    /// nothing. Anything short of two measured counts — no object at all, a
+    /// missing field, a value that is not an unsigned integer — is `None`,
+    /// so what reaches the reader is measured or absent, never a fabricated
+    /// zero.
+    ///
+    /// Shared by both backends because their envelopes agree on this one
+    /// shape: `usage.input_tokens` and `usage.output_tokens` as integers,
+    /// in the Messages API response and the CLI's result envelope alike.
+    pub fn from_envelope(usage: Option<&serde_json::Value>) -> Option<Self> {
+        let usage = usage?;
+        Some(Self {
+            input_tokens: usage.get("input_tokens")?.as_u64()?,
+            output_tokens: usage.get("output_tokens")?.as_u64()?,
+        })
+    }
 }
 
 /// English function words, which appear in nearly every mechanical summary
@@ -365,6 +399,9 @@ fn verified(answer: Answer, question: &Question) -> Answer {
             .into_iter()
             .filter(|id| shown.contains(id.as_str()) && seen.insert(id.clone()))
             .collect(),
+        // Verification is about citations; what the exchange measurably
+        // spent is not diminished by an invented citation being dropped.
+        usage: answer.usage,
     }
 }
 
@@ -506,6 +543,7 @@ mod tests {
             Ok(Answer {
                 text: self.answer.text.clone(),
                 citations: self.answer.citations.clone(),
+                usage: self.answer.usage,
             })
         }
     }
@@ -1132,6 +1170,7 @@ mod tests {
                 // A repeat of a real one: kept once.
                 "file:src/module0/widget0.ts".into(),
             ],
+            usage: None,
         });
 
         let question = build(&graph, "what starts things off?", &[]).unwrap();
@@ -1143,6 +1182,70 @@ mod tests {
             vec!["file:src/module0/widget0.ts".to_string()],
             "only checkable citations survive, and only once"
         );
+    }
+
+    /// Usage rides through citation verification untouched: dropping an
+    /// invented citation says nothing about what the exchange spent.
+    #[test]
+    fn usage_survives_citation_verification() {
+        let graph = wide_graph(2);
+        let provider = Recording::new(Answer {
+            text: "Widget zero starts things off.".into(),
+            citations: vec!["file:src/does/not/exist.ts".into()],
+            usage: Some(Usage {
+                input_tokens: 1200,
+                output_tokens: 80,
+            }),
+        });
+
+        let question = build(&graph, "what starts things off?", &[]).unwrap();
+        let answer = super::answer(&provider, &question).unwrap();
+
+        assert_eq!(
+            answer.usage,
+            Some(Usage {
+                input_tokens: 1200,
+                output_tokens: 80,
+            }),
+            "the measured counts must survive verification"
+        );
+        assert_eq!(answer.citations, Vec::<String>::new());
+    }
+
+    /// The reading rule both backends share: two measured counts or nothing.
+    /// A missing object, a missing field, or a count that is not an unsigned
+    /// integer is absence — never a zero standing in for a measurement.
+    #[test]
+    fn envelope_usage_is_two_measured_counts_or_nothing() {
+        let full = serde_json::json!({"input_tokens": 3, "output_tokens": 7});
+        assert_eq!(
+            Usage::from_envelope(Some(&full)),
+            Some(Usage {
+                input_tokens: 3,
+                output_tokens: 7,
+            })
+        );
+
+        assert_eq!(Usage::from_envelope(None), None, "no object at all");
+        for (label, partial) in [
+            ("output only", serde_json::json!({"output_tokens": 7})),
+            ("input only", serde_json::json!({"input_tokens": 3})),
+            (
+                "a count that is not an unsigned integer",
+                serde_json::json!({"input_tokens": "3", "output_tokens": 7}),
+            ),
+            (
+                "a negative count",
+                serde_json::json!({"input_tokens": -3, "output_tokens": 7}),
+            ),
+            ("not an object", serde_json::json!("3 in, 7 out")),
+        ] {
+            assert_eq!(
+                Usage::from_envelope(Some(&partial)),
+                None,
+                "{label} must read as absent, never as zero"
+            );
+        }
     }
 
     #[test]

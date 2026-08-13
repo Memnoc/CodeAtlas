@@ -35,11 +35,36 @@ fn scan(repo: &Path) {
 /// Writes a canned-answer file for the `fake:` backend and returns its path.
 /// It lives outside the repository so it can never be scanned into the map
 /// it is answering questions about.
+///
+/// No usage keys, deliberately: this scripts a backend that reports nothing,
+/// which is what every pre-usage test already meant and what the absence
+/// tests rely on. [`canned_reporting`] scripts the measuring backend.
 fn canned(dir: &Path, answer: &str, citations: &[&str]) -> PathBuf {
     let path = dir.join("canned-ask.json");
     let body = serde_json::json!({
         "ask:answer": answer,
         "ask:citations": citations.join(" "),
+    });
+    fs::write(&path, serde_json::to_string(&body).unwrap()).unwrap();
+    path
+}
+
+/// [`canned`], for a backend that also reports what the exchange spent
+/// (ticket 09): the scripted token counts ride the `fake:` backend's
+/// reserved usage keys.
+fn canned_reporting(
+    dir: &Path,
+    answer: &str,
+    citations: &[&str],
+    input_tokens: u64,
+    output_tokens: u64,
+) -> PathBuf {
+    let path = dir.join("canned-ask.json");
+    let body = serde_json::json!({
+        "ask:answer": answer,
+        "ask:citations": citations.join(" "),
+        "ask:input_tokens": input_tokens.to_string(),
+        "ask:output_tokens": output_tokens.to_string(),
     });
     fs::write(&path, serde_json::to_string(&body).unwrap()).unwrap();
     path
@@ -481,6 +506,64 @@ fn a_question_is_answered_and_cites_only_nodes_that_exist() {
     }
 }
 
+/// Usage on the wire (ticket 09, stories 12/13): what the backend reported
+/// is what the response carries — two token counts, nothing else. The
+/// scripted numbers are deliberately unequal and unround, so a transposed
+/// field or a fabricated zero cannot pass as the measurement.
+#[test]
+fn usage_rides_the_answer_exactly_as_the_backend_reported_it() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let outside = tempfile::tempdir().unwrap();
+    let spec = format!(
+        "fake:{}",
+        canned_reporting(outside.path(), "It starts in main.ts.", &[], 1207, 83).display()
+    );
+    let server = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+
+    let (status, body) = ask(server.port, "where does the program start?");
+    assert!(status.contains("200"), "ask status: {status} {body}");
+    assert_eq!(
+        body["usage"],
+        serde_json::json!({"input_tokens": 1207, "output_tokens": 83}),
+        "usage must be the backend's own counts and only them: {body}"
+    );
+    // No currency anywhere (ADR-0012): the response is two token counts,
+    // never a price. Asserted on the raw object so a field added beside the
+    // counts cannot ride along unnoticed.
+    assert_eq!(
+        body["usage"].as_object().unwrap().len(),
+        2,
+        "the usage object is two counts and nothing else: {body}"
+    );
+    assert!(
+        !body.to_string().contains("cost") && !body.to_string().contains('$'),
+        "no cost figure may reach the wire: {body}"
+    );
+}
+
+/// Story 13 on the wire: a backend that reports nothing produces no usage
+/// field at all — the absent display the dashboard renders is the wire's own
+/// absence, never a zero the server made up.
+#[test]
+fn a_backend_reporting_no_usage_produces_no_usage_field() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let outside = tempfile::tempdir().unwrap();
+    let spec = format!(
+        "fake:{}",
+        canned(outside.path(), "It starts in main.ts.", &[]).display()
+    );
+    let server = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+
+    let (status, body) = ask(server.port, "where does the program start?");
+    assert!(status.contains("200"), "ask status: {status} {body}");
+    assert!(
+        !body.as_object().unwrap().contains_key("usage"),
+        "no measurement means no field — not null, not zero: {body}"
+    );
+}
+
 /// Story 14 on the wire: over-bound history is clamped mechanically, oldest
 /// turns first, and never rejected — the reader typed the question, the
 /// dashboard assembled the history, and a 400 would punish the wrong party.
@@ -779,13 +862,20 @@ fn an_unusable_question_is_refused_with_a_reason() {
     );
     let server = serve_with(repo.path(), &["--ask", "--provider", &spec]);
 
-    // Not JSON at all.
+    // Not JSON at all. The hint has to describe the whole accepted shape —
+    // ticket 08 grew the body an optional `turns` array, and its crosscheck
+    // handed this ticket the stale hint that still described only the bare
+    // form.
     let (status, _, body) = http_post(server.port, "/api/ask", "not json");
     assert!(status.contains("400"), "malformed body status: {status}");
+    let hint = String::from_utf8_lossy(&body);
     assert!(
-        String::from_utf8_lossy(&body).contains("question"),
-        "the refusal must show the shape expected: {:?}",
-        String::from_utf8_lossy(&body)
+        hint.contains("question"),
+        "the refusal must show the shape expected: {hint:?}"
+    );
+    assert!(
+        hint.contains("turns"),
+        "the refusal must mention the optional turns the body accepts: {hint:?}"
     );
 
     // JSON, but no question in it.
@@ -1307,6 +1397,42 @@ fn carried_turns_reach_the_model_clamped_and_in_order() {
     assert!(
         !prompt.contains(&"x".repeat(2_001)),
         "the answer's bound did not hold"
+    );
+}
+
+/// Usage end-to-end on the subscription path (ticket 09): the stand-in CLI
+/// prints a result envelope carrying both the measured counts and the
+/// `total_cost_usd` the real CLI reports — and the response carries the
+/// counts while the price never reaches the wire (ADR-0012: on subscription
+/// billing that number is notional, and a wrong price is worse than none).
+#[cfg(feature = "agent-cli")]
+#[test]
+fn the_cli_envelopes_counts_reach_the_wire_and_its_price_never_does() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let outside = tempfile::tempdir().unwrap();
+    let spec = common::fake_cli(
+        outside.path(),
+        r#"{"type":"result","subtype":"success","is_error":false,
+            "structured_output":{"answer":"It starts in main.ts.","citations":[]},
+            "usage":{"input_tokens":4213,"output_tokens":57,
+                     "cache_creation_input_tokens":0,"cache_read_input_tokens":9},
+            "total_cost_usd":0.0731}"#,
+        0,
+    );
+    let server = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+
+    let (status, body) = ask(server.port, "where does the program start?");
+    assert!(status.contains("200"), "ask status: {status} {body}");
+    assert_eq!(
+        body["usage"],
+        serde_json::json!({"input_tokens": 4213, "output_tokens": 57}),
+        "the CLI's measured counts must arrive, and only them: {body}"
+    );
+    let raw = body.to_string();
+    assert!(
+        !raw.contains("cost") && !raw.contains("0.0731") && !raw.contains('$'),
+        "the envelope's price must never reach the wire: {body}"
     );
 }
 

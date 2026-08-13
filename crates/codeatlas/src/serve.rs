@@ -416,10 +416,19 @@ fn answer_question(
     let asked = match serde_json::from_slice::<AskBody>(&body) {
         Ok(asked) => asked,
         Err(err) => {
+            // The hint states the whole accepted shape: ticket 08 grew the
+            // body an optional `turns` array, and a 400 describing only the
+            // bare form would send the one client this message exists for —
+            // someone hand-writing a request — back to a shape that cannot
+            // carry a conversation.
             return json_error(
                 stream,
                 "400 Bad Request",
-                &format!("the body must be JSON of the form {{\"question\": \"…\"}}: {err}"),
+                &format!(
+                    "the body must be JSON of the form {{\"question\": \"…\"}}, optionally \
+                     with \"turns\": previous {{\"question\", \"answer\", \"citations\"}} \
+                     objects, oldest first: {err}"
+                ),
             );
         }
     };
@@ -446,10 +455,17 @@ fn answer_question(
     };
     match ask::answer(provider, &question) {
         Ok(answer) => {
-            let payload = serde_json::json!({
+            let mut payload = serde_json::json!({
                 "answer": answer.text,
                 "citations": answer.citations,
             });
+            // Present exactly when the backend's envelope reported it
+            // (ADR-0012): a backend that reports nothing produces no field
+            // at all, so the dashboard's absent display is the wire's own
+            // absence rather than a rendering of zero.
+            if let Some(usage) = answer.usage {
+                payload["usage"] = serde_json::json!(usage);
+            }
             respond(
                 stream,
                 "200 OK",

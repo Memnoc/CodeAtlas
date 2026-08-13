@@ -655,6 +655,30 @@ body {
   border-color: var(--accent);
 }
 
+/* One exchange in the thread (ticket 09). Only the seam between turns is
+   drawn — the first turn sits on the band's own top edge. */
+.answer-turn + .answer-turn {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* What an exchange measurably spent: token counts a provider reported,
+   absent when it reported none (ADR-0012). Never a price. */
+.answer-usage {
+  margin: 8px 0 0;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+
+/* The conversation's total, under the last turn: the same quiet line,
+   weighted just enough to read as the sum of the ones above it. */
+.answer-total {
+  padding-top: 8px;
+  font-weight: 600;
+}
+
 /* Not a control, and it has to look like it: a citation the map cannot
    resolve is shown, greyed and explained, rather than as a button that would
    do nothing when pressed. */

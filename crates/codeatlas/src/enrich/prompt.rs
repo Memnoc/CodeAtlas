@@ -246,6 +246,9 @@ pub fn parse_ask_answer(structured: serde_json::Value) -> Result<ask::Answer> {
     Ok(ask::Answer {
         text: parsed.answer,
         citations: parsed.citations,
+        // Usage lives on the response envelope, not in the model's
+        // structured output; the backend that read the envelope attaches it.
+        usage: None,
     })
 }
 

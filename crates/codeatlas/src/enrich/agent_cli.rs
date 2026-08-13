@@ -160,7 +160,10 @@ impl CliProvider {
     /// checks exist once: a second copy of the argv construction is a second
     /// place for the swallowed-prompt bug to come back, and it would come
     /// back silently.
-    fn complete(&self, completion: &prompt::Completion) -> Result<serde_json::Value> {
+    fn complete(
+        &self,
+        completion: &prompt::Completion,
+    ) -> Result<(serde_json::Value, Option<ask::Usage>)> {
         // A fresh empty directory per call, removed when `scratch` drops —
         // the child's whole view of the filesystem.
         let scratch = ScratchDir::new()?;
@@ -172,11 +175,15 @@ impl CliProvider {
 
 impl EnrichmentProvider for CliProvider {
     fn enrich(&self, request: &EnrichmentRequest) -> Result<EnrichmentResponse> {
-        prompt::parse_answers(self.complete(&prompt::for_enrichment(request))?)
+        prompt::parse_answers(self.complete(&prompt::for_enrichment(request))?.0)
     }
 
     fn ask(&self, question: &ask::Question) -> Result<ask::Answer> {
-        prompt::parse_ask_answer(self.complete(&prompt::for_question(question))?)
+        let (output, usage) = self.complete(&prompt::for_question(question))?;
+        Ok(ask::Answer {
+            usage,
+            ..prompt::parse_ask_answer(output)?
+        })
     }
 
     /// The model may be `None`, which is the honest answer: this backend
@@ -321,6 +328,14 @@ struct CliResult {
     /// The plain-text result, read only to quote back what went wrong.
     #[serde(default)]
     result: Option<String>,
+    /// The token counts the CLI measured for this exchange (ADR-0012).
+    /// Loose on purpose — a raw value handed to [`ask::Usage::from_envelope`]
+    /// — so an envelope whose usage is missing or malformed still yields its
+    /// answer. The envelope's `total_cost_usd`, one field over, is
+    /// deliberately never read: on subscription billing it is notional, and
+    /// a wrong price is worse than no price.
+    #[serde(default)]
+    usage: Option<serde_json::Value>,
 }
 
 /// The schema-constrained payload inside a finished process. Like the API
@@ -329,8 +344,13 @@ struct CliResult {
 /// the structural map intact (spec story 14).
 ///
 /// Shared by both request kinds, which differ in the schema they demanded,
-/// not in how the CLI reports having satisfied it.
-fn structured_output(program: &str, output: &Output) -> Result<serde_json::Value> {
+/// not in how the CLI reports having satisfied it. The envelope's measured
+/// token counts ride alongside, because the envelope is consumed here and
+/// the question path reports what the exchange spent (ADR-0012).
+fn structured_output(
+    program: &str,
+    output: &Output,
+) -> Result<(serde_json::Value, Option<ask::Usage>)> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -364,12 +384,16 @@ fn structured_output(program: &str, output: &Output) -> Result<serde_json::Value
                 }),
         );
     }
-    result.structured_output.ok_or_else(|| {
-        anyhow!(
-            "`{program}` completed without structured output; the response \
-             did not satisfy the requested schema"
-        )
-    })
+    let usage = ask::Usage::from_envelope(result.usage.as_ref());
+    result
+        .structured_output
+        .ok_or_else(|| {
+            anyhow!(
+                "`{program}` completed without structured output; the response \
+                 did not satisfy the requested schema"
+            )
+        })
+        .map(|output| (output, usage))
 }
 
 /// Diagnostics from another program can be arbitrarily long; one line of it
@@ -442,7 +466,7 @@ mod tests {
     /// `enrich` method performs, so these tests read as they did before the
     /// envelope step was shared with the question path.
     fn parse_output(program: &str, output: &Output) -> Result<EnrichmentResponse> {
-        prompt::parse_answers(structured_output(program, output)?)
+        prompt::parse_answers(structured_output(program, output)?.0)
     }
 
     /// The value of a `--flag=value` argument. Only the `=` form is
@@ -701,6 +725,49 @@ mod tests {
         assert_eq!(
             parsed.answers.get("summary:file:src/main.ts").unwrap(),
             "The entry point."
+        );
+    }
+
+    /// The recorded-envelope fixtures for usage (ticket 09, ADR-0012): the
+    /// CLI's `--output-format=json` result envelope carries a `usage` object
+    /// with the measured token counts — and, one field over, a
+    /// `total_cost_usd` this backend deliberately never reads. The fixture
+    /// carries both so the test is about choosing between them: the counts
+    /// come through, and `ask::Usage` has no field a price could ride.
+    #[test]
+    fn measured_usage_is_read_from_the_result_envelope_and_the_price_is_not() {
+        let raw = r#"{"type":"result","subtype":"success","is_error":false,
+            "structured_output":{"answer":"It starts in main.ts.","citations":[]},
+            "usage":{"input_tokens":31,"output_tokens":9,
+                     "cache_creation_input_tokens":0,"cache_read_input_tokens":2},
+            "total_cost_usd":42.5}"#;
+
+        let (_, usage) = structured_output(PROGRAM, &output(0, raw, "")).unwrap();
+        assert_eq!(
+            usage,
+            Some(ask::Usage {
+                input_tokens: 31,
+                output_tokens: 9,
+            }),
+            "the envelope's measured counts must be the ones read"
+        );
+    }
+
+    /// An envelope reporting no usage yields an answer with none — never a
+    /// zero standing in for a measurement, and never a failed question.
+    #[test]
+    fn an_envelope_without_usage_yields_an_answer_without_usage() {
+        // `success_envelope` carries a cost figure and no usage object —
+        // exactly the case where inventing a count from the price would be
+        // most tempting and most wrong.
+        let raw = success_envelope(r#"{"answer":"ok","citations":[]}"#);
+
+        let (out, usage) = structured_output(PROGRAM, &output(0, &raw, "")).unwrap();
+        assert_eq!(usage, None, "no measurement must read as absent");
+        assert_eq!(
+            prompt::parse_ask_answer(out).unwrap().text,
+            "ok",
+            "the absence must not cost the reader their answer"
         );
     }
 

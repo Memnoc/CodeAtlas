@@ -34,8 +34,16 @@ const ASK_CONTENT_TYPE = "application/json";
 
 /** An answer and the nodes it was drawn from. Citations are node IDs; the
  * server drops any that its map does not contain, and the explorer still
- * shows the ones that do not resolve rather than trusting that. */
-export type Answer = { answer: string; citations: string[] };
+ * shows the ones that do not resolve rather than trusting that. Usage is
+ * what the exchange measurably spent, absent whenever the backend reported
+ * nothing (ADR-0012) — never estimated, never a price. */
+export type Answer = { answer: string; citations: string[]; usage?: Usage };
+
+/** Token counts the serving binary relayed from the provider's response
+ * envelope, under the wire's own field names. Two measured counts or the
+ * whole thing absent — the glossary's rule, enforced where the wire is
+ * read (see [`askServer`]). */
+export type Usage = { input_tokens: number; output_tokens: number };
 
 /** One previous turn as the wire carries it (ADR-0012): the reader's
  * question, the answer, and the node IDs the answer cited. Must match
@@ -46,12 +54,19 @@ export type Turn = { question: string; answer: string; citations: string[] };
 
 /** The most previous turns a request may carry. Must match
  * `ask::MAX_TURNS`: the dashboard drops its own oldest turns at this bound
- * (ticket 09), so the server's clamp is a backstop rather than the
+ * (see [`useAsk`]), so the server's clamp is a backstop rather than the
  * mechanism. */
 export const MAX_TURNS = 6;
 
-/** What the explorer is given when questions can be answered at all. */
-export type AskFn = (question: string) => Promise<Answer>;
+/** One finished exchange as the thread keeps it: the reader's question and
+ * everything the answer arrived with — text, citations, usage. Richer than
+ * the wire's [`Turn`], which carries no usage, because usage is
+ * display-side: the server has no use for what an earlier answer cost. */
+export type CompletedTurn = { question: string; answer: Answer };
+
+/** What the explorer is given when questions can be answered at all. The
+ * conversation so far rides along (ADR-0012); [`useAsk`] assembles it. */
+export type AskFn = (question: string, turns?: Turn[]) => Promise<Answer>;
 
 /** What the serving binary said it can do. Absent, unreachable, or older
  * than this route all read the same way: no questions. */
@@ -99,6 +114,7 @@ export async function askServer(
   const body = (await res.json().catch(() => null)) as {
     answer?: unknown;
     citations?: unknown;
+    usage?: unknown;
     error?: unknown;
   } | null;
   if (!res.ok) {
@@ -111,21 +127,46 @@ export async function askServer(
   if (typeof body?.answer !== "string") {
     throw new Error("the server's reply carried no answer");
   }
+  const usage = readUsage(body.usage);
   return {
     answer: body.answer,
     citations: Array.isArray(body.citations)
       ? body.citations.filter((id): id is string => typeof id === "string")
       : [],
+    // Spread rather than `usage: undefined`: an unreported usage is an
+    // absent key, exactly as the wire carries it.
+    ...(usage === null ? {} : { usage }),
   };
 }
 
-/** One question at a time, and what became of it. The question is kept in
- * every phase because a failure must not cost the reader their typing. */
+/** The wire's usage object, or nothing. Two numeric counts come through as
+ * the measurement they are; anything less — no field, a missing count, a
+ * count that is not a number — reads as no measurement at all, because a
+ * number shown to the reader must be one a provider actually reported
+ * (ADR-0012), never a zero standing in for silence. */
+function readUsage(value: unknown): Usage | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const { input_tokens, output_tokens } = value as Record<string, unknown>;
+  return typeof input_tokens === "number" && typeof output_tokens === "number"
+    ? { input_tokens, output_tokens }
+    : null;
+}
+
+/** One question at a time, and what became of it — plus the conversation
+ * the question continues. `turns` is every exchange completed *before* the
+ * current question, oldest first, so the panel renders thread-then-current
+ * without working out where the seam is. The question is kept in every
+ * phase because a failure must not cost the reader their typing; `idle`
+ * carries no turns because dismissal is the fresh-conversation control —
+ * a hidden panel never holds an invisible history that would silently
+ * steer the next question. */
 export type AskState =
   | { phase: "idle" }
-  | { phase: "asking"; question: string }
-  | { phase: "answered"; question: string; answer: Answer }
-  | { phase: "failed"; question: string; message: string };
+  | { phase: "asking"; question: string; turns: CompletedTurn[] }
+  | { phase: "answered"; question: string; answer: Answer; turns: CompletedTurn[] }
+  | { phase: "failed"; question: string; message: string; turns: CompletedTurn[] };
 
 /**
  * Holds the question in flight. A counter, not a cancellation: `fetch` has
@@ -151,6 +192,10 @@ export function useAsk(ask: AskFn | undefined): {
   // before React has re-rendered either of them: a phase read out of the
   // closure would still say "idle" for the second one.
   const inFlight = useRef(false);
+  // The completed exchanges, oldest first. A ref for the same reason
+  // `inFlight` is: `submit` needs the conversation at the moment of the
+  // press, not the one some earlier render closed over.
+  const conversation = useRef<CompletedTurn[]>([]);
 
   const submit = useCallback(
     (raw: string) => {
@@ -160,21 +205,40 @@ export function useAsk(ask: AskFn | undefined): {
       }
       const mine = ++latest.current;
       inFlight.current = true;
-      setState({ phase: "asking", question });
-      ask(question).then(
+      const prior = conversation.current;
+      setState({ phase: "asking", question, turns: prior });
+      // The dashboard's own enforcement of ADR-0012's turn bound: only the
+      // newest MAX_TURNS ride the wire, oldest dropped first, so the
+      // server's clamp is a backstop rather than the mechanism. The thread
+      // on screen keeps every turn — the bound is on what a request
+      // carries, not on what the reader may look back at.
+      const carried: Turn[] = prior.slice(-MAX_TURNS).map((turn) => ({
+        question: turn.question,
+        answer: turn.answer.answer,
+        citations: turn.answer.citations,
+      }));
+      ask(question, carried).then(
         (answer) => {
           if (latest.current === mine) {
             inFlight.current = false;
-            setState({ phase: "answered", question, answer });
+            // The exchange is complete, so it joins the conversation the
+            // *next* question carries. Behind the `latest` guard: an answer
+            // landing after a dismissal must not resurrect a conversation
+            // the reader ended.
+            conversation.current = [...prior, { question, answer }];
+            setState({ phase: "answered", question, answer, turns: prior });
           }
         },
         (error: unknown) => {
           if (latest.current === mine) {
             inFlight.current = false;
+            // A failed question joins nothing: retrying carries exactly the
+            // turns the failed attempt carried.
             setState({
               phase: "failed",
               question,
               message: error instanceof Error ? error.message : String(error),
+              turns: prior,
             });
           }
         },
@@ -189,6 +253,11 @@ export function useAsk(ask: AskFn | undefined): {
     // is what the Ask button has always done on dismissal. The reply already
     // paid for is not cancelled — it is discarded by the counter above.
     inFlight.current = false;
+    // Dismissal is the fresh-conversation control (ticket 09): the carried
+    // turns and the running total go with the panel, so the next question
+    // starts from zero rather than being steered by a thread the reader
+    // can no longer see.
+    conversation.current = [];
     setState({ phase: "idle" });
   }, []);
 

@@ -523,7 +523,11 @@ describe("Escape closes the answer, in the explorer's one cascade", () => {
     await askAbout(user, "what does this do?");
     await screen.findByLabelText("Answer");
 
-    await user.click(screen.getByRole("button", { name: "Dismiss answer" }));
+    // "Dismiss conversation" since ticket 09: the same control, and it now
+    // also ends the thread it closes.
+    await user.click(
+      screen.getByRole("button", { name: "Dismiss conversation" }),
+    );
 
     expect(screen.queryByLabelText("Answer")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Search nodes")).toHaveValue(
