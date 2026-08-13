@@ -44,3 +44,12 @@ spec's Out of Scope and this would join them.
 Qualified names change how a symbol appears to a reader in panels and search.
 That is the intended outcome, not a side effect: `geo::nsq` is what the code
 calls it.
+
+**Inherited from ticket 16's crosscheck (2026-08-13).** The magnify lens
+relates files by `imports` only — recorded with its reason in `graph.ts`
+beside `neighbourhoodOf`. The call edges this ticket creates are exactly the
+case that limitation bites: a C++ file connected to its neighbours only
+through calls will magnify alone while the info panel names those calls.
+Nothing here needs to fix that — but walk it once on the C++ fixture and
+record in this ticket what the reader actually sees, so the limitation stays
+a decision and not a surprise.
