@@ -10,4 +10,7 @@
 | [0006](./0006-zero-egress-enforced-by-compile-time-feature-gate.md) | Zero egress is enforced by a compile-time feature gate | accepted (surface extended by [0008](./0008-enrichment-through-an-authenticated-claude-cli-behind-its-own-feature.md), [0009](./0009-codebase-questions-are-answered-by-the-serving-binary.md)) | 2026-08-07 |
 | [0007](./0007-the-annotation-store-is-a-committed-repository-artifact.md) | The annotation store is a committed repository artifact | accepted | 2026-08-11 |
 | [0008](./0008-enrichment-through-an-authenticated-claude-cli-behind-its-own-feature.md) | Enrichment can run through an already-authenticated Claude CLI, behind its own feature | accepted | 2026-08-11 |
-| [0009](./0009-codebase-questions-are-answered-by-the-serving-binary.md) | Codebase questions are answered by the serving binary, not the dashboard | accepted | 2026-08-11 |
+| [0009](./0009-codebase-questions-are-answered-by-the-serving-binary.md) | Codebase questions are answered by the serving binary, not the dashboard | accepted (extended by [0012](./0012-a-conversation-is-client-carried-bounded-input.md)) | 2026-08-11 |
+| [0010](./0010-file-significance-is-published-once-in-the-map-contract.md) | File significance is published once, in the map contract | accepted | 2026-08-13 |
+| [0011](./0011-no-layout-library-a-share-ceiling-enforces-it.md) | No layout library; a two-megabyte share ceiling enforces it | accepted | 2026-08-13 |
+| [0012](./0012-a-conversation-is-client-carried-bounded-input.md) | A conversation is client-carried, bounded input | accepted | 2026-08-13 |
