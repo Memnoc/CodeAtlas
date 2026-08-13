@@ -101,6 +101,9 @@ pub const FIELD_CLASSIFICATIONS: &[(&str, Classification)] = &[
     ("Node.summary", RedactedWhenLlm),
     ("Node.range", ShareSafe),
     ("Node.layer", ShareSafe),
+    // Significance is arithmetic over the import graph the artifact already
+    // ships — it discloses nothing the edges do not.
+    ("Node.significance", ShareSafe),
     ("Node.provenance", ShareSafe),
     // Edges are pure structure.
     ("Edge.source", ShareSafe),

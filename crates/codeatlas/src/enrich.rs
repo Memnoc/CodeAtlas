@@ -1622,6 +1622,7 @@ mod tests {
             summary: format!("Mechanical summary of {name}"),
             range: None,
             layer: None,
+            significance: None,
             provenance,
         }
     }

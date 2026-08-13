@@ -22,7 +22,7 @@ the code.
 
 ## Versioning
 
-The contract is versioned with **semver**, currently **0.3.1**
+The contract is versioned with **semver**, currently **0.4.0**
 (`MAP_CONTRACT_VERSION` in `crates/codeatlas/src/map.rs`). Every map file
 carries the contract version it conforms to in its top-level `version` field,
 and the schema itself carries a versioned `$id`

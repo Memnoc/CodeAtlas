@@ -190,7 +190,7 @@ dropped rather than emitted dangling.
 ## The map contract
 
 The emitted map conforms to a published, versioned contract
-(`contract/map.schema.json`, currently **0.3.1**) generated from the Rust
+(`contract/map.schema.json`, currently **0.4.0**) generated from the Rust
 types in `crates/codeatlas/src/map.rs` — the single source of truth. The
 dashboard's TypeScript types are generated from the same schema, and CI fails
 on any drift between the types and their generated artifacts. Consumers other

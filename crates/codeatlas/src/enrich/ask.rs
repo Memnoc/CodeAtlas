@@ -296,6 +296,7 @@ mod tests {
             summary: summary.into(),
             range: None,
             layer: None,
+            significance: None,
             provenance: Provenance::Structural,
         }
     }

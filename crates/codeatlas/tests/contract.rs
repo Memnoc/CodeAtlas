@@ -37,8 +37,49 @@ fn committed_schema_carries_a_versioned_id() {
     let schema = committed_schema();
     let id = schema["$id"].as_str().expect("schema has no $id");
     assert_eq!(
-        id, "urn:codeatlas:map-contract:0.3.1",
+        id, "urn:codeatlas:map-contract:0.4.0",
         "$id must be the stable contract URI carrying the current version"
+    );
+}
+
+/// Story 9: `significance` is optional, so a map written before the field
+/// existed validates unchanged. The stored fixture is that map — it predates
+/// the field and must keep passing.
+#[test]
+fn a_map_written_before_significance_still_validates() {
+    let schema = committed_schema();
+    let node = &schema["$defs"]["Node"];
+    assert!(
+        node["properties"].get("significance").is_some(),
+        "the contract must publish `significance`, or its optionality here \
+         proves nothing"
+    );
+    let required: Vec<&str> = node["required"]
+        .as_array()
+        .expect("Node lists its required properties")
+        .iter()
+        .map(|r| r.as_str().unwrap())
+        .collect();
+    assert!(
+        !required.contains(&"significance"),
+        "`significance` must stay optional — a map written before it cannot \
+         carry it: {required:?}"
+    );
+
+    let map = fixture_map("known-good.json");
+    for node in map["nodes"].as_array().unwrap() {
+        assert!(
+            node.get("significance").is_none(),
+            "the stored fixture must predate `significance`, or validating it \
+             proves nothing: {node:?}"
+        );
+    }
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let errors: Vec<String> = validator.iter_errors(&map).map(|e| e.to_string()).collect();
+    assert!(
+        errors.is_empty(),
+        "a map written before `significance` was rejected by the committed \
+         contract: {errors:?}"
     );
 }
 

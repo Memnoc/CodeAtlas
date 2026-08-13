@@ -754,6 +754,221 @@ fn domain_flows_are_call_chains_rooted_at_functions_nothing_else_calls() {
     );
 }
 
+/// The import degree and entry-point facts of an emitted map, read straight
+/// off its own edges — the things significance is defined in terms of. Derived
+/// rather than hard-coded, so the expectations below cannot be quietly
+/// invalidated by a fixture file added for some other test.
+struct Topology {
+    fan_in: std::collections::HashMap<String, u64>,
+    fan_out: std::collections::HashMap<String, u64>,
+    /// How many entry-point functions each file hosts.
+    entry_points: std::collections::HashMap<String, u64>,
+}
+
+impl Topology {
+    fn of(map: &serde_json::Value) -> Self {
+        let mut fan_in: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        let mut fan_out: std::collections::HashMap<String, u64> = std::collections::HashMap::new();
+        let mut calls_out: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut called: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for edge in map["edges"].as_array().unwrap() {
+            let (source, target) = (
+                edge["source"].as_str().unwrap(),
+                edge["target"].as_str().unwrap(),
+            );
+            match edge["kind"].as_str().unwrap() {
+                "imports" => {
+                    *fan_out
+                        .entry(source.trim_start_matches("file:").to_string())
+                        .or_default() += 1;
+                    *fan_in
+                        .entry(target.trim_start_matches("file:").to_string())
+                        .or_default() += 1;
+                }
+                "calls" => {
+                    calls_out.insert(source);
+                    called.insert(target);
+                }
+                _ => {}
+            }
+        }
+
+        // An entry point is a function nothing calls that calls something.
+        let mut entry_points: std::collections::HashMap<String, u64> =
+            std::collections::HashMap::new();
+        for node in map["nodes"].as_array().unwrap() {
+            let id = node["id"].as_str().unwrap();
+            if node["kind"] == "function" && calls_out.contains(id) && !called.contains(id) {
+                *entry_points
+                    .entry(node["path"].as_str().unwrap().to_string())
+                    .or_default() += 1;
+            }
+        }
+
+        Self {
+            fan_in,
+            fan_out,
+            entry_points,
+        }
+    }
+
+    fn fan_in(&self, path: &str) -> u64 {
+        self.fan_in.get(path).copied().unwrap_or(0)
+    }
+
+    fn fan_out(&self, path: &str) -> u64 {
+        self.fan_out.get(path).copied().unwrap_or(0)
+    }
+
+    fn entry_points(&self, path: &str) -> u64 {
+        self.entry_points.get(path).copied().unwrap_or(0)
+    }
+
+    fn hosts_entry_point(&self, path: &str) -> bool {
+        self.entry_points(path) > 0
+    }
+
+    /// The significance the emitted graph obliges this file to carry.
+    fn significance_of(&self, path: &str) -> u64 {
+        self.fan_in(path) + self.fan_out(path) + u64::from(self.hosts_entry_point(path))
+    }
+}
+
+/// The significance a file node publishes, or a panic naming the file.
+fn published_significance(map: &serde_json::Value, path: &str) -> u64 {
+    let node = common::node(map, &format!("file:{path}"));
+    node["significance"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("{path} publishes no significance: {node:?}"))
+}
+
+/// Story 6: the map itself says which files matter, so no consumer has to
+/// re-derive it. Every file node carries the number and no symbol node does —
+/// significance is a file-level fact.
+#[test]
+fn every_file_node_publishes_its_significance() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let topology = Topology::of(&map);
+
+    let (mut files, mut zeros) = (0, 0);
+    for node in map["nodes"].as_array().unwrap() {
+        if node["kind"] != "file" {
+            assert!(
+                node.get("significance").is_none(),
+                "significance is a file-level number, but a symbol node \
+                 carries one: {node:?}"
+            );
+            continue;
+        }
+        files += 1;
+        let path = node["path"].as_str().unwrap();
+        let published = published_significance(&map, path);
+        assert_eq!(
+            published,
+            topology.significance_of(path),
+            "{path} publishes a significance its own edges do not support: \
+             fan-in {}, fan-out {}, entry points {}",
+            topology.fan_in(path),
+            topology.fan_out(path),
+            topology.entry_points(path),
+        );
+        if published == 0 {
+            zeros += 1;
+        }
+    }
+
+    assert!(files > 0, "the fixture must hold files to prove anything");
+    // A zero is a fact, not an omission: the field is optional so that maps
+    // written before it still validate, never so a fresh scan can leave the
+    // uninteresting files out.
+    assert!(
+        zeros > 0,
+        "no file scored zero, so this run cannot prove a zero is published \
+         rather than omitted"
+    );
+}
+
+/// The formula, term by term: import fan-in plus import fan-out plus one
+/// point — exactly one — if the file hosts an entry point.
+#[test]
+fn significance_counts_fan_in_fan_out_and_the_entry_point_bonus() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let topology = Topology::of(&map);
+
+    // Fan-in only: a foundation module several files import, importing
+    // nothing itself and starting no call chain.
+    let foundation = "src/util.ts";
+    assert!(
+        topology.fan_in(foundation) > 0
+            && topology.fan_out(foundation) == 0
+            && !topology.hosts_entry_point(foundation),
+        "{foundation} must be the fan-in-only case to stand for it"
+    );
+    assert_eq!(
+        published_significance(&map, foundation),
+        topology.fan_in(foundation)
+    );
+
+    // Fan-out only: a file that imports, that nothing imports, and whose
+    // functions are not entry points.
+    let importer = "src/plain.ts";
+    assert!(
+        topology.fan_out(importer) > 0
+            && topology.fan_in(importer) == 0
+            && !topology.hosts_entry_point(importer),
+        "{importer} must be the fan-out-only case to stand for it"
+    );
+    assert_eq!(
+        published_significance(&map, importer),
+        topology.fan_out(importer)
+    );
+
+    // The entry-point bonus: same import degree as the file above, one point
+    // more, and that one point is the whole difference between them.
+    let entry = "src/main.ts";
+    assert!(
+        topology.hosts_entry_point(entry),
+        "{entry} hosts no entry point"
+    );
+    assert_eq!(
+        (topology.fan_in(entry), topology.fan_out(entry)),
+        (topology.fan_in(importer), topology.fan_out(importer)),
+        "the pair must share an import degree, or their difference is not \
+         the bonus"
+    );
+    assert_eq!(
+        published_significance(&map, entry),
+        published_significance(&map, importer) + 1,
+    );
+
+    // One point for the file, not one per function: a module full of
+    // independent entry points must not out-rank one the codebase depends on.
+    let many = "src/namespace.ts";
+    assert!(
+        topology.entry_points(many) > 1,
+        "{many} must host more than one entry point to prove the bonus is \
+         counted once"
+    );
+    assert_eq!(
+        published_significance(&map, many),
+        topology.fan_in(many) + topology.fan_out(many) + 1,
+    );
+
+    // Zero: nothing imports it, it imports nothing, no call chain starts in
+    // it — and the map says so rather than staying silent.
+    for isolated in ["README.md", "src/greeter.ts"] {
+        assert!(
+            topology.significance_of(isolated) == 0,
+            "{isolated} must be the zero case to stand for it"
+        );
+        assert_eq!(published_significance(&map, isolated), 0);
+    }
+}
+
 #[test]
 fn tour_steps_are_topology_ordered_with_mechanical_labels() {
     let repo = materialize("simple");

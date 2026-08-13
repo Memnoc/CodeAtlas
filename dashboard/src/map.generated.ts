@@ -121,6 +121,17 @@ export interface Node {
   provenance: Provenance;
   range?: Range | null;
   /**
+   * How much this file matters: import fan-in + import fan-out + 1 if the
+   * file hosts an entry point (ADR-0010). Absent on symbol nodes — it is a
+   * file-level number — and absent from maps written before contract
+   * 0.4.0, which is the only reason it is optional: a producer that
+   * publishes it publishes it for every file, zeros included. A consumer
+   * ranking files reads this number rather than deriving one of its own,
+   * so the tour, the default drill view and the rankings cannot disagree
+   * about the same repository.
+   */
+  significance?: number | null;
+  /**
    * Mechanical or enriched description; provenance says which.
    */
   summary: string;

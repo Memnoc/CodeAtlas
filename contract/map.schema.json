@@ -127,6 +127,15 @@
             }
           ]
         },
+        "significance": {
+          "description": "How much this file matters: import fan-in + import fan-out + 1 if the\nfile hosts an entry point (ADR-0010). Absent on symbol nodes — it is a\nfile-level number — and absent from maps written before contract\n0.4.0, which is the only reason it is optional: a producer that\npublishes it publishes it for every file, zeros included. A consumer\nranking files reads this number rather than deriving one of its own,\nso the tour, the default drill view and the rankings cannot disagree\nabout the same repository.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "summary": {
           "description": "Mechanical or enriched description; provenance says which.",
           "type": "string"
@@ -217,7 +226,7 @@
       "type": "object"
     }
   },
-  "$id": "urn:codeatlas:map-contract:0.3.1",
+  "$id": "urn:codeatlas:map-contract:0.4.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "domain_flows": {

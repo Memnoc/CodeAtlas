@@ -12,6 +12,7 @@ use crate::map::{
 /// Runs every mechanical projection over a freshly built structural graph.
 pub fn apply(graph: &mut KnowledgeGraph) {
     assign_layers(graph);
+    publish_significance(graph);
     graph.domain_flows = project_flows(graph);
     graph.tour = build_tour(graph);
 }
@@ -52,6 +53,77 @@ fn assign_layers(graph: &mut KnowledgeGraph) {
             provenance: Provenance::Structural,
         })
         .collect();
+}
+
+/// Import degree, in one walk of the edges: how many `imports` edges arrive
+/// at each file node (fan-in) and how many leave it (fan-out). Significance
+/// and the tour's reading order are both built from these two counts.
+fn import_degree(graph: &KnowledgeGraph) -> (BTreeMap<&NodeId, u32>, BTreeMap<&NodeId, u32>) {
+    let mut fan_in: BTreeMap<&NodeId, u32> = BTreeMap::new();
+    let mut fan_out: BTreeMap<&NodeId, u32> = BTreeMap::new();
+    for edge in graph.edges.iter().filter(|e| e.kind == EdgeKind::Imports) {
+        *fan_out.entry(&edge.source).or_default() += 1;
+        *fan_in.entry(&edge.target).or_default() += 1;
+    }
+    (fan_in, fan_out)
+}
+
+/// The paths of files hosting an entry point: a function nothing calls that
+/// starts a call chain — the same roots the domain flows grow from. How many
+/// a file holds never matters, only whether it holds one.
+fn entry_point_files(graph: &KnowledgeGraph) -> BTreeSet<&str> {
+    let mut calls_out: BTreeSet<&NodeId> = BTreeSet::new();
+    let mut called: BTreeSet<&NodeId> = BTreeSet::new();
+    for edge in graph.edges.iter().filter(|e| e.kind == EdgeKind::Calls) {
+        calls_out.insert(&edge.source);
+        called.insert(&edge.target);
+    }
+    graph
+        .nodes
+        .iter()
+        .filter(|n| {
+            n.kind == NodeKind::Function && calls_out.contains(&n.id) && !called.contains(&n.id)
+        })
+        .map(|n| n.path.as_str())
+        .collect()
+}
+
+/// Publishes each file node's significance — and holds the only copy of the
+/// formula (ADR-0010): import fan-in + import fan-out + 1 if the file hosts
+/// an entry point. The entry-point term is one point for the file, not one
+/// per function, so a test module full of independent test functions cannot
+/// out-rank a module the codebase depends on.
+///
+/// Every file gets a number, zeros included: a zero says nothing imports the
+/// file, it imports nothing, and no call chain starts in it — a fact, not an
+/// absence. Symbol nodes get none; significance is a file-level number they
+/// would only blur.
+///
+/// This is what "which files matter" means, computed once so that no
+/// consumer has to answer it again: [`build_tour`] selects on it here, and
+/// publishing it in the map is what lets the dashboard rank the same way
+/// instead of deriving a second answer in a second language.
+fn publish_significance(graph: &mut KnowledgeGraph) {
+    // Computed against the whole graph first, because writing the numbers
+    // borrows the nodes mutably.
+    let published: Vec<Option<u32>> = {
+        let (fan_in, fan_out) = import_degree(graph);
+        let entry_points = entry_point_files(graph);
+        graph
+            .nodes
+            .iter()
+            .map(|node| {
+                (node.kind == NodeKind::File).then(|| {
+                    fan_in.get(&node.id).copied().unwrap_or(0)
+                        + fan_out.get(&node.id).copied().unwrap_or(0)
+                        + u32::from(entry_points.contains(node.path.as_str()))
+                })
+            })
+            .collect()
+    };
+    for (node, significance) in graph.nodes.iter_mut().zip(published) {
+        node.significance = significance;
+    }
 }
 
 /// Projects domain flows: one flow per entry point — a function no other
@@ -123,10 +195,11 @@ fn project_flows(graph: &KnowledgeGraph) -> Vec<DomainFlow> {
 pub const TOUR_MAX_STEPS: usize = 12;
 
 /// A file the tour might stop at, carrying both scores [`build_tour`] ranks
-/// it by: `significance` decides whether it makes the walk at all, and
-/// `reading_order` decides where in the walk it lands.
+/// it by: `significance` — the published number, not one of the tour's own —
+/// decides whether it makes the walk at all, and `reading_order` decides
+/// where in the walk it lands.
 struct Candidate<'g> {
-    significance: i64,
+    significance: u32,
     reading_order: i64,
     path: &'g str,
     id: &'g NodeId,
@@ -135,14 +208,14 @@ struct Candidate<'g> {
 /// Builds the guided tour: a bounded, curated walk over the files that
 /// carry the architecture. Two deterministic rules, applied in order.
 ///
-/// **Selection — which files are worth a newcomer's time.** Each file
-/// scores `significance = import fan-in + import fan-out + 1 if the file
-/// hosts an entry-point function`. The entry-point term is one point for
-/// the file, not one per function, so a test module full of independent
-/// test functions cannot out-rank a module the codebase depends on. A file
-/// scoring zero — nothing imports it, it imports nothing, no call chain
-/// starts in it — is off the tour: it teaches nothing about how the pieces
-/// connect. The highest-scoring [`TOUR_MAX_STEPS`] survive, ties on path.
+/// **Selection — which files are worth a newcomer's time.** Each file is
+/// ranked by the significance the map publishes for it
+/// ([`publish_significance`], ADR-0010) — the tour reads that number rather
+/// than deriving one of its own, so the walk cannot disagree with the
+/// dashboard about which files matter. A file scoring zero — nothing imports
+/// it, it imports nothing, no call chain starts in it — is off the tour: it
+/// teaches nothing about how the pieces connect. The highest-scoring
+/// [`TOUR_MAX_STEPS`] survive, ties on path.
 ///
 /// **Order — the sequence the survivors are walked in.** Reading order is
 /// `fan-out − fan-in + the same entry-point bonus`, descending, ties on
@@ -154,43 +227,25 @@ struct Candidate<'g> {
 /// `pub(crate)` for enrichment carry-over (ADR-0005): the mechanical label
 /// is the derivation a stored tour annotation is keyed against, and only
 /// this function can recompute it once an enriched label occupies the slot.
-/// It reads only structural facts (paths, kinds, edges), which enrichment
-/// never edits, so the recomputation is valid on an enriched graph.
+/// It reads only structural facts (paths, kinds, edges, published
+/// significance), which enrichment never edits, so the recomputation is
+/// valid on an enriched graph.
 pub(crate) fn build_tour(graph: &KnowledgeGraph) -> Vec<TourStep> {
-    let mut fan_in: BTreeMap<&NodeId, i64> = BTreeMap::new();
-    let mut fan_out: BTreeMap<&NodeId, i64> = BTreeMap::new();
-    for edge in graph.edges.iter().filter(|e| e.kind == EdgeKind::Imports) {
-        *fan_out.entry(&edge.source).or_default() += 1;
-        *fan_in.entry(&edge.target).or_default() += 1;
-    }
-
-    // Files hosting an entry-point function: a function nothing calls that
-    // starts a call chain — the same roots the domain flows grow from. How
-    // many a file holds never matters, only whether it holds one.
-    let mut calls_out: BTreeSet<&NodeId> = BTreeSet::new();
-    let mut called: BTreeSet<&NodeId> = BTreeSet::new();
-    for edge in graph.edges.iter().filter(|e| e.kind == EdgeKind::Calls) {
-        calls_out.insert(&edge.source);
-        called.insert(&edge.target);
-    }
-    let entry_point_files: BTreeSet<&str> = graph
-        .nodes
-        .iter()
-        .filter(|n| {
-            n.kind == NodeKind::Function && calls_out.contains(&n.id) && !called.contains(&n.id)
-        })
-        .map(|n| n.path.as_str())
-        .collect();
+    let (fan_in, fan_out) = import_degree(graph);
+    let entry_point_files = entry_point_files(graph);
 
     let mut candidates: Vec<Candidate<'_>> = graph
         .nodes
         .iter()
         .filter(|n| n.kind == NodeKind::File)
         .filter_map(|node| {
-            let fan_out = fan_out.get(&node.id).copied().unwrap_or(0);
-            let fan_in = fan_in.get(&node.id).copied().unwrap_or(0);
+            let fan_out = i64::from(fan_out.get(&node.id).copied().unwrap_or(0));
+            let fan_in = i64::from(fan_in.get(&node.id).copied().unwrap_or(0));
             let entry_bonus = i64::from(entry_point_files.contains(node.path.as_str()));
-            let significance = fan_in + fan_out + entry_bonus;
+            // Selection reads the published number; a file that carries none
+            // came from a producer that published no significance at all, and
+            // is off the walk rather than silently rescored here.
+            let significance = node.significance.unwrap_or(0);
             (significance > 0).then_some(Candidate {
                 significance,
                 reading_order: fan_out - fan_in + entry_bonus,

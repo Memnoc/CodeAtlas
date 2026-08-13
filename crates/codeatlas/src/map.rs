@@ -15,7 +15,10 @@ use serde::{Deserialize, Serialize};
 /// 0.3.1: documentation only — `tour` now states that it is a bounded,
 /// curated walk rather than one step per file. No shape change; maps and
 /// producers valid under 0.3.0 stay valid.
-pub const MAP_CONTRACT_VERSION: &str = "0.3.1";
+/// 0.4.0: added optional `Node.significance` (ADR-0010). A new optional
+/// field is a backward-compatible extension: maps written under 0.3.1 stay
+/// valid, and a consumer that ignores the field reads them as before.
+pub const MAP_CONTRACT_VERSION: &str = "0.4.0";
 
 /// The published contract schema: the schemars-derived schema for
 /// [`KnowledgeGraph`] plus a stable, versioned `$id`. This is the single
@@ -152,6 +155,16 @@ pub struct Node {
     /// which inherit their file's layer through containment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layer: Option<String>,
+    /// How much this file matters: import fan-in + import fan-out + 1 if the
+    /// file hosts an entry point (ADR-0010). Absent on symbol nodes — it is a
+    /// file-level number — and absent from maps written before contract
+    /// 0.4.0, which is the only reason it is optional: a producer that
+    /// publishes it publishes it for every file, zeros included. A consumer
+    /// ranking files reads this number rather than deriving one of its own,
+    /// so the tour, the default drill view and the rankings cannot disagree
+    /// about the same repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub significance: Option<u32>,
     pub provenance: Provenance,
 }
 

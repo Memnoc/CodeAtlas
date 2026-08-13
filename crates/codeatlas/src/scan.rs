@@ -186,7 +186,8 @@ fn extract_file(
         path: path.to_string(),
         summary,
         range: None,
-        layer: None, // assigned by the semantics pass
+        layer: None,        // assigned by the semantics pass
+        significance: None, // published by the semantics pass
         provenance: Provenance::Structural,
     });
 
@@ -209,7 +210,8 @@ fn extract_file(
                 start_line: symbol.start_line,
                 end_line: symbol.end_line,
             }),
-            layer: None, // symbols inherit their file's layer via containment
+            layer: None,        // symbols inherit their file's layer via containment
+            significance: None, // a file-level number; symbols carry none
             provenance: Provenance::Structural,
         });
         edges.push(Edge::new(file_id.clone(), id.clone(), EdgeKind::Contains));
