@@ -4,13 +4,13 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { KnowledgeGraph } from "../src/index.js";
 import { DRILL_DEFAULT_CARDS } from "../src/app/graph.js";
 import { MapExplorer } from "../src/app/MapExplorer.js";
-import { openLearn, openRegion } from "./drive.js";
+import { openLearn, openRegion, selectedOnCanvas } from "./drive.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..", "..");
 let map: KnowledgeGraph;
@@ -270,29 +270,43 @@ describe("CodeAtlas's own self-scan map", () => {
     const user = userEvent.setup();
     render(<MapExplorer map={map} />);
 
-    // A file of the crates/ layer, reached the way a reader reaches it: by
-    // clicking a card the canvas is drawing. Which card that is comes off
-    // the canvas rather than off the head of the map's node list — the
-    // default drill view draws the files the map says carry the region, and
-    // the first file the map happens to list is not usually one of them.
-    await openRegion(user, layerName("crates"));
-    const el = document.querySelector(
-      ".react-flow__node[data-id]",
-    ) as HTMLElement | null;
-    expect(el).not.toBeNull();
+    // A file of the crates/ layer, chosen off the map rather than off the
+    // canvas — the first one the scan emitted, whichever that turns out to be.
+    //
+    // For one commit this read the other way round: it took whichever card the
+    // canvas happened to be drawing, because ticket 03 had just hidden all but
+    // the top forty and the file at the head of the list is not one of them
+    // (it is `crates/codeatlas/Cargo.toml`, significance 0, measured on the
+    // self-scan of 2026-08-13). That made it a test of the canvas rather than
+    // of the map, and it dodged the very gap ticket 04 exists to close. The
+    // file comes off the map again, and is reached the way a reader reaches a
+    // file they can already name: by searching for it. The hit reveals it.
     const anyNode = map.nodes.find(
-      (n) => n.id === el?.getAttribute("data-id"),
+      (n) => n.kind === "file" && (n.layer ?? "root") === "crates",
     );
     expect(anyNode).toBeDefined();
-    if (!anyNode || !el) {
+    if (!anyNode) {
       return;
     }
-    expect(anyNode.kind).toBe("file");
-    expect(anyNode.layer ?? "root").toBe("crates");
-    fireEvent.click(el);
+
+    await user.type(screen.getByLabelText("Search nodes"), anyNode.path);
+    const hit = within(screen.getByLabelText("Search results"))
+      .getAllByRole("button")
+      .find(
+        (b) =>
+          b.querySelector(".result-name")?.textContent === anyNode.name &&
+          b.querySelector(".result-path")?.textContent === anyNode.path,
+      );
+    if (hit === undefined) {
+      throw new Error(`no search result for ${anyNode.path}`);
+    }
+    await user.click(hit);
 
     expect(screen.getByLabelText("Node detail")).toHaveTextContent(
       anyNode.summary,
     );
+    // And the card is on the canvas, in the region that holds it: a highlight
+    // nobody can see is not a selection.
+    expect(selectedOnCanvas()).toBe(anyNode.id);
   });
 });

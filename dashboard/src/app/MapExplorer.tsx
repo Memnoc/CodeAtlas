@@ -34,6 +34,7 @@ import {
   nodesById,
   regionFlow,
   regionNodeId,
+  regionsHiding,
   searchNodes,
 } from "./graph.js";
 import { Header, type Mode } from "./Header.js";
@@ -169,6 +170,56 @@ export function MapExplorer({
     return byPath;
   }, [map]);
 
+  // The card the canvas would draw for a node: the file itself, or the file
+  // that contains it. The canvas draws files, so a symbol is pointed at
+  // through the file holding it.
+  const fileIdOf = useCallback(
+    (id: string): string | undefined => {
+      const node = byId.get(id);
+      if (node === undefined) {
+        return undefined;
+      }
+      return node.kind === "file" ? node.id : fileIdOfPath.get(node.path);
+    },
+    [byId, fileIdOfPath],
+  );
+
+  // Auto-reveal: anything that points at a specific file reveals that file
+  // first. Since the default drill view holds all but the most significant
+  // forty back, a search hit, a focused file, a tour stop or a diff mark can
+  // each name a file that is not on the canvas — and each would then fail
+  // silently, which is the worst way to fail, because the reader concludes
+  // the feature is broken or that the file is fine.
+  //
+  // It writes the set the "show all" control writes, and nothing else: one
+  // mechanism, so there is no second reveal path to grow its own bugs, and
+  // the reader can put back what a pointer opened using the control already
+  // in front of them. Additive only — a region the reader opened in full
+  // stays open, and a region a pointer opened is not closed again under them
+  // while they are still reading it.
+  const autoReveal = useCallback(
+    (fileIds: ReadonlySet<string>) => {
+      const hiding = regionsHiding(regions, fileIds);
+      if (hiding.size === 0) {
+        return;
+      }
+      setRevealed((current) => {
+        // Same set back when there is nothing to add, so a pointer at an
+        // already-revealed region is not a state change and cannot become a
+        // render loop when an effect is what is pointing.
+        if ([...hiding].every((id) => current.has(id))) {
+          return current;
+        }
+        const next = new Set(current);
+        for (const id of hiding) {
+          next.add(id);
+        }
+        return next;
+      });
+    },
+    [regions],
+  );
+
   // Selecting from anywhere but the canvas — a search hit, an edge, a tour
   // step, a flow step, a ranking row — also brings the node into view. On a
   // canvas of regions that means opening the region holding it first: a
@@ -193,13 +244,16 @@ export function MapExplorer({
       if (region !== undefined) {
         setOpenRegionId(region);
       }
-      // The canvas draws files, so a symbol is shown by its file.
-      const target = node.kind === "file" ? node.id : fileIdOfPath.get(node.path);
+      const target = fileIdOf(id);
       if (target !== undefined) {
+        // Before the move, not after: the camera is being sent to this card,
+        // and a card the default view is holding back is not there to be
+        // moved to.
+        autoReveal(new Set([target]));
         setFocus({ id: target });
       }
     },
-    [byId, regionOfPath, fileIdOfPath],
+    [byId, regionOfPath, fileIdOf, autoReveal],
   );
 
   const searchShown = query.trim() !== "" && !searchDismissed;
@@ -384,6 +438,31 @@ export function MapExplorer({
       padding: 4,
     });
   }, [focus]);
+
+  // The diff overlay points at files too — every file it marks — and it does
+  // so all over the map at once rather than one at a time, so it reveals all
+  // over the map: a region the reader has not drilled into yet is already
+  // open in full by the time they get there. Marks roll up to files first,
+  // because `codeatlas diff` marks symbols as well and the canvas draws
+  // files.
+  //
+  // An effect rather than the toggle's own handler, because the marks have to
+  // outlive the other things that rebuild the revealed set: switching the
+  // grouping clears it, and an overlay still switched on would go straight
+  // back to marking cards nobody can see.
+  useEffect(() => {
+    if (!showOverlay || !overlay) {
+      return;
+    }
+    const marked = new Set<string>();
+    for (const id of [...overlay.changed, ...overlay.affected]) {
+      const file = fileIdOf(id);
+      if (file !== undefined) {
+        marked.add(file);
+      }
+    }
+    autoReveal(marked);
+  }, [showOverlay, overlay, fileIdOf, autoReveal]);
 
   const results = useMemo(() => searchNodes(map, query), [map, query]);
   const selected = useMemo(

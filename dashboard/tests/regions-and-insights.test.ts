@@ -18,6 +18,7 @@ import {
   fileFlow,
   NODE_HEIGHT,
   regionFlow,
+  regionsHiding,
 } from "../src/app/graph.js";
 import {
   captionOf,
@@ -902,6 +903,118 @@ describe("the default drill view", () => {
         expect(nodes.length, `${region.id} drew nothing`).toBeGreaterThan(0);
       }
     }
+  });
+
+  describe("what a feature pointing at a file has to reveal", () => {
+    /** Two regions of `count` files each, significance rising with the index
+     * within each, so both hold the same twenty back. The diff overlay marks
+     * files all over a map, which is the case one region cannot pose. */
+    function twoRegions(count: number): KnowledgeGraph {
+      const file = (layer: string, i: number) => ({
+        id: `file:${layer}/${named(i)}`,
+        kind: "file" as const,
+        name: named(i),
+        path: `${layer}/${named(i)}`,
+        summary: "",
+        layer,
+        provenance: "structural" as const,
+        significance: i,
+      });
+      return {
+        version: "0.4.0",
+        project: { name: "drill" },
+        layers: [
+          { id: "one", name: "one", provenance: "structural" },
+          { id: "two", name: "two", provenance: "structural" },
+        ],
+        nodes: [
+          ...Array.from({ length: count }, (_, i) => file("one", i)),
+          ...Array.from({ length: count }, (_, i) => file("two", i)),
+        ],
+        edges: [],
+      };
+    }
+
+    const sixty = () =>
+      repo(Array.from({ length: 60 }, (_, i) => [named(i), i] as const));
+
+    it("names the region holding a file the default view holds back", () => {
+      const map = sixty();
+
+      expect([
+        ...regionsHiding([onlyRegion(map)], new Set(["file:app/f000.ts"])),
+      ]).toEqual(["app"]);
+    });
+
+    it("names nothing for a file the default view already draws", () => {
+      // The most significant file in the region. Revealing here would blow a
+      // region open for a pointer that already had somewhere to land.
+      const map = sixty();
+
+      expect([
+        ...regionsHiding([onlyRegion(map)], new Set(["file:app/f059.ts"])),
+      ]).toEqual([]);
+    });
+
+    it("names nothing for a region the default view draws whole", () => {
+      const map = repo(
+        Array.from({ length: DRILL_DEFAULT_CARDS }, (_, i) => [named(i), i] as const),
+      );
+
+      expect([
+        ...regionsHiding([onlyRegion(map)], new Set(["file:app/f000.ts"])),
+      ]).toEqual([]);
+    });
+
+    it("names every region holding one of the files, and no more", () => {
+      // The diff overlay's shape: marks scattered across the map, some on
+      // files the default view draws and some on files it does not.
+      const regions = structuralRegions(twoRegions(60));
+
+      expect(
+        [
+          ...regionsHiding(
+            regions,
+            new Set([
+              "file:one/f000.ts", // held back
+              "file:two/f001.ts", // held back
+              "file:two/f059.ts", // already drawn
+            ]),
+          ),
+        ].sort(),
+      ).toEqual(["one", "two"]);
+      expect([
+        ...regionsHiding(regions, new Set(["file:one/f059.ts"])),
+      ]).toEqual([]);
+      expect([...regionsHiding(regions, new Set())]).toEqual([]);
+    });
+
+    it("answers for a file no region holds without inventing one", () => {
+      const regions = structuralRegions(twoRegions(60));
+
+      expect([
+        ...regionsHiding(regions, new Set(["file:nowhere/f000.ts"])),
+      ]).toEqual([]);
+    });
+
+    it("asks exactly the question the canvas answers, file by file", () => {
+      // The one-mechanism claim, at the level it can actually be proved: for
+      // every file in the region, needing a reveal and not being drawn are the
+      // same fact. A second opinion computed here — a different cut, a
+      // different tie-break — would part company with the canvas somewhere in
+      // these sixty, and a feature would either point at nothing or reveal a
+      // region it had no reason to.
+      const map = sixty();
+      const region = onlyRegion(map);
+      const drawn = new Set(fileFlow(map, region).nodes.map((n) => n.id));
+
+      for (const file of region.files) {
+        expect(
+          [...regionsHiding([region], new Set([file.id]))],
+          `${file.path} is ${drawn.has(file.id) ? "drawn" : "held back"}`,
+        ).toEqual(drawn.has(file.id) ? [] : ["app"]);
+      }
+    });
   });
 });
 

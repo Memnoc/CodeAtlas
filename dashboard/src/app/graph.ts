@@ -466,6 +466,45 @@ function drawnFiles(
   return region.files.filter((f) => carrying.has(f.id));
 }
 
+/** The regions whose default drill view holds one of these files back — what
+ * a feature pointing at those files has to reveal for its pointer to land on
+ * something rather than on nothing.
+ *
+ * The answer is regions, not cards, for two reasons. A lone extra card among
+ * forty is a card with no neighbours and no context, and the reader followed
+ * the pointer *into* a region; and the revealed set the "show all" affordance
+ * writes is already region-keyed, so answering in regions keeps every way of
+ * revealing on the one projection input instead of growing a second.
+ *
+ * Read off [`drawnFiles`] — the same rule the canvas draws by — so this can
+ * neither reveal a region that was already showing the target nor miss one
+ * that was not. A file no region holds names no region: an overlay may mark a
+ * path this grouping has no card for, and inventing one would be worse than
+ * saying nothing. */
+export function regionsHiding(
+  regions: readonly Region[],
+  fileIds: ReadonlySet<string>,
+): Set<string> {
+  const hiding = new Set<string>();
+  if (fileIds.size === 0) {
+    return hiding;
+  }
+  for (const region of regions) {
+    // A region the default view draws whole hides nothing, and asking which
+    // forty of its thirty files carry it is work with no answer to give.
+    if (hiddenByDefault(region) === 0) {
+      continue;
+    }
+    const drawn = new Set(
+      drawnFiles(region, NOTHING_REVEALED).map((f) => f.id),
+    );
+    if (region.files.some((f) => fileIds.has(f.id) && !drawn.has(f.id))) {
+      hiding.add(region.id);
+    }
+  }
+  return hiding;
+}
+
 /** Drilled into one region: its files, and the relationships among them.
  * Links leaving the region are the overview's business, not this view's.
  *
