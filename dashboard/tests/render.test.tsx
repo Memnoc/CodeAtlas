@@ -92,3 +92,51 @@ describe("rendering a map file", () => {
     expect(screen.getByTestId("region-root")).toBeInTheDocument();
   });
 });
+
+describe("a panel with nothing to rank", () => {
+  /** A one-file map whose only file either scored zero or was never scored:
+   * `significance` is optional in the contract (ADR-0010), so both maps are
+   * legal and they are not the same fact. */
+  function quiet(significance: number | undefined): KnowledgeGraph {
+    return {
+      version: "0.4.0",
+      project: { name: "quiet" },
+      layers: [{ id: "src", name: "src", provenance: "structural" }],
+      nodes: [
+        {
+          id: "file:src/lonely.ts",
+          kind: "file",
+          name: "lonely.ts",
+          path: "src/lonely.ts",
+          summary: "",
+          layer: "src",
+          provenance: "structural",
+          ...(significance === undefined ? {} : { significance }),
+        },
+      ],
+      edges: [],
+    };
+  }
+
+  it("reports the measurement when every file was measured at zero", () => {
+    render(<MapExplorer map={quiet(0)} />);
+
+    expect(
+      within(screen.getByLabelText("Files that matter")).getByText(
+        "No file carries a significance above zero.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("says nothing was measured when the map publishes no significance", () => {
+    render(<MapExplorer map={quiet(undefined)} />);
+
+    // The panel may not report a score of zero for a file the map never
+    // scored: an empty ranking here means the number is absent, not low.
+    const section = within(screen.getByLabelText("Files that matter"));
+    expect(
+      section.getByText("This map publishes no significance to rank on."),
+    ).toBeInTheDocument();
+    expect(section.queryByText(/above zero/)).toBeNull();
+  });
+});

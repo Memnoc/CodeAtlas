@@ -7,6 +7,7 @@ import {
   languageCounts,
   mostSignificant,
   projectCounts,
+  publishesSignificance,
 } from "./insights.js";
 import type { Region, RegionLink } from "./regions.js";
 
@@ -33,6 +34,7 @@ export function InfoPanel({
   const languages = useMemo(() => languageCounts(map), [map]);
   const starts = useMemo(() => entryPoints(map), [map]);
   const carrying = useMemo(() => mostSignificant(map), [map]);
+  const measured = useMemo(() => publishesSignificance(map), [map]);
   const widest = Math.max(1, ...regions.map((r) => r.files.length));
   const names = new Map(regions.map((r) => [r.id, r.name]));
 
@@ -67,16 +69,25 @@ export function InfoPanel({
 
       {/* The map's own answer to "which files matter", read rather than
           recomputed (ADR-0010), so this panel, the codebase tour and the
-          default drill view name the same files. */}
+          default drill view name the same files.
+
+          An empty ranking has two causes and only one of them is a
+          measurement: a map may have scored every file zero, or it may
+          publish no significance at all (the field is optional). Saying the
+          first about the second reports a number nobody took. */}
       <Section
         title="Files that matter"
         blurb="The map's significance: imports in, imports out, and a way in."
-        empty="No file carries a significance above zero."
-        rows={carrying.map(({ node, count }) => ({
+        empty={
+          measured
+            ? "No file carries a significance above zero."
+            : "This map publishes no significance to rank on."
+        }
+        rows={carrying.map(({ node, significance }) => ({
           key: node.id,
           onClick: () => onSelectNode(node.id),
           left: <code className="row-symbol">{node.path}</code>,
-          right: <span className="row-path">significance {count}</span>,
+          right: <span className="row-path">significance {significance}</span>,
         }))}
       />
 

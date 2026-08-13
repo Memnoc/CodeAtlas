@@ -129,14 +129,21 @@ day the map was scanned.
   the shipped walkthrough has fourteen — re-export without the number.
   hero-{dark,light}.png says "in nine themes"; the dashboard ships two.
   After re-export, drop the files into docs/images/ and give each its
-  <picture> block here (walkthrough) and wherever the hero should live. -->
+  <picture> block here (walkthrough) and wherever the hero should live.
 
-### Where to start, and what everything leans on
+  STALE, still published: panel-{dark,light}.png has the retired ranking
+  baked in — the headline "what everything leans on", a section titled
+  "Everything leans on", and rows counting importers ("<- N files"). The
+  panel now ranks the map's published significance (ADR-0010) and reads
+  "Files that matter" / "significance N". The heading and alt text below say
+  what ships; the picture needs a re-export to catch up. -->
+
+### Where to start, and which files matter
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/panel-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="docs/images/panel-light.png">
-  <img alt="The info panel naming entry points and load-bearing files; the FILES tab behind its filter" src="docs/images/panel-dark.png" width="100%">
+  <img alt="The info panel naming entry points and ranking the files the map says matter; the FILES tab behind its filter" src="docs/images/panel-dark.png" width="100%">
 </picture>
 
 ### You always know which parts a model wrote

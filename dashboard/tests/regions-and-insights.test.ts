@@ -13,7 +13,12 @@ import {
   mostSignificant,
   projectCounts,
 } from "../src/app/insights.js";
-import { fileFlow, NODE_HEIGHT, regionFlow } from "../src/app/graph.js";
+import {
+  DRILL_DEFAULT_CARDS,
+  fileFlow,
+  NODE_HEIGHT,
+  regionFlow,
+} from "../src/app/graph.js";
 import {
   captionOf,
   edgeLabelOf,
@@ -319,10 +324,47 @@ describe("what matters most", () => {
       "src/b.ts",
       "src/c.ts",
     ]);
-    expect(ranked.map((r) => r.count)).toEqual([6, 2, 1, 1]);
-    for (const { node, count } of ranked) {
-      expect(count).toBe(node.significance);
+    expect(ranked.map((r) => r.significance)).toEqual([6, 2, 1, 1]);
+    for (const { node, significance } of ranked) {
+      expect(significance).toBe(node.significance);
     }
+  });
+
+  it("orders a tie the way the map producer does, not the way a locale would", () => {
+    // The producer breaks a significance tie on the path's bytes
+    // (`a.path.cmp(b.path)`, crates/codeatlas/src/semantics.rs), and this
+    // pair is one where byte order and locale collation genuinely disagree:
+    // `R` is 0x52 and `a` is 0x61, so bytes put `README.md` first, while
+    // collation reads past the case and puts `adr/` first. Checked here
+    // rather than asserted in prose, so a fixture that stopped discriminating
+    // would say so.
+    expect("docs/README.md".localeCompare("docs/adr/index.md")).toBeGreaterThan(
+      0,
+    );
+
+    const tied: KnowledgeGraph = {
+      version: "0.4.0",
+      project: { name: "collation" },
+      layers: [{ id: "docs", name: "docs", provenance: "structural" }],
+      nodes: ["docs/README.md", "docs/adr/index.md"].map((path) => ({
+        id: `file:${path}`,
+        kind: "file" as const,
+        name: path.slice(path.lastIndexOf("/") + 1),
+        path,
+        summary: "",
+        layer: "docs",
+        provenance: "structural" as const,
+        significance: 3,
+      })),
+      edges: [],
+    };
+
+    // The producer's order, so a top-N cut here takes the file a top-N cut
+    // there would have taken. Ranking by collation returns these reversed.
+    expect(mostSignificant(tied).map((r) => r.node.path)).toEqual([
+      "docs/README.md",
+      "docs/adr/index.md",
+    ]);
   });
 
   it("ranks nothing when the map publishes no significance", () => {
@@ -768,6 +810,32 @@ describe("the default drill view", () => {
     expect(shown.has(named(39))).toBe(true);
     expect(shown.has(named(40))).toBe(false);
     expect(shown.has(named(44))).toBe(false);
+  });
+
+  it("breaks a tie the way the map producer does, not the way a locale would", () => {
+    // Same ordering rule as the tour's, or the two disagree at the cut: the
+    // producer compares the path's bytes (`a.path.cmp(b.path)`,
+    // crates/codeatlas/src/semantics.rs). Byte order and collation disagree
+    // about this pair — `R` is 0x52, `a` is 0x61, so bytes put `README.md`
+    // first and collation puts `adr/` first — which is what makes the
+    // fixture able to tell them apart at all.
+    expect("app/README.md".localeCompare("app/adr/index.md")).toBeGreaterThan(
+      0,
+    );
+
+    // Thirty-nine files clear of the cut and two tied for the fortieth card:
+    // exactly one of the pair is drawn, and which one is the whole question.
+    const map = repo([
+      ...Array.from({ length: 39 }, (_, i) => [named(i), 10] as const),
+      ["README.md", 1] as const,
+      ["adr/index.md", 1] as const,
+    ]);
+
+    const shown = new Set(drawn(map));
+
+    expect(shown.size).toBe(DRILL_DEFAULT_CARDS);
+    expect(shown.has("README.md")).toBe(true);
+    expect(shown.has("adr/index.md")).toBe(false);
   });
 
   it("draws the whole region once the reader has revealed it", () => {

@@ -9,12 +9,15 @@
 // per-file number (ADR-0010). Reading the producer's own answers is what
 // keeps three consumers from naming three different files.
 import type { KnowledgeGraph, Node as MapNode } from "../index.js";
+import { bySignificance } from "./significance.js";
 
 /** How many rows a ranking panel shows. Both rankings have a long tail that
  * says nothing; the panel is a starting point, not an inventory. */
 const TOP_N = 6;
 
-export type Ranked = { node: MapNode; count: number };
+/** One row of the significance ranking: the file, and the number the map
+ * published about it — not a count of anything this module tallied. */
+export type Ranked = { node: MapNode; significance: number };
 
 /** Functions nothing else calls — the roots the map's own flows are built
  * on. Falls back to computing the same property directly for maps that
@@ -46,8 +49,20 @@ export function entryPoints(map: KnowledgeGraph): MapNode[] {
     .slice(0, TOP_N);
 }
 
+/** Whether this map publishes significance at all. An empty ranking has two
+ * unrelated causes — a map that scored every file zero, and a map that
+ * scored nothing (the field is optional; every map written before ADR-0010
+ * omits it) — and a reader told "nothing scored above zero" about the second
+ * has been told a measurement that was never taken. */
+export function publishesSignificance(map: KnowledgeGraph): boolean {
+  return map.nodes.some(
+    (n) => n.kind === "file" && (n.significance ?? null) !== null,
+  );
+}
+
 /** The files the map says carry the architecture, most significant first,
- * ties broken on path so the order is stable between runs of the same map.
+ * ties broken on path — the producer's own comparator, so this ranking's top
+ * six are the six a tour or a drill view cutting the same list would take.
  *
  * The number is the map's own published significance (ADR-0010) — import
  * fan-in + fan-out + 1 if the file hosts an entry point, computed at scan —
@@ -60,14 +75,14 @@ export function entryPoints(map: KnowledgeGraph): MapNode[] {
  *
  * A file scoring zero is left out rather than listed: nothing leans on it,
  * it leans on nothing, and no walk starts there. On a map written before
- * significance existed that is every file, and the panel says so instead of
- * inventing an order. */
+ * significance existed that is every file and this returns nothing — which
+ * is why the panel asks [`publishesSignificance`] before it says why. */
 export function mostSignificant(map: KnowledgeGraph): Ranked[] {
   return map.nodes
     .filter((n) => n.kind === "file" && (n.significance ?? 0) > 0)
-    .map((node) => ({ node, count: node.significance ?? 0 }))
-    .sort((a, b) => b.count - a.count || a.node.path.localeCompare(b.node.path))
-    .slice(0, TOP_N);
+    .sort(bySignificance)
+    .slice(0, TOP_N)
+    .map((node) => ({ node, significance: node.significance ?? 0 }));
 }
 
 /** File extension to the language name CodeAtlas's parsers use. This mirrors

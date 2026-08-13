@@ -12,6 +12,7 @@ import {
 } from "@xyflow/react";
 import type { KnowledgeGraph, Node as MapNode } from "../index.js";
 import type { Region, RegionLink } from "./regions.js";
+import { bySignificance } from "./significance.js";
 
 export type EntityData = {
   node: MapNode;
@@ -439,8 +440,10 @@ const TRANSPOSE_ROUNDS = 4;
  *
  * "Carry it" is the map's own word, not a second opinion computed here — the
  * published significance (ADR-0010), which the tour selects on and the
- * rankings rank on. A map that publishes none leaves every file tied, and
- * then path order decides, which is why a region can never come out empty.
+ * rankings rank on, ordered by the comparator all three share so the cut
+ * falls in the same place for all of them. A map that publishes none leaves
+ * every file tied, and then path order decides, which is why a region can
+ * never come out empty.
  *
  * The chosen files keep the order the region lists them in rather than
  * arriving sorted by significance: the drawing below is a layered layout
@@ -456,11 +459,7 @@ function drawnFiles(
   }
   const carrying = new Set(
     [...region.files]
-      .sort(
-        (a, b) =>
-          (b.significance ?? 0) - (a.significance ?? 0) ||
-          a.path.localeCompare(b.path),
-      )
+      .sort(bySignificance)
       .slice(0, DRILL_DEFAULT_CARDS)
       .map((f) => f.id),
   );
