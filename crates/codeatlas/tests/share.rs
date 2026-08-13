@@ -8,11 +8,11 @@ mod common;
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use codeatlas::map::MAP_CONTRACT_VERSION;
-use codeatlas::share::{FIELD_CLASSIFICATIONS, REDACTION_MARKER, redact};
+use codeatlas::share::{FIELD_CLASSIFICATIONS, REDACTION_MARKER, SHARE_CEILING_BYTES, redact};
 use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------
@@ -447,6 +447,61 @@ fn share_refuses_a_map_that_does_not_conform_to_the_contract() {
             "no artifact may be written from a non-conforming map ({label})"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The ceiling (spec story 23, ADR-0011): the share artifact stays small
+// enough to hand to anyone, and passing that size is a decision in a diff
+// rather than an accumulation nobody sees.
+// ---------------------------------------------------------------------------
+
+/// This repository, from the crate the test is compiled in. The ceiling is
+/// about the file a person actually receives, so it is weighed on a real map
+/// — CodeAtlas's own — and not on the fixture above, whose artifact would be
+/// the embedded dashboard and little else.
+fn repository_root() -> PathBuf {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .canonicalize()
+        .expect("the workspace root must exist");
+    assert!(
+        root.join("CONTEXT.md").is_file() && root.join("dashboard").is_dir(),
+        "{} is not this repository's root; the measurement below would weigh \
+         the wrong map",
+        root.display()
+    );
+    root
+}
+
+#[test]
+fn the_share_artifact_stays_under_its_ceiling() {
+    // Dogfooded, as the self-scan in tests/scan.rs is: this repository is the
+    // largest map CodeAtlas is committed to producing, so its artifact is the
+    // one worth weighing. A plain scan — no `--enrich`, so nothing is bought;
+    // the committed annotation store is carried over exactly as a colleague's
+    // clone carries it (ADR-0005), which is the map a real share starts from.
+    let root = repository_root();
+    let scan = Command::new(env!("CARGO_BIN_EXE_codeatlas"))
+        .args(["scan", root.to_str().unwrap()])
+        .output()
+        .expect("codeatlas scan runs");
+    assert!(
+        scan.status.success(),
+        "self-scan failed: {}",
+        String::from_utf8_lossy(&scan.stderr)
+    );
+
+    // What the recipient receives: the artifact's own bytes on disk, after
+    // templating and inlining, uncompressed.
+    let measured = run_share(&root).len() as u64;
+    assert!(
+        measured <= SHARE_CEILING_BYTES,
+        "the share artifact is {measured} bytes — {over} bytes over the \
+         ceiling of {SHARE_CEILING_BYTES} bytes (ADR-0011). Either shrink \
+         what the artifact embeds, or raise SHARE_CEILING_BYTES in \
+         src/share.rs and say why in the diff.",
+        over = measured - SHARE_CEILING_BYTES
+    );
 }
 
 #[test]

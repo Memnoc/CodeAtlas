@@ -48,6 +48,21 @@ pub const SHARE_FILE: &str = "share.html";
 /// removal, keeps the map valid against the contract schema.
 pub const REDACTION_MARKER: &str = "[redacted]";
 
+/// The largest a share artifact may be: two megabytes, counted in bytes,
+/// where one megabyte is 1,048,576 bytes (2^20) — the one place that
+/// definition is written down.
+///
+/// Nothing enforces this at run time. The enforcement is the committed test
+/// in `tests/share.rs`, which shares this repository's own map and fails
+/// above this number, and it is the enforcement ADR-0011 rests on: the
+/// hand-rolled dashboard layout was kept over a layout library because no
+/// dependency's weight may land in the file a person double-clicks. That
+/// test's own run on 2026-08-13 weighed this repository's map at 1,364,909
+/// bytes; ADR-0011 records growth from 849 KB to 1.35 MB before anything
+/// watched it. The ceiling exists so the next growth past it is a decision
+/// someone makes by editing this line, which is the point.
+pub const SHARE_CEILING_BYTES: u64 = 2 * 1024 * 1024;
+
 /// How a contract field is treated by the share artifact.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Classification {
