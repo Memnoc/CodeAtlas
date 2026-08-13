@@ -135,6 +135,15 @@ so growth becomes a decision someone makes.
     share artifact exceeds its ceiling, so that growth is a decision, never
     an accident ([ADR-0011](../adr/0011-no-layout-library-a-share-ceiling-enforces-it.md)).
 
+**The neighbourhood**
+
+24. As a newcomer, I want a magnify mode that draws only the file I focused
+    and the files it connects to, so that a neighbourhood on a large map is
+    legible instead of lines running off the screen.
+25. As a newcomer, I want leaving magnify to put me back where I was, so that
+    it is a lens I look through rather than a place I have to navigate home
+    from.
+
 ## Implementation Decisions
 
 **Contract** (ceremony per [ADR-0003](../adr/0003-rust-types-generate-the-public-map-contract.md):
@@ -169,6 +178,18 @@ edge, computed in the pure projection, with curve styling to match. No
 layout library — the decision and its enforcement (the two-megabyte share
 ceiling test) are
 [ADR-0011](../adr/0011-no-layout-library-a-share-ceiling-enforces-it.md).
+
+**Magnify.** Focus dims the map in place, which stops working at the scale
+this lap exists to fix: the lit edges run the width of the canvas to cards too
+small to read, so the reader learns *that* a file connects to something and
+never *what*. Magnify draws the induced subgraph instead — the focused file
+and its direct neighbours — laid out by the drill view's own layering, so
+imports still run downward. The neighbourhood is an input to the pure
+projection exactly as the revealed set is, and a hidden neighbour is revealed
+through auto-reveal's mechanism rather than a second one. Depth is one hop,
+with no control: depth two is most of the region again on the files that need
+this most, and the next hop is one more magnify. Dim-in-place focus survives
+beside it — it keeps the hierarchy position magnify deliberately discards.
 
 **The conversation.** The wire shape, bounds and retrieval rule are
 [ADR-0012](../adr/0012-a-conversation-is-client-carried-bounded-input.md):
@@ -272,6 +293,9 @@ ten times over in this repository.
   subscription billing.
 - **A layout library** — rejected in
   [ADR-0011](../adr/0011-no-layout-library-a-share-ceiling-enforces-it.md).
+- **A magnify depth control** — out; direct neighbours only. Depth two
+  reproduces the density the mode exists to escape, and magnifying a
+  neighbour is the next hop. Added with stories 24–25 on 2026-08-13.
 - **Semantic search / embeddings** — out; a different product decision
   entirely (carried forward from the V1 reference intake).
 - **Share artifacts from the dashboard** — out; allowlist redaction in a
@@ -300,3 +324,9 @@ ten times over in this repository.
 - Open question, non-blocking: whether the top-40 constant should become
   user-adjustable if maps much larger than this repository's appear. Not
   now — a knob nobody asked for is speculative generality.
+- Stories 24 and 25 were added on 2026-08-13, after the spec was approved and
+  while the lap was in flight, at Memnoc's direction: the drill-view work made
+  the seam cheap, and the defect was hit on the repository's own map. The
+  decision to amend the spec rather than carry an orphan ticket is
+  deliberate — `/harden` verifies stories, so work that is not a story is work
+  nobody checks.
