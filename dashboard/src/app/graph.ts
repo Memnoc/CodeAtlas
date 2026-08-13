@@ -56,6 +56,29 @@ const LAYER_GAP = GAP * 4;
  * is to stay out of its way. */
 const STANDALONE_COLS = 8;
 
+/** How many file cards a drill view draws before the reader asks for the
+ * rest.
+ *
+ * Forty is the count the V1 reference material demonstrated readable —
+ * `docs/intake/2026-08-12-codeatlas-v1-next.md`, written 2026-08-12, records
+ * the reference dashboard drawing "~40 nodes, not 598". It is a named
+ * constant, not a promise and not a setting: whether it should become
+ * adjustable is an open question the V2 spec's Further Notes answers "not
+ * now". */
+export const DRILL_DEFAULT_CARDS = 40;
+
+/** The default revealed set: nothing. Shared rather than built per call, and
+ * read-only, so the default can never become a place state accumulates. */
+const NOTHING_REVEALED: ReadonlySet<string> = new Set<string>();
+
+/** How many of a region's files the default drill view holds back — what the
+ * reveal affordance names, and zero for a region it already draws whole.
+ * Stated here, beside the selection rule it inverts, so the control and the
+ * canvas cannot come to disagree about the same region. */
+export function hiddenByDefault(region: Region): number {
+  return Math.max(0, region.files.length - DRILL_DEFAULT_CARDS);
+}
+
 /** A dependency, reduced to its endpoints — all the layout ever needs. */
 type Link = { source: string; target: string };
 
@@ -411,6 +434,39 @@ function orderLayers(layers: string[][], links: readonly Link[]): void {
 const BARYCENTRE_SWEEPS = 6;
 const TRANSPOSE_ROUNDS = 4;
 
+/** The files a drill view draws: all of them once the region is revealed,
+ * otherwise the [`DRILL_DEFAULT_CARDS`] that carry it.
+ *
+ * "Carry it" is the map's own word, not a second opinion computed here — the
+ * published significance (ADR-0010), which the tour selects on and the
+ * rankings rank on. A map that publishes none leaves every file tied, and
+ * then path order decides, which is why a region can never come out empty.
+ *
+ * The chosen files keep the order the region lists them in rather than
+ * arriving sorted by significance: the drawing below is a layered layout
+ * whose within-layer ordering starts from the order it is handed, and
+ * re-sorting here would move cards for reasons that have nothing to do with
+ * how they connect. */
+function drawnFiles(
+  region: Region,
+  revealed: ReadonlySet<string>,
+): MapNode[] {
+  if (revealed.has(region.id) || region.files.length <= DRILL_DEFAULT_CARDS) {
+    return region.files;
+  }
+  const carrying = new Set(
+    [...region.files]
+      .sort(
+        (a, b) =>
+          (b.significance ?? 0) - (a.significance ?? 0) ||
+          a.path.localeCompare(b.path),
+      )
+      .slice(0, DRILL_DEFAULT_CARDS)
+      .map((f) => f.id),
+  );
+  return region.files.filter((f) => carrying.has(f.id));
+}
+
 /** Drilled into one region: its files, and the relationships among them.
  * Links leaving the region are the overview's business, not this view's.
  *
@@ -428,8 +484,15 @@ export function fileFlow(
    * a card that clips it is worse than a card without one. */
   cardHeight: number = NODE_HEIGHT,
   captionOf?: (node: MapNode) => string | null,
+  /** The regions the reader has opened in full, by region ID. An argument
+   * rather than state inside here: the same map in the same state must always
+   * draw the same picture, and a projection that remembered what it drew last
+   * could not promise that. Every way of revealing — the affordance, and the
+   * features that point at a specific file — feeds this one input. */
+  revealed: ReadonlySet<string> = NOTHING_REVEALED,
 ): { nodes: AppFlowNode[]; edges: FlowEdge[] } {
-  const inside = new Set(region.files.map((f) => f.id));
+  const files = drawnFiles(region, revealed);
+  const inside = new Set(files.map((f) => f.id));
   const links = map.edges.filter(
     (e) =>
       e.kind === "imports" &&
@@ -439,8 +502,8 @@ export function fileFlow(
   );
 
   const touched = new Set(links.flatMap((l) => [l.source, l.target]));
-  const connected = region.files.filter((f) => touched.has(f.id));
-  const standalone = region.files.filter((f) => !touched.has(f.id));
+  const connected = files.filter((f) => touched.has(f.id));
+  const standalone = files.filter((f) => !touched.has(f.id));
 
   const layers = layersOf(
     connected.map((f) => f.id),
@@ -478,7 +541,7 @@ export function fileFlow(
     });
   });
 
-  const nodes: AppFlowNode[] = region.files.map((node) => ({
+  const nodes: AppFlowNode[] = files.map((node) => ({
     id: node.id,
     type: "entity",
     position: at.get(node.id) ?? { x: 0, y: 0 },

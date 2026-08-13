@@ -27,7 +27,9 @@ import { type Chrome, readChrome, writeChrome } from "./chrome.js";
 import { FilesPanel } from "./FilesPanel.js";
 import { FlowsPanel } from "./FlowsPanel.js";
 import {
+  DRILL_DEFAULT_CARDS,
   fileFlow,
+  hiddenByDefault,
   type AppFlowNode,
   nodesById,
   regionFlow,
@@ -101,6 +103,23 @@ export function MapExplorer({
     writeChrome(next);
   }, []);
   const [openRegionId, setOpenRegionId] = useState<string | null>(null);
+  // Which regions the reader has asked to see in full. Held here and handed
+  // to the projection as an argument, never kept inside it: the same map in
+  // the same state has to draw the same picture. Region-scoped and not
+  // written to storage — reading a region in full is a thing someone does
+  // once, deliberately, not a preference they carry between repositories.
+  const [revealed, setRevealed] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const toggleRevealed = useCallback((id: string) => {
+    setRevealed((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   // Dismissal is tracked apart from the query, because putting the results
@@ -330,8 +349,8 @@ export function MapExplorer({
     () =>
       openRegion === null
         ? regionFlow(regions, links, (region) => regionCaptionOf(region, links))
-        : fileFlow(map, openRegion, CARD_HEIGHT, captionOf),
-    [map, openRegion, regions, links],
+        : fileFlow(map, openRegion, CARD_HEIGHT, captionOf, revealed),
+    [map, openRegion, regions, links, revealed],
   );
 
   // Drilling in and back out replaces every node on the canvas. React Flow's
@@ -405,14 +424,24 @@ export function MapExplorer({
   }, [flow.edges, selectedFileId]);
 
   // Files the layout parked below the layers because nothing in the region
-  // imports them or is imported by them.
+  // imports them or is imported by them. Counted off the cards actually
+  // drawn rather than off the region's whole list: a file the default view
+  // is holding back is not "importing nothing here", it is simply not on the
+  // canvas, and counting it as the former would describe a picture nobody is
+  // looking at.
   const standalone = useMemo(() => {
     if (openRegion === null) {
       return 0;
     }
     const touched = new Set(flow.edges.flatMap((e) => [e.source, e.target]));
-    return openRegion.files.filter((f) => !touched.has(f.id)).length;
-  }, [flow.edges, openRegion]);
+    return flow.nodes.filter((n) => !touched.has(n.id)).length;
+  }, [flow, openRegion]);
+
+  // What the drill view is holding back, if anything — asked of the
+  // projection rather than worked out here, so the control and the canvas
+  // read one rule. Unchanged by revealing: it is what the *default* view
+  // puts away, which is what the way back has to offer.
+  const hidden = openRegion === null ? 0 : hiddenByDefault(openRegion);
 
   const shownEdges = useMemo<FlowEdge[]>(() => {
     if (selectedFileId === null) {
@@ -510,6 +539,11 @@ export function MapExplorer({
         onGrouping={(next) => {
           setGrouping(next);
           setOpenRegionId(null);
+          // The other grouping's regions are different regions, and the two
+          // draw their IDs from the same well — a layer and a domain can
+          // both be called `crates`. Carrying a reveal across would open a
+          // region the reader never asked to see in full.
+          setRevealed(new Set<string>());
         }}
         pathOpen={pathOpen}
         onTogglePath={() => setPathOpen(!pathOpen)}
@@ -782,6 +816,29 @@ export function MapExplorer({
                     ? " · click one to trace it"
                     : " · click the canvas to clear"}
                 </span>
+                {/* Disclosure, not a filter: the default view draws the
+                    files the map says carry this region, and this is the one
+                    gesture that puts the rest on the canvas. It names both
+                    true numbers — the region's size and what is being held
+                    back — so nobody has to work out what they are asking
+                    for. Absent entirely on a region the default view already
+                    draws whole. */}
+                {hidden > 0 && (
+                  <button
+                    type="button"
+                    className="reveal"
+                    title={
+                      revealed.has(openRegion.id)
+                        ? `Draw the ${DRILL_DEFAULT_CARDS} files the map says carry this region, and put the rest away`
+                        : "Draw every file in this region, however dense the picture gets"
+                    }
+                    onClick={() => toggleRevealed(openRegion.id)}
+                  >
+                    {revealed.has(openRegion.id)
+                      ? `Show the top ${DRILL_DEFAULT_CARDS}`
+                      : `Show all ${openRegion.files.length} files (${hidden} hidden)`}
+                  </button>
+                )}
               </>
             )}
           </nav>

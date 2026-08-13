@@ -10,10 +10,10 @@ import {
   entryPoints,
   languageOf,
   languageCounts,
-  mostDependedOn,
+  mostSignificant,
   projectCounts,
 } from "../src/app/insights.js";
-import { fileFlow, regionFlow } from "../src/app/graph.js";
+import { fileFlow, NODE_HEIGHT, regionFlow } from "../src/app/graph.js";
 import {
   captionOf,
   edgeLabelOf,
@@ -260,20 +260,75 @@ describe("where to start", () => {
   });
 });
 
-describe("what everything leans on", () => {
-  it("ranks files by how many others import them", () => {
-    const ranked = mostDependedOn(tour);
+describe("what matters most", () => {
+  /** A map whose published significance and a private fan-in count cannot
+   * agree — which is the disagreement ADR-0010 exists to end.
+   *
+   * Five import edges: hub → a, hub → b, hub → c, hub → hub, a → hub. Under
+   * the published formula (fan-in + fan-out, self-imports counted, no entry
+   * point here) that is hub 6, a 2, b 1, c 1. Under a fan-in ranking that
+   * skips self-imports every one of them scores 1, and the order inverts to
+   * path order with the hub last. */
+  const disagreeing: KnowledgeGraph = {
+    version: "0.4.0",
+    project: { name: "rankings" },
+    layers: [{ id: "src", name: "src", provenance: "structural" }],
+    nodes: (
+      [
+        ["hub.ts", 6],
+        ["a.ts", 2],
+        ["b.ts", 1],
+        ["c.ts", 1],
+      ] as const
+    ).map(([name, significance]) => ({
+      id: `file:src/${name}`,
+      kind: "file" as const,
+      name,
+      path: `src/${name}`,
+      summary: "",
+      layer: "src",
+      provenance: "structural" as const,
+      significance,
+    })),
+    edges: (
+      [
+        ["hub.ts", "a.ts"],
+        ["hub.ts", "b.ts"],
+        ["hub.ts", "c.ts"],
+        ["hub.ts", "hub.ts"],
+        ["a.ts", "hub.ts"],
+      ] as const
+    ).map(([from, to]) => ({
+      source: `file:src/${from}`,
+      target: `file:src/${to}`,
+      kind: "imports" as const,
+      weight: 1,
+    })),
+  };
 
-    expect(ranked.length).toBeGreaterThan(0);
-    // Descending, and each count is the real number of importers.
-    const counts = ranked.map((r) => r.count);
-    expect([...counts].sort((a, b) => b - a)).toEqual(counts);
+  it("ranks on the significance the map publishes, deriving nothing", () => {
+    const ranked = mostSignificant(disagreeing);
+
+    // The published order and the published numbers, verbatim. A ranking
+    // that counted importers here would answer a.ts, b.ts, c.ts, hub.ts,
+    // every one of them 1 — which is exactly what the panel and the tour
+    // used to disagree about.
+    expect(ranked.map((r) => r.node.path)).toEqual([
+      "src/hub.ts",
+      "src/a.ts",
+      "src/b.ts",
+      "src/c.ts",
+    ]);
+    expect(ranked.map((r) => r.count)).toEqual([6, 2, 1, 1]);
     for (const { node, count } of ranked) {
-      expect(count).toBe(
-        tour.edges.filter((e) => e.kind === "imports" && e.target === node.id)
-          .length,
-      );
+      expect(count).toBe(node.significance);
     }
+  });
+
+  it("ranks nothing when the map publishes no significance", () => {
+    // The field is optional (ADR-0010), and a panel that cannot read the
+    // number would rather say so than invent an order of its own.
+    expect(mostSignificant(tour)).toEqual([]);
   });
 });
 
@@ -628,6 +683,157 @@ describe("the region drill-in layout", () => {
 
     // A loop from a card back to itself is a scribble, not information.
     expect(edges).toEqual([]);
+  });
+});
+
+describe("the default drill view", () => {
+  /** A one-region map of the given files, each `[name, significance]` — a
+   * significance of `undefined` omits the field, which is what every map
+   * written before ADR-0010 looks like. No edges: what the layout does with
+   * them is the block above's business, and what the *selection* does is
+   * this one's. */
+  function repo(
+    files: readonly (readonly [string, number | undefined])[],
+  ): KnowledgeGraph {
+    return {
+      version: "0.4.0",
+      project: { name: "drill" },
+      layers: [{ id: "app", name: "app", provenance: "structural" }],
+      nodes: files.map(([name, significance]) => ({
+        id: `file:app/${name}`,
+        kind: "file" as const,
+        name,
+        path: `app/${name}`,
+        summary: "",
+        layer: "app",
+        provenance: "structural" as const,
+        ...(significance === undefined ? {} : { significance }),
+      })),
+      edges: [],
+    };
+  }
+
+  /** `f007.ts` — zero-padded so path order and index order agree. */
+  const named = (i: number) => `f${String(i).padStart(3, "0")}.ts`;
+
+  function onlyRegion(map: KnowledgeGraph) {
+    const region = structuralRegions(map)[0];
+    if (region === undefined) {
+      throw new Error("fixture has no region");
+    }
+    return region;
+  }
+
+  /** The files the drill view draws, by name. */
+  function drawn(
+    map: KnowledgeGraph,
+    revealed: ReadonlySet<string> = new Set(),
+  ): string[] {
+    return fileFlow(map, onlyRegion(map), NODE_HEIGHT, undefined, revealed)
+      .nodes.map((n) => n.id.replace("file:app/", ""));
+  }
+
+  it("draws the forty most significant files of a bigger region", () => {
+    // Sixty files, significance rising with the index: the forty that carry
+    // the region are f020…f059, and the twenty that do not are not drawn.
+    const map = repo(Array.from({ length: 60 }, (_, i) => [named(i), i] as const));
+
+    const shown = new Set(drawn(map));
+
+    expect(shown.size).toBe(40);
+    for (let i = 20; i < 60; i += 1) {
+      expect(shown.has(named(i)), `${named(i)} carries the region`).toBe(true);
+    }
+    for (let i = 0; i < 20; i += 1) {
+      expect(shown.has(named(i)), `${named(i)} is one of the hidden`).toBe(
+        false,
+      );
+    }
+    // The region itself is untouched: the default view hides cards, never
+    // facts, and every panel counts off this list.
+    expect(onlyRegion(map).files).toHaveLength(60);
+  });
+
+  it("breaks a tie on path, not on the order the map happens to list", () => {
+    // Forty-five files of equal significance, declared in reverse path order.
+    // Map order alone would draw f044…f005; the tie-break draws f000…f039.
+    const map = repo(
+      Array.from({ length: 45 }, (_, i) => [named(44 - i), 5] as const),
+    );
+
+    const shown = new Set(drawn(map));
+
+    expect(shown.size).toBe(40);
+    expect(shown.has(named(0))).toBe(true);
+    expect(shown.has(named(39))).toBe(true);
+    expect(shown.has(named(40))).toBe(false);
+    expect(shown.has(named(44))).toBe(false);
+  });
+
+  it("draws the whole region once the reader has revealed it", () => {
+    const map = repo(Array.from({ length: 60 }, (_, i) => [named(i), i] as const));
+    const region = onlyRegion(map);
+
+    expect(drawn(map, new Set([region.id]))).toHaveLength(60);
+    // Region-scoped: revealing some other region reveals nothing here.
+    expect(drawn(map, new Set(["somewhere-else"]))).toHaveLength(40);
+  });
+
+  it("takes the revealed set as an argument and keeps none of it", () => {
+    // Purity, asserted the way ADR-0011 relies on it: the projection may not
+    // remember the last set it was handed, so drawing the revealed picture
+    // between two default ones must leave the default picture byte-identical.
+    const map = repo(Array.from({ length: 60 }, (_, i) => [named(i), i] as const));
+    const region = onlyRegion(map);
+    const positions = (revealed: ReadonlySet<string>) =>
+      JSON.stringify(
+        fileFlow(map, region, NODE_HEIGHT, undefined, revealed).nodes.map(
+          (n) => [n.id, n.position],
+        ),
+      );
+
+    const before = positions(new Set());
+    const all = positions(new Set([region.id]));
+    const after = positions(new Set());
+
+    expect(after).toBe(before);
+    expect(all).not.toBe(before);
+    // And the region it was handed comes back as it went in: a projection
+    // that sorted `region.files` in place would reorder every panel reading
+    // the same list.
+    expect(region.files.map((f) => f.name)).toEqual(
+      Array.from({ length: 60 }, (_, i) => named(i)),
+    );
+  });
+
+  it("still draws a map that publishes no significance, path order deciding", () => {
+    // `significance` is optional (ADR-0010), so every map written before it
+    // existed arrives here with none. Every file ties; path order is all
+    // there is left to break the tie with.
+    const map = repo(
+      Array.from({ length: 50 }, (_, i) => [named(49 - i), undefined] as const),
+    );
+
+    expect(drawn(map).sort()).toEqual(
+      Array.from({ length: 40 }, (_, i) => named(i)),
+    );
+  });
+
+  it("leaves no region of a map without significance empty", () => {
+    // The fixtures in this suite predate ADR-0010 and carry none, which is
+    // the point: not one of their regions may come out as a blank canvas.
+    for (const fixture of [small, tour]) {
+      for (const region of [
+        ...structuralRegions(fixture),
+        ...domainRegions(fixture),
+      ]) {
+        if (region.files.length === 0) {
+          continue;
+        }
+        const { nodes } = fileFlow(fixture, region);
+        expect(nodes.length, `${region.id} drew nothing`).toBeGreaterThan(0);
+      }
+    }
   });
 });
 

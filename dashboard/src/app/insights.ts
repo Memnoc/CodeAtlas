@@ -1,11 +1,13 @@
-// The rankings and tallies the info panel reads: where to start, what
-// everything leans on, what the project is written in, and how big it is.
+// The rankings and tallies the info panel reads: where to start, which files
+// carry the codebase, what the project is written in, and how big it is.
 //
-// All of it is derived from the contract as published. Two of these — the
-// entry points and the fan-in ranking — are the "which nodes matter"
-// question that the tour also answers, and the map already answers it once:
-// `domain_flows` roots are exactly "a function nothing else calls". Reading
-// the producer's own answer keeps the panel and the tour from disagreeing.
+// All of it is read from the contract as published, never re-derived. Two of
+// these — the entry points and the significance ranking — are the "which
+// nodes matter" question the tour and the drill view also ask, and the map
+// answers it once for all of them: `domain_flows` roots are exactly "a
+// function nothing else calls", and `significance` is the published
+// per-file number (ADR-0010). Reading the producer's own answers is what
+// keeps three consumers from naming three different files.
 import type { KnowledgeGraph, Node as MapNode } from "../index.js";
 
 /** How many rows a ranking panel shows. Both rankings have a long tail that
@@ -44,21 +46,26 @@ export function entryPoints(map: KnowledgeGraph): MapNode[] {
     .slice(0, TOP_N);
 }
 
-/** Files the most other files import, most-imported first. Ties break on
- * path so the order is stable between runs of the same map. */
-export function mostDependedOn(map: KnowledgeGraph): Ranked[] {
-  const byId = new Map(map.nodes.map((n) => [n.id, n]));
-  const fanIn = new Map<string, number>();
-  for (const edge of map.edges) {
-    if (edge.kind === "imports" && edge.source !== edge.target) {
-      fanIn.set(edge.target, (fanIn.get(edge.target) ?? 0) + 1);
-    }
-  }
-  return [...fanIn]
-    .flatMap(([id, count]) => {
-      const node = byId.get(id);
-      return node === undefined ? [] : [{ node, count }];
-    })
+/** The files the map says carry the architecture, most significant first,
+ * ties broken on path so the order is stable between runs of the same map.
+ *
+ * The number is the map's own published significance (ADR-0010) — import
+ * fan-in + fan-out + 1 if the file hosts an entry point, computed at scan —
+ * and nothing here re-derives it. That is the whole decision: the tour
+ * selects on this number, the drill view discloses on it, and this panel
+ * ranks on it, so the three cannot disagree about the same repository. The
+ * ranking this replaced counted importers and skipped self-imports, which
+ * the published formula counts, so the panel and the tour could and did
+ * name different files.
+ *
+ * A file scoring zero is left out rather than listed: nothing leans on it,
+ * it leans on nothing, and no walk starts there. On a map written before
+ * significance existed that is every file, and the panel says so instead of
+ * inventing an order. */
+export function mostSignificant(map: KnowledgeGraph): Ranked[] {
+  return map.nodes
+    .filter((n) => n.kind === "file" && (n.significance ?? 0) > 0)
+    .map((node) => ({ node, count: node.significance ?? 0 }))
     .sort((a, b) => b.count - a.count || a.node.path.localeCompare(b.node.path))
     .slice(0, TOP_N);
 }

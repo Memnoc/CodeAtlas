@@ -1,11 +1,11 @@
 // The right panel's INFO tab: what this project is, where to start reading,
-// what everything leans on, and how its regions relate.
+// which files carry it, and how its regions relate.
 import { useMemo, type ReactNode } from "react";
 import type { KnowledgeGraph } from "../index.js";
 import {
   entryPoints,
   languageCounts,
-  mostDependedOn,
+  mostSignificant,
   projectCounts,
 } from "./insights.js";
 import type { Region, RegionLink } from "./regions.js";
@@ -32,7 +32,7 @@ export function InfoPanel({
   );
   const languages = useMemo(() => languageCounts(map), [map]);
   const starts = useMemo(() => entryPoints(map), [map]);
-  const leaned = useMemo(() => mostDependedOn(map), [map]);
+  const carrying = useMemo(() => mostSignificant(map), [map]);
   const widest = Math.max(1, ...regions.map((r) => r.files.length));
   const names = new Map(regions.map((r) => [r.id, r.name]));
 
@@ -65,19 +65,18 @@ export function InfoPanel({
         }))}
       />
 
+      {/* The map's own answer to "which files matter", read rather than
+          recomputed (ADR-0010), so this panel, the codebase tour and the
+          default drill view name the same files. */}
       <Section
-        title="Everything leans on"
-        blurb="The files the most other files reach into."
-        empty="Nothing is imported more than once."
-        rows={leaned.map(({ node, count }) => ({
+        title="Files that matter"
+        blurb="The map's significance: imports in, imports out, and a way in."
+        empty="No file carries a significance above zero."
+        rows={carrying.map(({ node, count }) => ({
           key: node.id,
           onClick: () => onSelectNode(node.id),
           left: <code className="row-symbol">{node.path}</code>,
-          right: (
-            <span className="row-path">
-              ← {count} {count === 1 ? "file" : "files"}
-            </span>
-          ),
+          right: <span className="row-path">significance {count}</span>,
         }))}
       />
 

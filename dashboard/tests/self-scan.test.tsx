@@ -8,6 +8,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { KnowledgeGraph } from "../src/index.js";
+import { DRILL_DEFAULT_CARDS } from "../src/app/graph.js";
 import { MapExplorer } from "../src/app/MapExplorer.js";
 import { openLearn, openRegion } from "./drive.js";
 
@@ -80,6 +81,34 @@ describe("CodeAtlas's own self-scan map", () => {
       screen.getAllByText("main.rs", { selector: ".react-flow__node *" })
         .length,
     ).toBeGreaterThan(0);
+  });
+
+  it("opens this repository's densest region readable, the rest one gesture away", async () => {
+    // The picture the ticket was written about: CodeAtlas's own crates layer
+    // drew every file it holds at once, which no amount of layout makes
+    // readable. Counted off the map rather than pinned to a number, so the
+    // assertion survives the repository growing.
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+
+    const held = map.nodes.filter(
+      (n) => n.kind === "file" && (n.layer ?? "root") === "crates",
+    ).length;
+    expect(held).toBeGreaterThan(DRILL_DEFAULT_CARDS);
+
+    await openRegion(user, layerName("crates"));
+    const drawn = () =>
+      document.querySelectorAll(".react-flow__node .entity").length;
+    expect(drawn()).toBe(DRILL_DEFAULT_CARDS);
+
+    // And the region is still described by its true size, with one control
+    // naming what is being held back.
+    await user.click(
+      screen.getByRole("button", {
+        name: `Show all ${held} files (${held - DRILL_DEFAULT_CARDS} hidden)`,
+      }),
+    );
+    expect(drawn()).toBe(held);
   });
 
   it("walks a bounded, curated tour of the architecture, not an inventory", async () => {
@@ -241,23 +270,26 @@ describe("CodeAtlas's own self-scan map", () => {
     const user = userEvent.setup();
     render(<MapExplorer map={map} />);
 
-    // A file of the crates/ layer, reached the way a reader reaches it.
+    // A file of the crates/ layer, reached the way a reader reaches it: by
+    // clicking a card the canvas is drawing. Which card that is comes off
+    // the canvas rather than off the head of the map's node list — the
+    // default drill view draws the files the map says carry the region, and
+    // the first file the map happens to list is not usually one of them.
     await openRegion(user, layerName("crates"));
-    const anyNode = map.nodes.find(
-      (n) => n.kind === "file" && (n.layer ?? "root") === "crates",
-    );
-    expect(anyNode).toBeDefined();
-    if (!anyNode) {
-      return;
-    }
-    // Selecting via the canvas node click path.
     const el = document.querySelector(
-      `[data-id="${CSS.escape(anyNode.id)}"]`,
+      ".react-flow__node[data-id]",
     ) as HTMLElement | null;
     expect(el).not.toBeNull();
-    if (el) {
-      fireEvent.click(el);
+    const anyNode = map.nodes.find(
+      (n) => n.id === el?.getAttribute("data-id"),
+    );
+    expect(anyNode).toBeDefined();
+    if (!anyNode || !el) {
+      return;
     }
+    expect(anyNode.kind).toBe("file");
+    expect(anyNode.layer ?? "root").toBe("crates");
+    fireEvent.click(el);
 
     expect(screen.getByLabelText("Node detail")).toHaveTextContent(
       anyNode.summary,

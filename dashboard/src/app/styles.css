@@ -893,6 +893,33 @@ button.crumb:hover {
   font-size: 11px;
 }
 
+/* The one gesture that opens a region in full. It sits in the trail beside
+ * the count it is about, and it is a control rather than a caption — bordered
+ * like the way out, because pressing it changes what the canvas is drawing. */
+.reveal {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.reveal:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.reveal:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* ── Canvas cards ─────────────────────────────────────────────────────── */
 
 .region-card {
