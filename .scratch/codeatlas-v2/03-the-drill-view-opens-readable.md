@@ -4,7 +4,8 @@
 **Spec:** docs/specs/2026-08-13-codeatlas-v2.md
 **Story:** 1 — drilling into a large region shows the files that matter
 first; 2 — one affordance reveals the remainder; 4 — the revealed state is an
-input to the pure projection
+input to the pure projection; 6 (the rankings clause) — the tour, the default
+drill view and the rankings agree by construction
 **Blocks:** 04 (auto-reveal needs something to reveal), 05
 **Blocked by:** 02 — the selection reads the published significance
 
@@ -43,6 +44,13 @@ the same picture.
       through call sites.
 - [ ] Projection tests cover selection, the tie-break and determinism; a
       jsdom test covers the gesture reaching the revealed state.
+- [ ] The dashboard's rankings read the published significance rather than
+      deriving their own. `mostDependedOn` currently computes a private
+      fan-in ranking that excludes self-imports, while the published formula
+      counts them — so the same file can rank differently in the panel than
+      it does in the tour. After this ticket, no consumer re-derives the
+      number. A test pins the agreement, and is proven able to fail by
+      restoring a private derivation.
 
 ## Notes
 
