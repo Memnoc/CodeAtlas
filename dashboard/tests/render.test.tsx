@@ -224,6 +224,87 @@ describe("a card's edges land at their own points", () => {
   });
 });
 
+// Ticket 14 (spec story 21): the header prints the active grouping beside
+// the provenance tally, and the two used to share one word — a fully
+// enriched map read "STRUCTURAL · 0 structural", two true facts colliding
+// into an apparent contradiction. The grouping is now labelled by its unit
+// ("Domain" | "Layer"), because "structural" as a provenance kind is the
+// contract's vocabulary and the tally counts nodes that carry it.
+describe("the header tally reads as two facts", () => {
+  /** small-map with every node's prose given one author. */
+  function nodesAuthored(provenance: "structural" | "llm"): KnowledgeGraph {
+    return { ...map, nodes: map.nodes.map((n) => ({ ...n, provenance })) };
+  }
+
+  /** The three provenance mixes and the count each must show: nobody bought
+   * prose, everybody's prose was bought, and the fixture's own one-of-five. */
+  const mixes: readonly [string, KnowledgeGraph, string][] = [
+    ["all mechanical", nodesAuthored("structural"), "5 structural"],
+    ["all enriched", nodesAuthored("llm"), "0 structural, 5 enriched"],
+    ["mixed", map, "4 structural, 1 enriched"],
+  ];
+
+  /** The tally's two halves: the grouping word, and everything after it. */
+  function tallyParts(): { mode: string; count: string } {
+    const tally = screen.getByTestId("provenance-tally");
+    return {
+      mode: tally.querySelector("strong")?.textContent ?? "",
+      count: [...tally.querySelectorAll("span")]
+        .map((s) => s.textContent ?? "")
+        .join(" "),
+    };
+  }
+
+  const words = (text: string): string[] =>
+    text.toLowerCase().match(/[a-z]+/g) ?? [];
+
+  it("never says the grouping and the count with one word, whatever the mix", async () => {
+    // Walks every grouping the control offers rather than naming them, so
+    // this guard survives relabelling — and trips the moment the mode label
+    // reappears inside the count, which is exactly the old wording.
+    const user = userEvent.setup();
+    for (const [, mix] of mixes) {
+      const { unmount } = render(<MapExplorer map={mix} />);
+      const grouping = within(
+        screen.getByRole("radiogroup", { name: "Grouping" }),
+      );
+      for (const radio of grouping.getAllByRole("radio")) {
+        await user.click(radio);
+        const { mode, count } = tallyParts();
+        expect(mode).not.toBe("");
+        expect(words(count)).not.toContain(mode.toLowerCase());
+      }
+      unmount();
+    }
+  });
+
+  it("keeps both facts visible and correct across the mixes", () => {
+    for (const [, mix, expected] of mixes) {
+      const { unmount } = render(<MapExplorer map={mix} />);
+      const { mode, count } = tallyParts();
+      // The default grouping is structural; its unit — the word on the
+      // control's own segment — is the layer.
+      expect(mode).toBe("Layer");
+      expect(count).toContain(expected);
+      unmount();
+    }
+  });
+
+  it("labels the tally with the same word the control's segment wears", async () => {
+    // A header that says one word over a control that says another would be
+    // a new collision, so the tally must quote the segment exactly.
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+    const grouping = within(
+      screen.getByRole("radiogroup", { name: "Grouping" }),
+    );
+    await user.click(grouping.getByRole("radio", { name: "Domain" }));
+    expect(tallyParts().mode).toBe("Domain");
+    await user.click(grouping.getByRole("radio", { name: "Layer" }));
+    expect(tallyParts().mode).toBe("Layer");
+  });
+});
+
 describe("a panel with nothing to rank", () => {
   /** A one-file map whose only file either scored zero or was never scored:
    * `significance` is optional in the contract (ADR-0010), so both maps are

@@ -33,7 +33,7 @@ export type Region = {
   complexity: Complexity;
 };
 
-/** The two groupings the Domain | Structural control switches between. */
+/** The two groupings the Domain | Layer control switches between. */
 export type RegionKind = "structural" | "domain";
 
 /** A counted connection between two regions, as drawn on the overview. */

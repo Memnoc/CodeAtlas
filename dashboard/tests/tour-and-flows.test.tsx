@@ -255,7 +255,7 @@ describe("maps without a tour or domain flows", () => {
     await user.click(
       within(screen.getByRole("radiogroup", { name: "Grouping" })).getByRole(
         "radio",
-        { name: "Structural" },
+        { name: "Layer" },
       ),
     );
     expect(screen.getByTestId("region-root")).toBeInTheDocument();

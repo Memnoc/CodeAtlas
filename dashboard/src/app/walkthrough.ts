@@ -7,7 +7,7 @@
 // choice open — hand-write the steps, or derive them from the components
 // present — and the honest answer is that neither half of a step comes from
 // the same place. Nothing can derive "Domain groups files by the call flows
-// the map found, Structural by the directories they live in" from a DOM node;
+// the map found, Layer by the directories they live in" from a DOM node;
 // that sentence has to be written. But *which* of these steps a given page is
 // walked through must not be written down, because the page differs: a share
 // artifact has no question box, and a repository with no `codeatlas diff` run
@@ -94,9 +94,9 @@ export const WALKTHROUGH_STEPS: readonly WalkthroughStep[] = [
     id: "grouping",
     title: "How the files are grouped",
     body:
-      "Structural groups files by the directories they live in. Domain " +
-      "groups them by the call flows the map found, so files that take part " +
-      "in the same chain sit together. It changes the canvas, never the panel.",
+      "Layer groups files by the directories they live in. Domain groups " +
+      "them by the call flows the map found, so files that take part in " +
+      "the same chain sit together. It changes the canvas, never the panel.",
   },
   {
     id: "search",

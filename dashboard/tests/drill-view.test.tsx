@@ -253,7 +253,7 @@ describe("the drill view opens readable", () => {
 
     const grouping = within(screen.getByRole("radiogroup", { name: "Grouping" }));
     await user.click(grouping.getByRole("radio", { name: "Domain" }));
-    await user.click(grouping.getByRole("radio", { name: "Structural" }));
+    await user.click(grouping.getByRole("radio", { name: "Layer" }));
     await openRegion(user, "wide");
 
     expect(cardCount()).toBe(40);

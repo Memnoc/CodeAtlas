@@ -1,5 +1,5 @@
 // A two-or-more-way switch rendered as one pill of adjacent buttons. Used
-// for the header's Overview | Learn and Domain | Structural controls.
+// for the header's Overview | Learn and Domain | Layer controls.
 //
 // A radio group rather than buttons: these choose between views rather than
 // performing an action, and a reader arriving by keyboard should be able to

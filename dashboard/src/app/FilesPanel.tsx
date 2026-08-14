@@ -32,7 +32,7 @@ export function FilesPanel({
   const [openId, setOpenId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   // Expanded rather than collapsed, so the default is folded and a region that
-  // appears later — switching Domain/Structural rebuilds them all — is folded
+  // appears later — switching Domain/Layer rebuilds them all — is folded
   // too, without anything having to notice it arrived.
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
 

@@ -909,7 +909,7 @@ export function MapExplorer({
           {/* The two header switches each do one job, and this is where that
               shows: Overview | Learn chooses what the panel is *for* —
               the facts, or the guided read through them — while
-              Domain | Structural only changes how the canvas groups files,
+              Domain | Layer only changes how the canvas groups files,
               which the Info panel then describes either way. */}
           {tab === "files" ? (
             <FilesPanel map={map} regions={regions} onSelectNode={reveal} />

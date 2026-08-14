@@ -13,6 +13,18 @@ import { WalkthroughLauncher } from "./Walkthrough.js";
  * the top bar and belongs to no mode. */
 export type Mode = "overview" | "learn";
 
+/** The one word each grouping wears, quoted by both the tally and the
+ * grouping control so the header can never say one thing where the switch
+ * says another. The structural grouping is labelled by its unit — the layer
+ * — because "structural" is the provenance kind's word in the map contract,
+ * and the count beside this label is a provenance count: "STRUCTURAL ·
+ * 0 structural" was two true facts colliding into a contradiction
+ * (ticket 14). */
+const groupingLabels: Record<RegionKind, string> = {
+  domain: "Domain",
+  structural: "Layer",
+};
+
 export function Header({
   map,
   mode,
@@ -70,7 +82,7 @@ export function Header({
       <div className="topbar-identity" data-walkthrough="identity">
         <h1 className="project-name">{map.project.name}</h1>
         <span className="provenance-tally" data-testid="provenance-tally">
-          <strong>{grouping}</strong>
+          <strong>{groupingLabels[grouping]}</strong>
           <span>·</span>
           <span>
             {map.nodes.length - enriched} structural
@@ -102,12 +114,12 @@ export function Header({
           options={[
             {
               value: "domain",
-              label: "Domain",
+              label: groupingLabels.domain,
               hint: "Group by the call flows the map found",
             },
             {
               value: "structural",
-              label: "Structural",
+              label: groupingLabels.structural,
               hint: "Group by directory-derived layers",
             },
           ]}
