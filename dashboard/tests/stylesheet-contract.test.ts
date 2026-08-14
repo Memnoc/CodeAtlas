@@ -134,3 +134,61 @@ describe("story 22 — folding really gives the canvas the space", () => {
     expect(folded).toBeLessThan(open / 4);
   });
 });
+
+describe("story 26 — the conversation is a bounded column beside the canvas", () => {
+  // The jsdom half proves the gestures put the thread in the workspace next
+  // to the canvas; this half proves the workspace and the column mean what
+  // the move claims: a bounded, internally-scrolling right-hand track that
+  // costs the canvas nothing while it is absent.
+  const answer = () => blocks().find((b) => b.selector === ".answer");
+
+  it("bounds the column inside the reference band, as one named constant", () => {
+    // The V1 reference material's side panels ran ~360–400px; the ticket
+    // pins the column inside that band, and pins it as a *named* constant so
+    // the width and its reason live in one place. A literal in the width
+    // rule would satisfy a looser match and drift silently.
+    const b = answer();
+    expect(b, ".answer must be styled here").toBeDefined();
+    const named = b?.body.match(/--conversation-column:\s*(\d+)px/);
+    expect(
+      named,
+      ".answer must state its bound as --conversation-column: <N>px",
+    ).toBeTruthy();
+    const px = Number(named?.[1]);
+    expect(px).toBeGreaterThanOrEqual(360);
+    expect(px).toBeLessThanOrEqual(400);
+    // Bounded, not fixed: the constant is the ceiling, and narrower
+    // viewports get less — never more.
+    expect(b?.body).toMatch(/width:\s*min\(var\(--conversation-column\)/);
+  });
+
+  it("scrolls the thread inside the column", () => {
+    // The band this replaces grew with every exchange and pushed the canvas
+    // off the screen; the column's whole point is that six turns scroll
+    // internally while the canvas keeps its size mid-read.
+    expect(answer()?.body).toMatch(/overflow-y:\s*auto/);
+  });
+
+  it("gives the column its own workspace track and the canvas the rest", () => {
+    // `auto` and not a fixed track: an absent column (no question asked)
+    // must cost the canvas nothing, and the 1fr canvas track — already
+    // pinned by story 22's guard above — keeps the remainder while it is
+    // present.
+    for (const selector of [".workspace", ".workspace-folded"]) {
+      const b = blocks().find((x) => x.selector === selector);
+      expect(
+        b?.body,
+        `${selector} must end its columns with an auto track for the conversation`,
+      ).toMatch(/grid-template-columns:[^;]*1fr\)\s+auto\s*;/);
+    }
+  });
+
+  it("invents no stacking context for the column", () => {
+    // V1's three walkthrough placement bugs were all stacking-context
+    // inventions, and the export menu (30) must keep painting over the
+    // column through the existing order — from normal flow, without a rung
+    // of its own.
+    expect(answer()?.body).not.toMatch(/z-index/);
+    expect(answer()?.body).not.toMatch(/position:/);
+  });
+});

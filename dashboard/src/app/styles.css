@@ -564,12 +564,27 @@ body {
   outline-offset: 2px;
 }
 
-/* A band rather than a floating overlay: the reader works through the
-   citations one at a time, and each click moves the canvas underneath, so
-   the answer has to stay put and stay out of the way of what it points at. */
+/* A column docked beside the canvas, not a band above it (ticket 17): the
+   thread used to grow between the search bar and the map until the map was
+   mostly off the screen, and a citation click lit a card the reader could
+   not see. Beside the canvas, the conversation and the thing it describes
+   are on screen together, which is the choice the citations exist to
+   remove. Normal flow, no z-index, no position: the export menu and the
+   walkthrough keep painting over it through the stacking order that
+   already exists.
+
+   Why 380px: bounded, not fixed. The V1 reference material's side panels
+   ran 360–400px; 380 sits inside that band and holds roughly 55 characters
+   of the 13px answer prose — a readable measure where the full-width band
+   was not — while leaving a 1440px viewport ~700px of canvas beside the
+   360px info panel. Narrower viewports get the 38vw arm of the min()
+   instead, so the canvas is never squeezed below its own share. */
 .answer {
+  --conversation-column: 380px;
+  width: min(var(--conversation-column), 38vw);
+  overflow-y: auto;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
+  border-left: 1px solid var(--border);
   background: color-mix(in srgb, var(--accent) 6%, var(--panel));
 }
 
@@ -656,7 +671,7 @@ body {
 }
 
 /* One exchange in the thread (ticket 09). Only the seam between turns is
-   drawn — the first turn sits on the band's own top edge. */
+   drawn — the first turn sits on the column's own top edge. */
 .answer-turn + .answer-turn {
   margin-top: 10px;
   padding-top: 10px;
@@ -811,19 +826,24 @@ body {
 
 /* ── Workspace ────────────────────────────────────────────────────────── */
 
-/* Panel on the left, canvas filling the rest. The panel is where a reader
- * starts — the tour, the rankings, the detail of whatever they just clicked —
- * and a left-to-right reader starts at the left. The DOM is in the same order,
- * so tabbing follows the eye. */
+/* Panel on the left, canvas filling the rest, and — only while a question
+ * has been asked — the conversation docked on the right (ticket 17). The
+ * panel is where a reader starts — the tour, the rankings, the detail of
+ * whatever they just clicked — and a left-to-right reader starts at the
+ * left. The DOM is in the same order, so tabbing follows the eye.
+ *
+ * The third track is `auto`, not a width: the column sizes itself (see
+ * `.answer`), and an absent column — no question asked — collapses the
+ * track to nothing rather than parking an empty gutter on the map. */
 .workspace {
   display: grid;
-  grid-template-columns: 360px minmax(0, 1fr);
+  grid-template-columns: 360px minmax(0, 1fr) auto;
   min-height: 0;
 }
 
 /* Folded: the 360px becomes a rail just wide enough for the way back. */
 .workspace-folded {
-  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-columns: 30px minmax(0, 1fr) auto;
 }
 
 .panelrail {

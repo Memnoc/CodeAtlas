@@ -8,7 +8,7 @@
 // ticket 08's, and the usage passthrough is proven server-side in
 // `crates/codeatlas/tests/serve.rs`; the stub below plays the server so the
 // tests can assert what the dashboard *sends* as well as what it shows.
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeGraph } from "../src/index.js";
@@ -20,6 +20,7 @@ import {
   askServer,
   type Turn,
 } from "../src/app/ask.js";
+import { selectedOnCanvas } from "./drive.js";
 import smallMap from "./fixtures/small-map.json";
 
 const map = smallMap as KnowledgeGraph;
@@ -349,6 +350,185 @@ describe("the conversation thread", () => {
     await waitFor(() => {
       expect(screen.queryByLabelText("Answer")).not.toBeInTheDocument();
     });
+  });
+});
+
+describe("the conversation column, beside the canvas (story 26)", () => {
+  // Ticket 17: the thread moves from a band above the canvas to a column
+  // docked beside it. Gesture→state only, per seam 5 — where the column
+  // *is* (a workspace sibling of the canvas) is state jsdom can see; how
+  // wide it paints is the stylesheet contract's half.
+
+  /** The answer column and the canvas, as the workspace holds them — or
+   * throws, because every assertion here is about that arrangement. */
+  function columnAndCanvas() {
+    const column = screen.getByLabelText("Answer");
+    const workspace = document.querySelector(".workspace");
+    if (workspace === null) {
+      throw new Error("no workspace rendered");
+    }
+    const canvas = workspace.querySelector("main.canvas");
+    if (canvas === null) {
+      throw new Error("no canvas in the workspace");
+    }
+    return { column, workspace, canvas };
+  }
+
+  it("opens as a column in the workspace, beside a canvas still drawn", async () => {
+    const user = userEvent.setup();
+    servedBy(() => ({
+      status: 200,
+      body: { answer: "It greets people.", citations: [] },
+    }));
+    await servedDashboard();
+
+    await turnOf(user, "what does this do?", "It greets people.");
+
+    const { column, workspace, canvas } = columnAndCanvas();
+    // Docked in the workspace as the canvas's sibling — not a band between
+    // the search bar and the chips, which is where it used to grow until
+    // the map fell off the screen.
+    expect(column.parentElement).toBe(workspace);
+    expect(column.previousElementSibling).toBe(canvas);
+    // The canvas is still the reader's to use: its nodes are still there
+    // to click while the column is open.
+    expect(
+      canvas.querySelector('.react-flow__node[data-id="region:src"]'),
+    ).not.toBeNull();
+  });
+
+  it("gives the single-question reader the same column, not a special case", async () => {
+    const user = userEvent.setup();
+    servedBy(() => ({
+      status: 200,
+      body: { answer: "One answer.", citations: [] },
+    }));
+    await servedDashboard();
+
+    await turnOf(user, "one question?", "One answer.");
+
+    // One turn, and the conversation already lives where six would: the
+    // workspace, beside the canvas, dismiss control and all.
+    const { column, workspace } = columnAndCanvas();
+    expect(column.parentElement).toBe(workspace);
+    expect(
+      within(column).getByRole("button", { name: "Dismiss conversation" }),
+    ).toBeVisible();
+  });
+
+  it("draws the cited card on the canvas beside the open column", async () => {
+    // The choice the citations exist to remove: a citation click must light
+    // a card on a canvas the reader can see, with the thread still beside
+    // it — column and canvas working together, in one test.
+    const user = userEvent.setup();
+    servedBy(() => ({
+      status: 200,
+      body: { answer: "It starts in main.ts.", citations: ["file:src/main.ts"] },
+    }));
+    await servedDashboard();
+    await turnOf(user, "where does it start?", "It starts in main.ts.");
+
+    await user.click(
+      within(screen.getByLabelText("Cited nodes")).getByRole("button"),
+    );
+
+    await waitFor(() => {
+      expect(selectedOnCanvas()).toBe("file:src/main.ts");
+    });
+    const { column, canvas } = columnAndCanvas();
+    // The card is drawn, not merely selected somewhere off screen: the
+    // reveal put it on the canvas the reader is looking at.
+    expect(
+      canvas.querySelector('.react-flow__node[data-id="file:src/main.ts"]'),
+    ).not.toBeNull();
+    // And the thread is still open beside it to keep reading from.
+    expect(within(column).getByText("It starts in main.ts.")).toBeVisible();
+  });
+
+  it("leaves focus in the search box when the column opens", async () => {
+    // Opening must not seize focus: the reader who asked from the field is
+    // mid-typing-flow, and the next follow-up starts there too.
+    const user = userEvent.setup();
+    servedBy(() => ({
+      status: 200,
+      body: { answer: "It greets people.", citations: [] },
+    }));
+    await servedDashboard();
+    const field = screen.getByLabelText("Search nodes");
+
+    await user.type(field, "what does this do?{Enter}");
+    await screen.findByText("It greets people.");
+
+    expect(field).toHaveFocus();
+  });
+
+  it("returns focus to the search box when the column is dismissed from inside", async () => {
+    // The `useFocusReturn` discipline: closing a layer that took focus with
+    // it must not strand the keyboard on <body>. The dismiss control is
+    // inside the column, so pressing it is exactly that case.
+    const user = userEvent.setup();
+    servedBy(() => ({
+      status: 200,
+      body: { answer: "It greets people.", citations: [] },
+    }));
+    await servedDashboard();
+    await turnOf(user, "what does this do?", "It greets people.");
+
+    await user.click(
+      screen.getByRole("button", { name: "Dismiss conversation" }),
+    );
+
+    expect(screen.queryByLabelText("Answer")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Search nodes")).toHaveFocus();
+  });
+
+  it("scrolls the newest exchange into view for a reader at the bottom", async () => {
+    // The recorded rule: autoscroll only when the reader is already pinned
+    // to the bottom of the thread — the reader following along is carried
+    // to what arrives.
+    const user = userEvent.setup();
+    servedBy((asked) => ({
+      status: 200,
+      body: { answer: `answer to ${asked.question}`, citations: [] },
+    }));
+    await servedDashboard();
+    await turnOf(user, "first?", "answer to first?");
+
+    const column = screen.getByLabelText("Answer");
+    // jsdom lays nothing out, so the column's metrics are stated: a 300px
+    // viewport onto 1000px of thread, scrolled to the bottom.
+    Object.defineProperties(column, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 300 },
+    });
+    fireEvent.scroll(column, { target: { scrollTop: 700 } });
+
+    await turnOf(user, "second?", "answer to second?");
+
+    expect(column.scrollTop).toBe(1000);
+  });
+
+  it("never steals the scroll from a reader partway up an older turn", async () => {
+    // The rule's other half: a reader who scrolled up to re-read is not
+    // pinned, and an arriving answer must not yank them to the bottom.
+    const user = userEvent.setup();
+    servedBy((asked) => ({
+      status: 200,
+      body: { answer: `answer to ${asked.question}`, citations: [] },
+    }));
+    await servedDashboard();
+    await turnOf(user, "first?", "answer to first?");
+
+    const column = screen.getByLabelText("Answer");
+    Object.defineProperties(column, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 300 },
+    });
+    fireEvent.scroll(column, { target: { scrollTop: 100 } });
+
+    await turnOf(user, "second?", "answer to second?");
+
+    expect(column.scrollTop).toBe(100);
   });
 });
 

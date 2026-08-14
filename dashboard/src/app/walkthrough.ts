@@ -54,10 +54,11 @@ export type WalkthroughStep = {
  * that deliberately carry no step.
  *
  * The answer to a question is the only one, and the reason is the reason a
- * marker and a step are two different things: the band exists only after the
- * reader has asked something, so a step about it would spotlight an absent
- * element on every walk that did not happen to follow a question. The band it
- * is reached *from* — the search row — is explained instead.
+ * marker and a step are two different things: the conversation column exists
+ * only after the reader has asked something, so a step about it would
+ * spotlight an absent element on every walk that did not happen to follow a
+ * question. The band it is reached *from* — the search row — is explained
+ * instead.
  *
  * Written down rather than left implicit because the alternative is an
  * invariant that reads stronger than the component: "every control sits in a

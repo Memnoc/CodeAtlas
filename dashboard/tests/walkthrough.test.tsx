@@ -491,11 +491,11 @@ describe("the step list against the interface it describes", () => {
     // somebody decides which band it is in — or gives it a step of its own.
     //
     // A question is asked first, and that is the whole difference between an
-    // invariant and a sentence. The answer band renders directly inside
-    // `.explorer` with a dismissal and one button per citation, and it is the
-    // one band with no step of its own; a fixture that never asked could not
-    // produce it, so the guard would have claimed something of the component
-    // that the component does not do.
+    // invariant and a sentence. The conversation column renders inside the
+    // workspace with a dismissal and one button per citation, and it is the
+    // one marked part with no step of its own; a fixture that never asked
+    // could not produce it, so the guard would have claimed something of the
+    // component that the component does not do.
     const user = userEvent.setup();
     renderEverything();
     const answer = await askAQuestion(user);

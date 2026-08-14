@@ -26,6 +26,7 @@ import { type AskFn, useAsk } from "./ask.js";
 import { type Chrome, readChrome, writeChrome } from "./chrome.js";
 import { FilesPanel } from "./FilesPanel.js";
 import { FlowsPanel } from "./FlowsPanel.js";
+import { useFocusReturn } from "./focus.js";
 import {
   DRILL_DEFAULT_CARDS,
   fileFlow,
@@ -290,6 +291,15 @@ export function MapExplorer({
   // pressing Ask (or Enter) is the difference, so a filename typed by someone
   // who wanted a filename never becomes a request.
   const asking = useAsk(onAsk);
+  // The focus-return discipline (ticket 17): the conversation column can
+  // hold focus — the dismiss control, a citation — and closing it would
+  // otherwise strand the keyboard on `<body>`. The search box is the
+  // control the column was opened from, and the place a fresh question
+  // starts, so focus goes back there; the hook's own guard leaves a reader
+  // who parked focus elsewhere exactly where they put it.
+  const askReturn = useFocusReturn<HTMLInputElement>(
+    asking.state.phase !== "idle",
+  );
   // Whether pressing Ask right now would send anything: there is a server to
   // ask and something typed to ask it. Not "this server can answer
   // questions" — that is `onAsk` on its own, and conflating the two is how
@@ -365,10 +375,12 @@ export function MapExplorer({
   // effect of.
   //
   // The answer sits below the two things that pop up *over* the page and
-  // above the navigation stack. It is a band the reader deliberately put
-  // there and may be working through — following one citation at a time —
-  // so anything opened on top of it goes first; but closing a panel is still
-  // a smaller undo than moving the canvas, so it goes before the step back.
+  // above the navigation stack. It is a column the reader deliberately put
+  // beside the canvas and may be working through — following one citation
+  // at a time — so anything opened on top of it goes first; but closing a
+  // panel is still a smaller undo than moving the canvas, so it goes before
+  // the step back. Moving it into the workspace (ticket 17) changed none of
+  // this: the rung is about what dismissal costs, not where the panel docks.
   //
   // No dependency array on purpose. The handler closes over `searchShown`,
   // `pathOpen`, `backStep` and the asking state, all of which change on
@@ -710,7 +722,12 @@ export function MapExplorer({
           ⌕
         </span>
         <input
-          ref={searchInput}
+          // Two refs on one field: the Escape cascade's own handle, and the
+          // focus-return target the conversation column restores to.
+          ref={(el) => {
+            searchInput.current = el;
+            askReturn.current = el;
+          }}
           type="search"
           aria-label="Search nodes"
           placeholder={
@@ -768,16 +785,6 @@ export function MapExplorer({
           </ul>
         )}
       </div>
-
-      {/* Below the field it was asked from, above the map it is about, and
-          left standing while the reader follows its citations into the
-          canvas. */}
-      <AnswerPanel
-        state={asking.state}
-        byId={byId}
-        onSelect={reveal}
-        onDismiss={asking.dismiss}
-      />
 
       <div className="chiprow" data-walkthrough="regions">
         {/* The fold control is the row's own, and it stays behind when the
@@ -1068,6 +1075,19 @@ export function MapExplorer({
             <MiniMap pannable zoomable ariaLabel="Canvas minimap" />
           </ReactFlow>
         </main>
+
+        {/* The conversation, docked beside the map it is about (ticket 17):
+            a bounded column, so the thread scrolls internally while the
+            canvas keeps the remainder — and a citation click lights a card
+            the reader can actually see. Renders nothing until a question
+            has been asked, and the workspace's `auto` track collapses with
+            it. */}
+        <AnswerPanel
+          state={asking.state}
+          byId={byId}
+          onSelect={reveal}
+          onDismiss={asking.dismiss}
+        />
       </div>
 
       {walkthrough !== null &&

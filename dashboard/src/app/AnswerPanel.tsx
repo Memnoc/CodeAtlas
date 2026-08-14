@@ -14,8 +14,15 @@
 // exactly when its backend reported them, the conversation shows a total
 // exactly when every turn was measured (a total missing a turn would be an
 // estimate), and nothing here can render a price.
+import { useEffect, useRef } from "react";
 import type { Node as MapNode } from "../index.js";
 import type { Answer, AskState, CompletedTurn, Usage } from "./ask.js";
+
+/** How far above the column's bottom edge still counts as reading the newest
+ * exchange, in pixels. A trackpad flick rarely parks exactly on the edge, so
+ * a reader within about two lines of the 13px prose is still "at the
+ * bottom"; anything further up is someone re-reading an older turn. */
+const PINNED_SLACK_PX = 40;
 
 export function AnswerPanel({
   state,
@@ -29,6 +36,29 @@ export function AnswerPanel({
   onSelect: (id: string) => void;
   onDismiss: () => void;
 }) {
+  const column = useRef<HTMLElement | null>(null);
+  // The autoscroll rule (ticket 17), recorded: the column follows the
+  // conversation only for a reader already pinned to the bottom of it. A
+  // fresh column starts pinned, every scroll gesture re-decides it, and an
+  // arriving answer scrolls into view exactly when the reader was at the
+  // bottom — never yanking someone who scrolled up to re-read an older
+  // turn. A ref, not state: where the reader is scrolled to is not
+  // something to re-render over.
+  const pinned = useRef(true);
+
+  useEffect(() => {
+    if (state.phase === "idle") {
+      // The next conversation is a fresh one, and it starts at its own
+      // bottom — a scroll position from a dismissed thread pins nothing.
+      pinned.current = true;
+      return;
+    }
+    const el = column.current;
+    if (el !== null && pinned.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [state]);
+
   if (state.phase === "idle") {
     return null;
   }
@@ -51,10 +81,20 @@ export function AnswerPanel({
 
   return (
     // Marked, and deliberately without a walkthrough step of its own: the
-    // band exists only after a question has been asked, so a step about it
+    // column exists only after a question has been asked, so a step about it
     // would spotlight an absent element on most walks. The marker is what
     // accounts for the controls inside it — see `WALKTHROUGH_TRANSIENT`.
-    <section className="answer" aria-label="Answer" data-walkthrough="answer">
+    <section
+      className="answer"
+      aria-label="Answer"
+      data-walkthrough="answer"
+      ref={column}
+      onScroll={(event) => {
+        const el = event.currentTarget;
+        pinned.current =
+          el.scrollHeight - el.scrollTop - el.clientHeight <= PINNED_SLACK_PX;
+      }}
+    >
       {state.turns.map((turn, i) => (
         // Index keys are the honest identity here: the thread is
         // append-only until it is cleared whole, so no turn ever reorders
