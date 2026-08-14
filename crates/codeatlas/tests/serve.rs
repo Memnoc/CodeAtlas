@@ -93,7 +93,7 @@ fn serve(repo: &Path) -> Server {
 
 /// Starts the server with extra arguments — `--ask` and its backend.
 fn serve_with(repo: &Path, extra: &[&str]) -> Server {
-    let mut child = Command::cargo_bin("codeatlas")
+    let child = Command::cargo_bin("codeatlas")
         .unwrap()
         .args(["serve", "--port", "0"])
         .args(extra)
@@ -103,6 +103,34 @@ fn serve_with(repo: &Path, extra: &[&str]) -> Server {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
+    adopt(child)
+}
+
+/// [`serve`], under a lowered file-descriptor budget: the shell's own
+/// `ulimit` sets it — no library, no new machinery — and `exec` replaces
+/// the shell, so the child PID whose `/proc` is measured is the server's
+/// own. Starving the server is how a sustained accept-error condition is
+/// forced on loopback: every accept past the budget fails with EMFILE, and
+/// a failed accept leaves the connection queued, so the next accept fails
+/// the same way for as long as the pressure holds.
+fn serve_starved(repo: &Path, fd_budget: u32) -> Server {
+    let child = Command::new("sh")
+        .args([
+            "-c",
+            &format!("ulimit -n {fd_budget}; exec \"$0\" serve --port 0"),
+        ])
+        .arg(env!("CARGO_BIN_EXE_codeatlas"))
+        .current_dir(repo)
+        .env_remove(PROVIDER_ENV)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    adopt(child)
+}
+
+/// Reads the startup URL a spawned `serve` prints and wraps the child.
+fn adopt(mut child: Child) -> Server {
     let stdout = child.stdout.take().unwrap();
     let mut line = String::new();
     BufReader::new(stdout).read_line(&mut line).unwrap();
@@ -154,6 +182,28 @@ fn http_get(port: u16, path: &str) -> (String, Vec<String>, Vec<u8>) {
     )
     .unwrap();
     read_response(&mut stream).unwrap()
+}
+
+/// Minimal HTTP/1.1 HEAD over a raw socket — [`http_get`]'s twin, because
+/// that is what story 19 says HEAD is.
+fn http_head(port: u16, path: &str) -> (String, Vec<String>, Vec<u8>) {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        stream,
+        "HEAD {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    )
+    .unwrap();
+    read_response(&mut stream).unwrap()
+}
+
+/// Writes `bytes` verbatim to a fresh connection and reads one response —
+/// for requests no honest helper here would form. The `Result` is the
+/// point: the silent close story 19 removes surfaces here as an error.
+fn raw_request(port: u16, bytes: &[u8]) -> std::io::Result<(String, Vec<String>, Vec<u8>)> {
+    let mut stream = TcpStream::connect(("127.0.0.1", port))?;
+    stream.write_all(bytes)?;
+    stream.flush()?;
+    read_response(&mut stream)
 }
 
 /// Minimal HTTP/1.1 POST over a raw socket. Hand-rolled for the same reason
@@ -455,6 +505,176 @@ fn serve_returns_404_for_unknown_paths() {
 
     let (status, _, _) = http_get(server.port, "/no-such-asset.js");
     assert!(status.contains("404"), "expected 404, got: {status}");
+}
+
+/// Story 19: HEAD is answered wherever GET is — GET's status and headers,
+/// the `Content-Length` of the body GET would send (RFC 9110 §9.3.2), and
+/// no body. The paths walked are `serve::REGISTRY`'s own GET entries — the
+/// server derives HEAD from that table and so does this test, so a GET
+/// route added later is covered here without anyone remembering it — plus
+/// the asset fallback the registry deliberately leaves out, at its 200 and
+/// its 404.
+#[test]
+fn head_is_answered_wherever_get_is_with_gets_headers_and_no_body() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let server = serve(repo.path());
+
+    let mut paths: Vec<&str> = codeatlas::serve::REGISTRY
+        .iter()
+        .filter(|route| route.method == "GET")
+        .map(|route| route.path)
+        .collect();
+    assert!(
+        !paths.is_empty(),
+        "the registry holds no GET route at all; this test is walking nothing"
+    );
+    paths.extend(["/", "/no-such-asset.js"]);
+
+    for path in paths {
+        let (get_status, get_headers, get_body) = http_get(server.port, path);
+        let (head_status, head_headers, head_body) = http_head(server.port, path);
+        assert_eq!(
+            head_status, get_status,
+            "HEAD {path} must carry GET's status"
+        );
+        for name in ["Content-Type", "Content-Length"] {
+            assert_eq!(
+                header(&head_headers, name),
+                header(&get_headers, name),
+                "HEAD {path}: {name} must match GET's"
+            );
+        }
+        // The promised length is the body GET actually sends, never a
+        // number invented without it.
+        assert_eq!(
+            header(&head_headers, "Content-Length").unwrap(),
+            get_body.len().to_string(),
+            "HEAD {path} must promise exactly the body GET sends"
+        );
+        assert!(
+            head_body.is_empty(),
+            "HEAD {path} must send no body, got {} bytes",
+            head_body.len()
+        );
+    }
+}
+
+/// What HEAD draws on the one route that answers no GET: `/api/ask` is
+/// POST-only, so `GET /api/ask` has always fallen through to the asset
+/// lookup and 404ed — and HEAD mirrors GET everywhere, so it draws the
+/// same 404 with the same headers, on both server shapes. Not a 405: HEAD
+/// is a method this server answers, and refusing it politely on one path
+/// would take exactly the second method-aware list the ticket forbids.
+/// The POST beside it still answers, so HEAD changed lanes without taking
+/// the question route along.
+#[test]
+fn head_of_the_post_only_question_route_mirrors_gets_404() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let outside = tempfile::tempdir().unwrap();
+    let spec = format!(
+        "fake:{}",
+        canned(outside.path(), "It starts in main.ts.", &[]).display()
+    );
+    let asking = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+
+    let (get_status, _, get_body) = http_get(asking.port, "/api/ask");
+    assert!(get_status.contains("404"), "GET /api/ask: {get_status}");
+    let (status, headers, body) = http_head(asking.port, "/api/ask");
+    assert!(status.contains("404"), "HEAD /api/ask: {status}");
+    assert_eq!(
+        header(&headers, "Content-Length").unwrap(),
+        get_body.len().to_string(),
+        "HEAD /api/ask must promise the body GET /api/ask sends"
+    );
+    assert!(body.is_empty(), "HEAD sends no body");
+    let (status, _) = ask(asking.port, "where does the program start?");
+    assert!(status.contains("200"), "POST /api/ask beside it: {status}");
+
+    // The same 404 on a plain serve, where the POST route does not exist.
+    let plain = serve(repo.path());
+    let (status, _, _) = http_head(plain.port, "/api/ask");
+    assert!(status.contains("404"), "plain HEAD /api/ask: {status}");
+}
+
+/// The unchanged half of story 19's criterion: HEAD left the 405 lane and
+/// nobody else did. Every other non-GET method still draws the refusal
+/// that names what is actually served — the plain shape's flat sentence
+/// here, byte-identical; the `--ask` shape's sentence is pinned by
+/// `the_method_refusal_describes_the_server_it_came_from` below.
+#[test]
+fn other_methods_still_draw_the_405_that_names_the_served_surface() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let server = serve(repo.path());
+
+    for method in ["PUT", "DELETE", "OPTIONS", "PATCH"] {
+        let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+        write!(
+            stream,
+            "{method} /api/map HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        )
+        .unwrap();
+        let (status, _, body) = read_response(&mut stream).unwrap();
+        assert!(status.contains("405"), "{method} status: {status}");
+        assert_eq!(
+            String::from_utf8_lossy(&body),
+            "only GET is served",
+            "{method} must keep the refusal that names the served surface"
+        );
+    }
+}
+
+/// Story 19's second half: a request the parser cannot make sense of draws
+/// a 400 saying what was wrong, where it used to draw a closed connection
+/// the client could only report as a network failure. Three malformed
+/// shapes: a head that is not UTF-8, a request line short of its parts,
+/// and a request line with no HTTP version. Size and pace stay out of this
+/// lane — the 408/431 tests below pin those refusals separately.
+#[test]
+fn a_request_that_cannot_be_parsed_draws_a_400_instead_of_a_silent_close() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let server = serve(repo.path());
+
+    // Not UTF-8: 0xFF begins no UTF-8 sequence.
+    let (status, _, body) = raw_request(server.port, b"\xff\xfe GET / HTTP/1.1\r\n\r\n")
+        .expect("a malformed request must draw a response, not a closed connection");
+    assert!(status.contains("400"), "non-UTF-8 status: {status}");
+    assert!(
+        String::from_utf8_lossy(&body).contains("UTF-8"),
+        "the body must say what was wrong: {:?}",
+        String::from_utf8_lossy(&body)
+    );
+
+    // A request line short of its three parts.
+    let (status, _, body) = raw_request(server.port, b"GARBAGE\r\n\r\n")
+        .expect("a malformed request line must draw a response");
+    assert!(status.contains("400"), "one-token status: {status}");
+    assert!(
+        String::from_utf8_lossy(&body).contains("<method> <target> HTTP/<version>"),
+        "the body must show the shape a request line has: {:?}",
+        String::from_utf8_lossy(&body)
+    );
+
+    // Method and target but no version — HTTP/1.1's own grammar, not a
+    // nicety: without the third token the line is a different protocol.
+    let (status, _, body) = raw_request(server.port, b"GET /api/map\r\n\r\n")
+        .expect("a versionless request line must draw a response");
+    assert!(status.contains("400"), "no-version status: {status}");
+    assert!(
+        String::from_utf8_lossy(&body).contains("HTTP/"),
+        "the body must name the missing version: {:?}",
+        String::from_utf8_lossy(&body)
+    );
+
+    // And the server is unharmed by all three.
+    let (status, _, _) = http_get(server.port, "/api/map");
+    assert!(
+        status.contains("200"),
+        "map status after the garbage: {status}"
+    );
 }
 
 /// Seam 4 (spec, added 2026-08-11): the real binary, real HTTP/1.1 over
@@ -1276,6 +1496,23 @@ fn thread_count(pid: u32) -> usize {
         .expect("the thread count parses")
 }
 
+/// The child's CPU spent so far — utime + stime, in clock ticks — from
+/// `/proc/<pid>/stat`, parsed after the comm field's closing paren, the one
+/// field allowed to contain anything. Kernel state again, like
+/// [`thread_count`], and Linux-only like it: a loop that claims to pause is
+/// measured by the clock the kernel charges it, never by its own green
+/// assertions.
+fn cpu_ticks(pid: u32) -> u64 {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat"))
+        .expect("this test measures CPU via /proc and needs Linux");
+    let after_comm = &stat[stat.rfind(')').expect("a comm field") + 1..];
+    let fields: Vec<&str> = after_comm.split_whitespace().collect();
+    // After the comm, state is field 0, so utime and stime are 11 and 12.
+    let utime: u64 = fields[11].parse().expect("utime parses");
+    let stime: u64 = fields[12].parse().expect("stime parses");
+    utime + stime
+}
+
 /// The thread count once it has stopped moving: handler threads from earlier
 /// requests die asynchronously, so a baseline is only a baseline after two
 /// readings 200 ms apart agree.
@@ -1531,6 +1768,94 @@ fn a_header_block_of_too_many_lines_is_told_to_stop() {
     assert!(
         status.contains("200"),
         "map status after the endless headers: {status}"
+    );
+}
+
+/// Story 20: accept errors back off rather than spin. The forced error is
+/// descriptor exhaustion, arriving the way it actually arrives: the server
+/// runs under a lowered fd budget ([`serve_starved`]), more connections are
+/// parked on it than the budget holds, and every accept past it fails with
+/// EMFILE while the failed connection stays queued — a sustained error. The
+/// spinning loop this replaces answered that with accept-fail-continue at
+/// syscall speed, a full core; the backoff answers it with a bounded pause.
+/// The proof is kernel state, not a green sleep: the child's own `/proc`
+/// CPU clock across the window — then, because back-off is a pause and not
+/// a shutdown, the pressure is lifted and the same server must answer
+/// again.
+#[test]
+fn accept_errors_back_off_instead_of_burning_a_core() {
+    let repo = materialize("simple");
+    scan(repo.path());
+
+    /// The child's whole descriptor budget: stdio, the listener, and room
+    /// for a few dozen accepted connections before EMFILE.
+    const FD_BUDGET: u32 = 40;
+    /// Connections parked on the server: past the budget by enough that
+    /// the accept queue never empties during the window.
+    const PARKED: usize = 80;
+    /// How long the sustained-error condition is watched.
+    const WINDOW: Duration = Duration::from_secs(3);
+    /// The most CPU the child may spend across the window, in clock ticks
+    /// (USER_HZ is 100, so 100 ticks is one second — a third of the
+    /// window). Measured 2026-08-14: the spinning loop burned the whole
+    /// window, 300 ticks; the backed-off loop spent 0. The bound sits
+    /// where a loaded machine cannot blur the two.
+    const MAX_TICKS: u64 = 100;
+
+    let server = serve_starved(repo.path(), FD_BUDGET);
+    let pid = server.child.id();
+
+    // Inside its budget, the starved server is an ordinary server.
+    let (status, _, _) = http_get(server.port, "/api/map");
+    assert!(status.contains("200"), "warm-up status: {status}");
+
+    // Park connections until the budget is far exceeded. `connect` succeeds
+    // from here the moment the kernel queues it — acceptance is what the
+    // server can no longer afford.
+    let held: Vec<TcpStream> = (0..PARKED)
+        .map(|i| {
+            TcpStream::connect(("127.0.0.1", server.port))
+                .unwrap_or_else(|e| panic!("parked connection {i} refused: {e}"))
+        })
+        .collect();
+
+    // Let the exhaustion establish, then read the CPU clock across the
+    // window it sustains.
+    thread::sleep(Duration::from_millis(500));
+    let before = cpu_ticks(pid);
+    thread::sleep(WINDOW);
+    let burned = cpu_ticks(pid) - before;
+    eprintln!("accept-error window: {burned} clock ticks over {WINDOW:?}");
+    assert!(
+        burned < MAX_TICKS,
+        "the accept loop spent {burned} clock ticks over {WINDOW:?} under \
+         sustained accept errors — spinning, not backing off"
+    );
+
+    // Back-off is a pause, never a shutdown: release the descriptors and
+    // the same server must answer again.
+    drop(held);
+    let patience = Instant::now() + Duration::from_secs(10);
+    let mut recovered = false;
+    while Instant::now() < patience {
+        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", server.port))
+            && write!(
+                stream,
+                "GET /api/map HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+            )
+            .is_ok()
+            && let Ok((status, _, _)) = read_response(&mut stream)
+            && status.contains("200")
+        {
+            recovered = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+    assert!(
+        recovered,
+        "the server never came back once the descriptor pressure lifted — \
+         back-off must degrade service, never end it"
     );
 }
 

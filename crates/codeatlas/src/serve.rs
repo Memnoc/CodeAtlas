@@ -3,7 +3,8 @@
 //!
 //! The server is a hand-rolled HTTP/1.1 responder on `std::net::TcpListener`
 //! rather than a server crate: three GET routes and one optional POST — all
-//! declared in [`REGISTRY`], the table `handle` dispatches through — plus
+//! declared in [`REGISTRY`], the table `handle` dispatches through, with
+//! HEAD answered wherever GET is, derived from that same table — plus
 //! the embedded-asset fallback, and zero TLS/streaming/routing machinery, so
 //! even the smallest server dependency (tiny_http and its transitive tree)
 //! would be more code than this file.
@@ -32,6 +33,7 @@
 //! not a property of a map — and the map's schema is a published contract
 //! other producers emit against (ADR-0003).
 
+use std::borrow::Cow;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -55,6 +57,18 @@ pub struct ServeOptions<'a> {
     /// questions through. `None` leaves `POST /api/ask` non-existent.
     pub ask: Option<ProviderChoice<'a>>,
 }
+
+/// How long the accept loop pauses after a failed accept before trying
+/// again. An accept error on loopback is resource exhaustion in practice —
+/// EMFILE when the process is out of descriptors — and retrying instantly
+/// turns exhaustion into a spinning core: the failed accept leaves the
+/// pending connection in the queue, so the next attempt fails the same way
+/// (story 20). A tenth of a second is a bounded pause, not a policy — at
+/// most ten failed accepts a second cost nothing to notice, and an honest
+/// client arriving as the condition clears waits at most this long. A
+/// pause, never a retry budget and never a shutdown: the loop keeps
+/// accepting the moment an accept succeeds.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
 /// Serves the embedded dashboard, `<root>/.codeatlas/knowledge-graph.json`,
 /// and — when present — the diff overlay next to it, on 127.0.0.1 until the
@@ -131,7 +145,18 @@ pub fn serve(root: &Path, options: ServeOptions<'_>) -> Result<()> {
     // parallel connections for assets, and blocking them behind one another
     // stalls first paint.
     for stream in listener.incoming() {
-        let Ok(stream) = stream else { continue };
+        let stream = match stream {
+            Ok(stream) => stream,
+            Err(_) => {
+                // Backing off is what turns descriptor exhaustion into
+                // degraded service instead of a burned core: the CPU goes
+                // to the handler threads whose exits will free
+                // descriptors, and the loop retries at a human pace
+                // rather than a syscall one.
+                thread::sleep(ACCEPT_BACKOFF);
+                continue;
+            }
+        };
         let routes = routes.clone();
         thread::spawn(move || {
             // Per-connection errors (client hung up mid-request) only affect
@@ -198,6 +223,11 @@ pub struct Route {
 /// not there — that is the dashboard itself, every remaining path rather
 /// than a route with one of its own, and `docs/SECURITY.md` states it
 /// separately.
+///
+/// HEAD is not in this table either, and is still answered wherever GET is
+/// (story 19): [`handle`] routes a HEAD through the GET entries and
+/// withholds the body at the end (RFC 9110 §9.3.2), so the derivation
+/// cannot drift from a second list — there is no second list.
 pub const REGISTRY: &[Route] = &[
     Route {
         method: "GET",
@@ -367,6 +397,10 @@ enum HeadLine {
     OverLong,
     /// [`REQUEST_DEADLINE`] ran out while the line was still arriving.
     PastDeadline,
+    /// The line holds bytes that are not UTF-8 — malformed, not over-bound:
+    /// a request head is text by the protocol's own grammar, and `String`
+    /// is how everything downstream reads it.
+    NotUtf8,
 }
 
 /// Reads one line of the request head under two of the three bounds: at
@@ -406,15 +440,16 @@ fn head_line(reader: &mut BufReader<TcpStream>, deadline: Instant) -> std::io::R
             break;
         }
     }
-    String::from_utf8(line).map(HeadLine::Line).map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "request head is not UTF-8")
-    })
+    Ok(String::from_utf8(line).map_or(HeadLine::NotUtf8, HeadLine::Line))
 }
 
 /// What reading a request head produced: a request to route, or the refusal
 /// that ends it. Three bounds, three separate failures — never one "request
 /// too large" condition, because the reader of a refusal wants to know which
-/// bound tripped. The per-read timeout is deliberately not represented here:
+/// bound tripped. The malformed lane (story 19) rides the same refusal
+/// shape but is not a bound: a head that is not text draws a 400 naming
+/// the fault in the request, where the 408 and the 431s name a limit of
+/// this server's. The per-read timeout is deliberately not represented here:
 /// its failure stays what it always was, an I/O error and a silently dropped
 /// connection, because a client that went quiet is not reading refusals.
 enum Head {
@@ -451,6 +486,18 @@ fn deadline_reason() -> String {
     )
 }
 
+/// The malformed lane's refusal for a head that is not text (story 19): a
+/// 400 with the reason, where this used to be an I/O error and a silently
+/// closed connection the client could only report as a network failure.
+/// 400 is HTTP's word for "the fault is in the request" — deliberately not
+/// a 431, because nothing here is over any bound.
+fn not_utf8() -> Head {
+    Head::Refused {
+        status: "400 Bad Request",
+        reason: "the request head is not valid UTF-8".into(),
+    }
+}
+
 /// [`MAX_HEADER_LINE`]'s refusal. 431 is the status RFC 6585 provides for a
 /// header block a server will not hold — for one oversized field and for an
 /// oversized total alike, with the response saying which; here the sentence
@@ -475,6 +522,7 @@ fn read_head(reader: &mut BufReader<TcpStream>, deadline: Instant) -> std::io::R
         HeadLine::Line(line) => line,
         HeadLine::OverLong => return Ok(over_long_line()),
         HeadLine::PastDeadline => return Ok(past_deadline()),
+        HeadLine::NotUtf8 => return Ok(not_utf8()),
     };
     let mut headers = Headers::default();
     let mut lines = 0usize;
@@ -483,6 +531,7 @@ fn read_head(reader: &mut BufReader<TcpStream>, deadline: Instant) -> std::io::R
             HeadLine::Line(line) => line,
             HeadLine::OverLong => return Ok(over_long_line()),
             HeadLine::PastDeadline => return Ok(past_deadline()),
+            HeadLine::NotUtf8 => return Ok(not_utf8()),
         };
         if line.is_empty() || line == "\r\n" || line == "\n" {
             return Ok(Head::Complete {
@@ -527,19 +576,35 @@ fn handle(stream: TcpStream, routes: &Routes) -> std::io::Result<()> {
         }
     };
 
+    // The malformed lane's other half (story 19): a request line that does
+    // not parse as HTTP/1.1's own grammar — method, target, `HTTP/` version
+    // — draws a 400 naming the shape, never a silent close. Size and pace
+    // are not malformed and stay in their own lanes: the 408 and the 431s
+    // above, decided before this line is looked at.
     let mut parts = request_line.split_whitespace();
-    let (method, target) = match (parts.next(), parts.next()) {
-        (Some(m), Some(t)) => (m.to_string(), t.to_string()),
+    let (method, target) = match (parts.next(), parts.next(), parts.next()) {
+        (Some(m), Some(t), Some(v)) if v.starts_with("HTTP/") => (m.to_string(), t.to_string()),
         _ => {
             let mut stream = reader.into_inner();
-            return respond(&mut stream, "400 Bad Request", "text/plain", b"bad request");
+            return respond(
+                &mut stream,
+                "400 Bad Request",
+                "text/plain",
+                b"malformed request line: a request is `<method> <target> HTTP/<version>`",
+            );
         }
     };
     let path = target.split(['?', '#']).next().unwrap_or(&target);
 
     // The whole surface is one lookup: [`REGISTRY`] filtered by what this
     // server actually holds. Everything below is what the found entry says.
-    let route = routes.route(&method, path);
+    // HEAD is answered wherever GET is (story 19), so it is routed *as* a
+    // GET: the registry's GET entries are the definition of "wherever GET
+    // is", and looking HEAD up through them is what keeps the derivation
+    // free of a second hand-maintained list. All that differs is the body
+    // withheld at the very end.
+    let head_only = method == "HEAD";
+    let route = routes.route(if head_only { "GET" } else { &method }, path);
 
     // The one non-GET route, and only when `--ask` put a backend behind it —
     // otherwise `routes.route` never registered it. Reading a body is
@@ -557,10 +622,14 @@ fn handle(stream: TcpStream, routes: &Routes) -> std::io::Result<()> {
     }
 
     let mut stream = reader.into_inner();
-    if method != "GET" {
+    if method != "GET" && !head_only {
         // Build-aware, because with `--ask` the flat claim is false — and a
         // reader who mistyped the question route deserves to be told the
-        // right one rather than that POST is unsupported.
+        // right one rather than that POST is unsupported. HEAD skips this
+        // lane entirely: it is a method this server *answers*, not one it
+        // refuses more politely (the ticket 13 note), and the sentences
+        // stay byte-identical because for every refused method they are
+        // still the truth about what is served.
         let served: &[u8] = match routes.ask {
             Some(_) => b"only GET, and POST /api/ask, are served",
             None => b"only GET is served",
@@ -568,62 +637,82 @@ fn handle(stream: TcpStream, routes: &Routes) -> std::io::Result<()> {
         return respond(&mut stream, "405 Method Not Allowed", "text/plain", served);
     }
 
-    match route.map(|route| route.endpoint) {
-        Some(Endpoint::Map) => {
-            // Read from disk per request so a re-scan shows up on refresh.
-            match std::fs::read(&routes.map_path) {
-                Ok(map) => respond(&mut stream, "200 OK", "application/json", &map),
-                Err(_) => respond(
-                    &mut stream,
-                    "404 Not Found",
-                    "application/json",
-                    format!(
-                        "{{\"error\":\"no map at {} — run `codeatlas scan` first\"}}",
-                        routes.map_path.display()
-                    )
-                    .as_bytes(),
-                ),
+    // What GET would answer: status, content type, body. Built whole even
+    // for a HEAD, because the headers HEAD promises are the ones GET would
+    // have sent — RFC 9110 §9.3.2 wants Content-Length to be GET's, and a
+    // length invented without the body in hand is exactly the number that
+    // drifts. The cost is a disk read this server already pays on every
+    // GET of the same route.
+    let (status, content_type, body): (&str, &str, Cow<'_, [u8]>) =
+        match route.map(|route| route.endpoint) {
+            Some(Endpoint::Map) => {
+                // Read from disk per request so a re-scan shows up on refresh.
+                match std::fs::read(&routes.map_path) {
+                    Ok(map) => ("200 OK", "application/json", map.into()),
+                    Err(_) => (
+                        "404 Not Found",
+                        "application/json",
+                        format!(
+                            "{{\"error\":\"no map at {} — run `codeatlas scan` first\"}}",
+                            routes.map_path.display()
+                        )
+                        .into_bytes()
+                        .into(),
+                    ),
+                }
             }
-        }
-        Some(Endpoint::Capabilities) => {
-            // Always 200, always answered, in every build: an absent route
-            // and a route saying "no" would be two ways to express one fact,
-            // and the client would have to treat them the same anyway.
-            respond(
-                &mut stream,
+            Some(Endpoint::Capabilities) => (
+                // Always 200, always answered, in every build: an absent
+                // route and a route saying "no" would be two ways to express
+                // one fact, and the client would have to treat them the same
+                // anyway.
                 "200 OK",
                 "application/json",
-                format!("{{\"ask\":{}}}", routes.ask.is_some()).as_bytes(),
-            )
-        }
-        Some(Endpoint::Diff) => {
-            // The overlay is optional: absent means `codeatlas diff` has not
-            // run, and the dashboard hides its toggle on the 404.
-            match std::fs::read(&routes.overlay_path) {
-                Ok(overlay) => respond(&mut stream, "200 OK", "application/json", &overlay),
-                Err(_) => respond(
-                    &mut stream,
-                    "404 Not Found",
-                    "application/json",
-                    b"{\"error\":\"no diff overlay - run `codeatlas diff` first\"}",
-                ),
+                format!("{{\"ask\":{}}}", routes.ask.is_some())
+                    .into_bytes()
+                    .into(),
+            ),
+            Some(Endpoint::Diff) => {
+                // The overlay is optional: absent means `codeatlas diff` has
+                // not run, and the dashboard hides its toggle on the 404.
+                match std::fs::read(&routes.overlay_path) {
+                    Ok(overlay) => ("200 OK", "application/json", overlay.into()),
+                    Err(_) => (
+                        "404 Not Found",
+                        "application/json",
+                        Cow::Borrowed(
+                            &b"{\"error\":\"no diff overlay - run `codeatlas diff` first\"}"[..],
+                        ),
+                    ),
+                }
             }
-        }
-        // No registered route: the embedded dashboard answers every
-        // remaining GET, 404 when it holds no such asset. `Ask` cannot in
-        // fact arrive here — it is registered for POST alone, and POST left
-        // at the 405 — but falling to the asset lookup is also the honest
-        // meaning of "no GET route by that name exists".
-        Some(Endpoint::Ask) | None => {
-            let asset_path = match path.trim_start_matches('/') {
-                "" => "index.html",
-                rest => rest,
-            };
-            match ASSETS.iter().find(|a| a.path == asset_path) {
-                Some(asset) => respond(&mut stream, "200 OK", asset.content_type, asset.bytes),
-                None => respond(&mut stream, "404 Not Found", "text/plain", b"not found"),
+            // No registered route: the embedded dashboard answers every
+            // remaining GET, 404 when it holds no such asset. `Ask` cannot
+            // in fact arrive here — it is registered for POST alone, and
+            // POST left at the 405 — but falling to the asset lookup is also
+            // the honest meaning of "no GET route by that name exists".
+            // A HEAD of the ask route lands here as `None` for the same
+            // reason and draws the 404 `GET /api/ask` has always drawn:
+            // HEAD mirrors GET even where GET is not served.
+            Some(Endpoint::Ask) | None => {
+                let asset_path = match path.trim_start_matches('/') {
+                    "" => "index.html",
+                    rest => rest,
+                };
+                match ASSETS.iter().find(|a| a.path == asset_path) {
+                    Some(asset) => ("200 OK", asset.content_type, Cow::Borrowed(asset.bytes)),
+                    None => (
+                        "404 Not Found",
+                        "text/plain",
+                        Cow::Borrowed(&b"not found"[..]),
+                    ),
+                }
             }
-        }
+        };
+    if head_only {
+        respond_head(&mut stream, status, content_type, &body)
+    } else {
+        respond(&mut stream, status, content_type, &body)
     }
 }
 
@@ -818,20 +907,51 @@ fn json_error(stream: &mut TcpStream, status: &str, message: &str) -> std::io::R
 }
 
 /// Writes one response and ends the connection. Every route funnels through
-/// here, which is the point: the hang-up below is not something a route can
-/// be written without.
+/// here (or through [`respond_head`], its body-withholding half), which is
+/// the point: the hang-up below is not something a route can be written
+/// without.
 fn respond(
     stream: &mut TcpStream,
     status: &str,
     content_type: &str,
     body: &[u8],
 ) -> std::io::Result<()> {
+    transmit(stream, status, content_type, body, true)
+}
+
+/// [`respond`] for a HEAD: the same status line and the same headers —
+/// `Content-Length` carrying the length of the body a GET would have sent,
+/// which RFC 9110 §9.3.2 asks for — and no body bytes. Sharing
+/// [`transmit`] with `respond` is what makes "same status and headers" a
+/// property of the code rather than a discipline.
+fn respond_head(
+    stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &[u8],
+) -> std::io::Result<()> {
+    transmit(stream, status, content_type, body, false)
+}
+
+/// The one wire format both responders share. `send_body` false is HEAD's
+/// half: everything up to the blank line is written identically, then the
+/// body is withheld rather than recomputed, so the promised length can
+/// never be a different body's.
+fn transmit(
+    stream: &mut TcpStream,
+    status: &str,
+    content_type: &str,
+    body: &[u8],
+    send_body: bool,
+) -> std::io::Result<()> {
     write!(
         stream,
         "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     )?;
-    stream.write_all(body)?;
+    if send_body {
+        stream.write_all(body)?;
+    }
     stream.flush()?;
     hang_up(stream);
     Ok(())

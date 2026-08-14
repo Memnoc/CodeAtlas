@@ -105,7 +105,17 @@ omit a route the server answers nor keep naming one it no longer does:
 
 Every other GET is answered from the embedded dashboard assets in process
 memory, or 404s — the dashboard itself, every remaining path rather than a
-route with one of its own. Any other method is a 405.
+route with one of its own. HEAD is answered wherever GET is — routed
+through the registry's GET entries and answered with GET's status and
+headers, `Content-Length` included, and no body (RFC 9110 §9.3.2) — so it
+is derived from the table above rather than listed beside it
+(`head_is_answered_wherever_get_is_with_gets_headers_and_no_body`,
+`crates/codeatlas/tests/serve.rs`). Any other method is a 405 naming what
+is served, and a request the parser cannot make sense of — a request line
+that is not `<method> <target> HTTP/<version>`, a head that is not UTF-8 —
+draws a 400 saying what was wrong rather than a silent close
+(`a_request_that_cannot_be_parsed_draws_a_400_instead_of_a_silent_close`,
+same file).
 
 **Enforced by** two tests in `crates/codeatlas/tests/routes.rs`, one per
 direction of drift.
@@ -599,8 +609,16 @@ text — those claims are about what git does:
   including refusals decided while a body is still in flight, is asserted
   under repetition by `a_refused_method_reaches_the_client_that_asked_for_it`
   and `the_question_routes_refusals_reach_the_client_too` — with the one
-  exception two bullets down. This affects availability of the local
-  dashboard only, never confidentiality. What a connection can be told is the
+  exception two bullets down. The accept loop itself is bounded the same
+  way: an accept error — descriptor exhaustion, in practice — draws a
+  bounded pause (`ACCEPT_BACKOFF`, 100 ms, `crates/codeatlas/src/serve.rs`)
+  before the next attempt, so a process out of descriptors degrades service
+  instead of burning a core, and accepts again the moment the pressure
+  lifts (`accept_errors_back_off_instead_of_burning_a_core`, which starves
+  the real binary of descriptors and reads its CPU clock from `/proc` —
+  measured 2026-08-14: the spinning loop burned a full core, 300 clock
+  ticks across a three-second window; the backed-off loop, 0). This affects
+  availability of the local dashboard only, never confidentiality. What a connection can be told is the
   whole of this list:
   the map and the diff overlay, read from disk; the embedded dashboard
   assets, from process memory; and — since [ADR-0009] — one boolean saying
