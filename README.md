@@ -18,6 +18,12 @@ whole picture to `.codeatlas/knowledge-graph.json`; enrichment and questions
 are opt-in flags on top. Run it and look — the counts belong to whatever the
 repository is on the day you run it, so none are written down here.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/viz-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/viz-light.png">
+  <img alt="Why a map: code is read one file at a time, a codebase is understood all at once — the text on the left becomes the picture on the right" src="docs/images/viz-dark.png" width="100%">
+</picture>
+
 ## Quick start
 
 ```sh
@@ -64,9 +70,10 @@ alias cakill='pkill -x codeatlas'                                   # stop a run
 
 ## What it looks like
 
-Live captures and designed cards, all drawn from CodeAtlas's own map — the
-pictures follow your GitHub theme, and the counts inside them belong to the
-day the map was scanned.
+Designed cards, following your GitHub theme. The dashboard captures inside
+some of them come from a real `codeatlas serve` of this repository and
+belong to the day they were shot; the concept cards draw an illustrative
+repository, not this one.
 
 ### How to read the map
 
@@ -76,12 +83,20 @@ day the map was scanned.
   <img alt="The legend: regions, edges, elevation, and the structural-versus-llm provenance badges" src="docs/images/legend-dark.png" width="100%">
 </picture>
 
-### The whole repository as a handful of regions
+### One root, a few branches, hundreds of leaves
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/regions-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/regions-light.png">
-  <img alt="The region map: every file in a labelled region, edges saying which regions import which" src="docs/images/regions-dark.png" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/tree-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/tree-light.png">
+  <img alt="The shape of a repository: the trunk everything grows from, the regions it branches into, and the files at the tips" src="docs/images/tree-dark.png" width="100%">
+</picture>
+
+### Every region is a card, every import is a line
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/constellation-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/constellation-light.png">
+  <img alt="Cards that know each other: pick any card and the map answers what it uses, what leans on it, and the shortest route between two corners of the codebase" src="docs/images/constellation-dark.png" width="100%">
 </picture>
 
 ### The same repository, structurally and by behaviour
@@ -92,38 +107,6 @@ day the map was scanned.
   <img alt="Structural groups by where files live; Domain groups by what actually runs; one toggle swaps between them" src="docs/images/twoviews-dark.png" width="100%">
 </picture>
 
-### Follow the call flows, not the folder tree
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/flows-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/flows-light.png">
-  <img alt="The Domain view: regions drawn around call flows rather than directories" src="docs/images/flows-dark.png" width="100%">
-</picture>
-
-### One file, everything it touches
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/focus-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/focus-light.png">
-  <img alt="Focus: the map dimmed to a single node with its used-by and uses paths lit" src="docs/images/focus-dark.png" width="100%">
-</picture>
-
-### Every symbol, file and summary, one keystroke away
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/search-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/search-light.png">
-  <img alt="Search: one ranked list of functions and files, each with its location" src="docs/images/search-dark.png" width="100%">
-</picture>
-
-### Ask the map a question in plain English
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/ask-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/ask-light.png">
-  <img alt="Ask: a typed question answered in prose, with the files the answer was drawn from" src="docs/images/ask-dark.png" width="100%">
-</picture>
-
 <!-- HELD BANNERS — two pairs exist in the design file but are not published:
   walkthrough-{dark,light}.png says "Thirteen steps" (and a "13 steps" chip);
   the shipped walkthrough has fourteen — re-export without the number.
@@ -131,28 +114,17 @@ day the map was scanned.
   After re-export, drop the files into docs/images/ and give each its
   <picture> block here (walkthrough) and wherever the hero should live.
 
-  STALE, still published: panel-{dark,light}.png has the retired ranking
-  baked in — the headline "what everything leans on", a section titled
-  "Everything leans on", and rows counting importers ("<- N files"). The
-  panel now ranks the map's published significance (ADR-0010) and reads
-  "Files that matter" / "significance N". The heading and alt text below say
-  what ships; the picture needs a re-export to catch up.
-
   STALE since 2026-08-14: twoviews-{dark,light}.png shows "Structural |
   Domain" pills and a "Structural" panel title; ticket 14 renamed the
   visible grouping label to "Layer" (the provenance count keeps the word
   "structural"). The alt text and docs/images/README.md's inventory line
-  describe the old label until the pair is re-exported. -->
+  describe the old label until the pair is re-exported.
 
-
-
-### Where to start, and which files matter
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/panel-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/panel-light.png">
-  <img alt="The info panel naming entry points and ranking the files the map says matter; the FILES tab behind its filter" src="docs/images/panel-dark.png" width="100%">
-</picture>
+  RETIRED 2026-08-14: the seven capture-heavy pairs from the V1 showcase
+  (regions, flows, focus, search, ask, panel, share) came out with the
+  final banner set — their captures predate V2's drill view, magnify and
+  conversation column, and the panel and ask pairs showed retired UI. Git
+  history keeps them; a future capture pass can bring the ideas back. -->
 
 ### You always know which parts a model wrote
 
@@ -160,14 +132,6 @@ day the map was scanned.
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/provenance-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="docs/images/provenance-light.png">
   <img alt="Two kinds of label: structural read off the code, llm written during enrichment and stripped from the shared page" src="docs/images/provenance-dark.png" width="100%">
-</picture>
-
-### Take the map with you
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/share-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/share-light.png">
-  <img alt="The Share/Export menu: one self-contained redacted HTML file, or the raw JSON against the versioned contract" src="docs/images/share-dark.png" width="100%">
 </picture>
 
 ## Commands
@@ -380,18 +344,16 @@ serving binary. The V1 scope lives in [`docs/specs/`](docs/specs/).
 
 ## Status
 
-V1 shipped on 2026-08-12. Every story in the V1 spec passes, and the record —
-six verification walks plus a browser walk, story by story — lives in the
-spec's own Verification section
-([`docs/specs/2026-08-09-codeatlas-v1.md`](docs/specs/2026-08-09-codeatlas-v1.md)).
-The agenda for what comes next is
-[`docs/intake/2026-08-12-codeatlas-v1-next.md`](docs/intake/2026-08-12-codeatlas-v1-next.md);
-its headline is the dashboard at scale. Files are laid out in dependency
-layers and ordered to keep the lines apart, which reads well until a region
-holds enough files that drawing all of them at once stops being a picture —
-this repository's own `crates` region is 159 cards. V2 answers that with
-disclosure rather than a different layout algorithm; the spec is
-[`docs/specs/2026-08-13-codeatlas-v2.md`](docs/specs/2026-08-13-codeatlas-v2.md).
+V2 shipped on 2026-08-14. Where V1 proved the pipeline — scan, map, serve,
+enrich, share — V2 made the map readable at scale: dense regions open on
+the files that matter with the rest one gesture away, magnify draws a
+file's neighbourhood instead of lines across the canvas, asking is a
+conversation in a column beside the map with its token spend measured, C++
+namespaced calls resolve, and the serve surface keeps HTTP's promises under
+a test that fails when `docs/SECURITY.md` goes quiet about a route. Each
+version's spec carries its own story-by-story Verification section
+([V1](docs/specs/2026-08-09-codeatlas-v1.md),
+[V2](docs/specs/2026-08-13-codeatlas-v2.md)).
 
 ## License
 

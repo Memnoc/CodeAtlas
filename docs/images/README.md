@@ -10,18 +10,18 @@ drop-in replacement and no document changes. A renamed one is a broken slot.
 
 | Pair | What it shows | Where it lives |
 | --- | --- | --- |
-| `plate-{dark,light}.png` | Nameplate: the pitch and the day's map counts. | Masthead, after the intro. |
+| `plate-{dark,light}.png` | Nameplate: the pitch and the day's map counts. | Masthead, before the intro. |
+| `viz-{dark,light}.png` | Why a map: the code on the left becomes the picture on the right. Concept card, illustrative code. | After the intro. |
 | `pipeline-{dark,light}.png` | How it works: scan → map.json → optional `--enrich` → read or share. | How it works. |
 | `legend-{dark,light}.png` | How to read the map: region, edge, elevation, provenance. | Opens the tour. |
-| `regions-{dark,light}.png` | Structural region map — labelled regions, import edges between them. | Tour. |
+| `tree-{dark,light}.png` | The shape of a repository: root, branch regions, files at the tips. Concept card, illustrative repo. | Tour. |
+| `constellation-{dark,light}.png` | Cards that know each other: uses, used-by, and the route between two corners. Concept card, illustrative repo. | Tour. |
 | `twoviews-{dark,light}.png` | Structural vs Domain grouping, one toggle apart. | Tour. |
-| `flows-{dark,light}.png` | Domain view — regions redrawn around call flows. | Tour. |
-| `focus-{dark,light}.png` | Focus on one node: used-by above, uses below, the rest dimmed. | Tour. |
-| `search-{dark,light}.png` | Search typeahead: one ranked list across symbols, files, summaries. | Tour. |
-| `ask-{dark,light}.png` | An Ask answer with the files it was drawn from. | Tour. |
-| `panel-{dark,light}.png` | Info panel (entry points, load-bearing files) and the FILES tab. | Tour. |
-| `provenance-{dark,light}.png` | The two label kinds: `structural` vs `llm`, and what `share` strips. | Tour. |
-| `share-{dark,light}.png` | Share/Export menu and `llm` badges in the flow list. | Closes the tour. |
+| `provenance-{dark,light}.png` | The two label kinds: `structural` vs `llm`, and what `share` strips. | Closes the tour. |
+
+The concept cards (`viz`, `tree`, `constellation`) draw an illustrative
+repository, not this one — the README's showcase copy says so, and must
+keep saying so as long as they are published.
 
 ## Held pairs — exported, not published
 
@@ -38,6 +38,16 @@ their copy stops contradicting the product:
 After re-export, add the files here and give each a `<picture>` block at
 the `HELD BANNERS` comment in the top-level README.
 
+## Retired pairs — 2026-08-14
+
+The seven capture-heavy pairs from the V1 showcase (`regions`, `flows`,
+`focus`, `search`, `ask`, `panel`, `share`) came out with the final banner
+set: their embedded captures predate V2's drill view, magnify and
+conversation column, and the `panel` and `ask` pairs showed UI that no
+longer ships (the retired importer ranking; the answer band the column
+replaced). Git history keeps the files; a future capture pass against the
+V2 dashboard can bring the ideas back under the same names.
+
 ## Re-exporting
 
 The source design is kept with the design assets, outside this repository
@@ -45,8 +55,7 @@ The source design is kept with the design assets, outside this repository
 frames at 2×, then overwrite the files here under the same names. The
 screenshots embedded in the frames come from a real `codeatlas serve` — on
 UI changes, rebuild (`cargo build --release`), restart, and re-capture
-rather than editing pixels. The current captures predate the "2 importss"
-edge-label fix; the next capture pass clears them.
+rather than editing pixels.
 
 Two rules for the copy inside the images, learned the usual way:
 
@@ -54,6 +63,8 @@ Two rules for the copy inside the images, learned the usual way:
   wrong within a day of export — step counts and feature tallies move with
   every ticket. Counts that come from the day's map (files, regions,
   enriched slots) are fine; the README says the shots belong to their day.
+  Illustrative counts on the concept cards are fine for the same reason the
+  README's copy declares them illustrative.
 - **Read the screenshots before exporting.** The first export immortalised
   a live UI bug ("2 importss") that a minute of reading would have caught —
   it became a fix, but the pictures had already framed it.
