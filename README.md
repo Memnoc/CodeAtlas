@@ -136,7 +136,15 @@ day the map was scanned.
   "Everything leans on", and rows counting importers ("<- N files"). The
   panel now ranks the map's published significance (ADR-0010) and reads
   "Files that matter" / "significance N". The heading and alt text below say
-  what ships; the picture needs a re-export to catch up. -->
+  what ships; the picture needs a re-export to catch up.
+
+  STALE since 2026-08-14: twoviews-{dark,light}.png shows "Structural |
+  Domain" pills and a "Structural" panel title; ticket 14 renamed the
+  visible grouping label to "Layer" (the provenance count keeps the word
+  "structural"). The alt text and docs/images/README.md's inventory line
+  describe the old label until the pair is re-exported. -->
+
+
 
 ### Where to start, and which files matter
 
