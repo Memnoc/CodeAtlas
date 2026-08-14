@@ -421,4 +421,7 @@ Residuals accepted during the build are recorded in their tickets
 (`.scratch/codeatlas-v2/`), none contradicting a story; the V-next
 candidates among them are harvest material for `/next`.
 
-Acceptance: _pending Memnoc's word after the reader's walk._
+Acceptance: **Memnoc, 2026-08-14** — walked all four reader's-walk spots
+in the browser against the live server (the forty-card drill view, the
+edge fan, magnify at scale, the conversation column) and accepted them.
+Every story passes; **V2 is shipped.**
