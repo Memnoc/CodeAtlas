@@ -351,3 +351,74 @@ ten times over in this repository.
   failed the reader — the spec's own "in the existing answer panel" was the
   premise that aged. The column supersedes that clause; the thread's
   behaviour (stories 10, 12, 13) is unchanged.
+- **Parked for `/next`, 2026-08-14, Memnoc's call:** the "open code" feature —
+  opening the selected file or symbol as highlighted source, the way
+  RepoAtlas does. Raised mid-lap, deliberately not squeezed in: it is a new
+  class of serve surface (source-over-HTTP) that would falsify the
+  never-serves-your-source sentence `docs/SECURITY.md` states and the drift
+  test pins; it cannot exist in share mode under ADR-0011's two-megabyte
+  ceiling; and syntax highlighting has no path under ADR-0006. If a next lap
+  wants it, it starts as ADR-0013, not as a ticket.
+
+## Verification
+
+First harden walk, 2026-08-14, against `4c8a354` — the release binary built
+that day (dashboard bundle embedded by the build script's own freshness
+check), driven over real TCP with the `fake:` scripted double behind every
+ask; no live model was called anywhere in the walk. Baseline at HEAD before
+the walk: all three Rust configurations green (default / sealed / agent-cli,
+including the 21.4 s serve suite and the fd-starvation backoff test in each),
+`cargo fmt` + `clippy -D warnings` clean, dashboard 285 tests + typecheck
+clean.
+
+| story | verdict | how it was watched |
+| --- | --- | --- |
+| 1 top-40 opens readable | pass | projection draws the forty most significant of a wider region, path order deciding a significance-less map; forty-card default and reveal exercised in the drill suite |
+| 2 one reveal affordance | pass | reveal gesture, its absence at ≤40, true-count reporting, and put-it-back all executed |
+| 3 nothing points at a hidden file | pass | search, focus, tour stop and diff overlay each auto-reveal; a reader's collapse is never overridden |
+| 4 revealed state is projection input | pass | revealed set drives `toFlow` as an argument; anchors identical however the map orders its edges |
+| 5 edges land as a fan | pass | per-edge anchor geometry asserted in the projection suite; visible fan is a reader's-walk item below |
+| 6 significance published once | pass | recomputed fan-in+fan-out+entry from the real map's own edges: 349/349 exact, 0 mismatches; the tour's 12 file stops are precisely ranks 0–11 of the stored ranking |
+| 7 region card says what it is | pass | bought a description through the scripted double — `provenance: "llm"` in the served map; llm badge on that part alone executed in the render suite |
+| 8 bought once, carried by hash | pass | second identical enrich run wanted one slot fewer and bought zero; the prose survived the full re-scan, which only the store can explain |
+| 9 new fields optional | pass | neither field in any `required` list of the committed schema; a stripped V1-shape map served 200, dashboard loaded |
+| 10 first question as before | pass | live wire: bare ask 200, canned citation dropped as the control demands |
+| 11 follow-up understands "it" | pass | live wire: one carried turn citing the target put it in the slice — same question, citation survives |
+| 12 measured usage shown | pass | live wire: `{"input_tokens":1207,"output_tokens":83}`, two counts and nothing else, no currency; per-turn display and running total executed |
+| 13 no usage means no display | pass | live wire: reporting-nothing backend produced no `usage` key at all; dashboard absence and never-undercount executed |
+| 14 clamp, never reject | pass | live wire: eight carried turns drew 200 with the newest turn still steering |
+| 15 server holds nothing | pass | no cookie or session header on any response; identical repeats identical; the registry has no session route to document |
+| 16 C++ namespaced calls resolve | pass | real binary on the fixture: `use_geo → geo::nsq` cross-file, `geo::twice → geo::nsq` same-file, `geo::inner::deep` walking outward, and the bare global `use_global → nsq` not suppressed |
+| 17 routes named or the gate fails | pass | both drift directions green at HEAD; all four registry routes probed live and each is named in `docs/SECURITY.md` |
+| 18 request read bounded | pass | watched live: 9 KB header line → 431, 70 lines → 431, and a trickling client held to exactly 20.0 s before `408` with the body naming the bound |
+| 19 HEAD and 400 | pass | watched live: HEAD mirrors GET's status, headers and content-length with zero body on `/api/map`, `/` and a 404; versionless, one-token and non-UTF-8 heads each drew 400, never a silent close |
+| 20 accept errors back off | pass | the fd-starvation test ran in all three configurations this walk — real child, real EMFILE, `/proc` CPU clock as witness |
+| 21 tally says structural once | pass | grouping label and provenance count never share a word, across the mixes, matching the control's segment |
+| 22 FILES tab remembers | pass | filter and folds survive the tab round trip and the sidebar fold, four ways |
+| 23 the share ceiling is a committed test | pass | committed at HEAD, green this walk; its ability to fail is the dated red run in ticket 01; a real artifact built today from an enriched map came out 497 KB with `redacted LayerDescription.text ×1` printed by the build itself |
+| 24 magnify draws the neighbourhood | pass | neighbourhood and nothing else, a hidden neighbour drawn without writing a reveal, a loner drawn alone and said so; Memnoc walked the live lens in the browser mid-lap |
+| 25 leaving magnify restores | pass | back control returns exactly where the reader was; one Escape cascade, one step at a time |
+| 26 the conversation beside the map | pass | column opens beside a canvas still drawn, single question gets the same column; geometry pinned by the stylesheet contract — bounded width as one named constant, internal scroll, its own track, no invented stacking context |
+
+Between the slices, additionally watched: the purchased layer prose does
+not cross the share boundary (the artifact names its own redaction); magnify
+reveals through auto-reveal's mechanism and no other; the clamp is the
+server's backstop behind a client that drops its own oldest turns first; and
+the real repository's map serves at 0.5.0 with 349 significance values that
+recompute exactly from its own edges.
+
+**The reader's-walk layer.** Four spots where only eyes in a real browser
+judge the last inch, per the pass³ pattern (gesture→state and
+state→geometry are executed above; the CSS engine renders the rest):
+the forty-card drill view reading as a picture (story 1), the fan visibly
+spread on a well-connected card (story 5), the magnified neighbourhood
+legible at real scale (story 24 — walked by Memnoc mid-lap, 2026-08-14),
+and the conversation column beside a live map (story 26). None is a
+correctness gap; all four are `cargo build --release`, `codeatlas serve`,
+and a look.
+
+Residuals accepted during the build are recorded in their tickets
+(`.scratch/codeatlas-v2/`), none contradicting a story; the V-next
+candidates among them are harvest material for `/next`.
+
+Acceptance: _pending Memnoc's word after the reader's walk._
