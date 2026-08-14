@@ -1,8 +1,4 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/plate-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/plate-light.png">
-  <img alt="CodeAtlas — a map of your codebase: regions, routes between them, and the elevation of what everything rests on" src="docs/images/plate-dark.png" width="100%">
-</picture>
+<!-- Head slot reserved for the screen recording. -->
 
 # CodeAtlas
 
@@ -12,6 +8,12 @@ interactive map you can search, walk through, and ask questions of. It runs
 offline by default: scanning, serving, diffing, and sharing never open a
 non-loopback socket, and a sealed build exists in which egress is not a
 forbidden action but a compile error.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/plate-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/plate-light.png">
+  <img alt="CodeAtlas — a map of your codebase: regions, routes between them, and the elevation of what everything rests on" src="docs/images/plate-dark.png" width="100%">
+</picture>
 
 The map itself needs no model and no key: `codeatlas scan .` writes the
 whole picture to `.codeatlas/knowledge-graph.json`; enrichment and questions
@@ -70,10 +72,9 @@ alias cakill='pkill -x codeatlas'                                   # stop a run
 
 ## What it looks like
 
-Designed cards, following your GitHub theme. The dashboard captures inside
-some of them come from a real `codeatlas serve` of this repository and
-belong to the day they were shot; the concept cards draw an illustrative
-repository, not this one.
+Designed cards, following your GitHub theme. Some draw this repository with
+the counts of the day they were made; the concept cards draw an
+illustrative repository, not this one.
 
 ### How to read the map
 
@@ -99,6 +100,22 @@ repository, not this one.
   <img alt="Cards that know each other: pick any card and the map answers what it uses, what leans on it, and the shortest route between two corners of the codebase" src="docs/images/constellation-dark.png" width="100%">
 </picture>
 
+### The files that matter, first
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/drill-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/drill-light.png">
+  <img alt="The drill view: a dense region opens on the files it leans on, already readable, with the rest behind one show-the-rest chip — and the map keeps its place" src="docs/images/drill-dark.png" width="100%">
+</picture>
+
+### A lens, not a place
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/magnify-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/magnify-light.png">
+  <img alt="Magnify: hold the lens over a file and it is redrawn alone with its direct neighbours; the map never moves, and lifting the lens changes nothing" src="docs/images/magnify-dark.png" width="100%">
+</picture>
+
 ### The same repository, structurally and by behaviour
 
 <picture>
@@ -107,24 +124,13 @@ repository, not this one.
   <img alt="Structural groups by where files live; Domain groups by what actually runs; one toggle swaps between them" src="docs/images/twoviews-dark.png" width="100%">
 </picture>
 
-<!-- HELD BANNERS — two pairs exist in the design file but are not published:
-  walkthrough-{dark,light}.png says "Thirteen steps" (and a "13 steps" chip);
-  the shipped walkthrough has fourteen — re-export without the number.
-  hero-{dark,light}.png says "in nine themes"; the dashboard ships two.
-  After re-export, drop the files into docs/images/ and give each its
-  <picture> block here (walkthrough) and wherever the hero should live.
+### The map stays, the conversation joins it
 
-  STALE since 2026-08-14: twoviews-{dark,light}.png shows "Structural |
-  Domain" pills and a "Structural" panel title; ticket 14 renamed the
-  visible grouping label to "Layer" (the provenance count keeps the word
-  "structural"). The alt text and docs/images/README.md's inventory line
-  describe the old label until the pair is re-exported.
-
-  RETIRED 2026-08-14: the seven capture-heavy pairs from the V1 showcase
-  (regions, flows, focus, search, ask, panel, share) came out with the
-  final banner set — their captures predate V2's drill view, magnify and
-  conversation column, and the panel and ask pairs showed retired UI. Git
-  history keeps them; a future capture pass can bring the ideas back. -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/conversation-dark.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/images/conversation-light.png">
+  <img alt="The conversation docked beside the canvas: follow-ups keep context, every read is scoped and metered, and the map stays drawn while you read" src="docs/images/conversation-dark.png" width="100%">
+</picture>
 
 ### You always know which parts a model wrote
 

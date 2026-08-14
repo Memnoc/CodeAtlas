@@ -10,33 +10,22 @@ drop-in replacement and no document changes. A renamed one is a broken slot.
 
 | Pair | What it shows | Where it lives |
 | --- | --- | --- |
-| `plate-{dark,light}.png` | Nameplate: the pitch and the day's map counts. | Masthead, before the intro. |
+| `plate-{dark,light}.png` | Nameplate: the pitch and the day's map counts. | Intro, after the first paragraph (the head slot belongs to the screen recording). |
 | `viz-{dark,light}.png` | Why a map: the code on the left becomes the picture on the right. Concept card, illustrative code. | After the intro. |
 | `pipeline-{dark,light}.png` | How it works: scan → map.json → optional `--enrich` → read or share. | How it works. |
 | `legend-{dark,light}.png` | How to read the map: region, edge, elevation, provenance. | Opens the tour. |
 | `tree-{dark,light}.png` | The shape of a repository: root, branch regions, files at the tips. Concept card, illustrative repo. | Tour. |
 | `constellation-{dark,light}.png` | Cards that know each other: uses, used-by, and the route between two corners. Concept card, illustrative repo. | Tour. |
-| `twoviews-{dark,light}.png` | Structural vs Domain grouping, one toggle apart. | Tour. |
+| `drill-{dark,light}.png` | The drill view: a dense region opens on the files it leans on, the rest one chip away. Concept card, illustrative repo. | Tour. |
+| `magnify-{dark,light}.png` | Magnify: one file redrawn alone with its direct neighbours — a lens, not a place. Concept card, illustrative repo. | Tour. |
+| `twoviews-{dark,light}.png` | Structural vs Domain grouping, one toggle apart. Designed card with day-of-map counts. | Tour. |
+| `conversation-{dark,light}.png` | The conversation docked beside the canvas: follow-ups keep context, reads scoped and metered. Concept card, illustrative repo. | Tour. |
 | `provenance-{dark,light}.png` | The two label kinds: `structural` vs `llm`, and what `share` strips. | Closes the tour. |
 
-The concept cards (`viz`, `tree`, `constellation`) draw an illustrative
-repository, not this one — the README's showcase copy says so, and must
-keep saying so as long as they are published.
-
-## Held pairs — exported, not published
-
-Two pairs exist in the design file but stay out of `docs/images/` until
-their copy stops contradicting the product:
-
-- **`hero-*`** says "in nine themes" — the dashboard ships two (Rosé Pine
-  Dawn and Moon; `dashboard/src/app/theme.ts` states this in its first
-  line). Drop the clause, or say two.
-- **`walkthrough-*`** says "Thirteen steps" with a "13 steps" chip, and its
-  screenshot shows "STEP 1 OF 13" — the shipped walkthrough has fourteen
-  steps and the count moves with the UI. Drop the number entirely.
-
-After re-export, add the files here and give each a `<picture>` block at
-the `HELD BANNERS` comment in the top-level README.
+The concept cards (`viz`, `tree`, `constellation`, `drill`, `magnify`,
+`conversation`) draw an illustrative repository, not this one — the
+README's showcase copy says so, and must keep saying so as long as they
+are published.
 
 ## Retired pairs — 2026-08-14
 
@@ -46,7 +35,11 @@ set: their embedded captures predate V2's drill view, magnify and
 conversation column, and the `panel` and `ask` pairs showed UI that no
 longer ships (the retired importer ranking; the answer band the column
 replaced). Git history keeps the files; a future capture pass against the
-V2 dashboard can bring the ideas back under the same names.
+V2 dashboard can bring the ideas back under the same names. The
+`conversation` card (added with the fixed set of 2026-08-14) carries
+`ask`'s story now. The `hero` and `walkthrough` pairs from the design file
+were never published and are no longer tracked; the banner set closed with
+the fixed export of 2026-08-14, on Memnoc's call.
 
 ## Re-exporting
 
