@@ -493,6 +493,104 @@ export function main(): void {
 }
 
 #[test]
+fn a_layer_description_is_bought_once_and_carried_over_by_membership() {
+    let repo = materialize("simple");
+    let canned = tempfile::tempdir().unwrap();
+    let provider = canned_provider(
+        canned.path(),
+        &[
+            (
+                "layer-description:src",
+                "The whole application: entry points, helpers and greeting logic.",
+            ),
+            ("layer-name:src", "Application core"),
+        ],
+    );
+    scan(repo.path(), true, Some(&provider)).success();
+    let map = read_map(repo.path());
+    assert_schema_valid(&map);
+
+    // Both purchases landed on the one layer, each under its own
+    // provenance; neither claimed the other's slot.
+    let src = layer(&map, "src");
+    assert_eq!(src["name"], "Application core");
+    assert_eq!(src["provenance"], "llm");
+    assert_eq!(
+        src["description"]["text"],
+        "The whole application: entry points, helpers and greeting logic."
+    );
+    assert_eq!(src["description"]["provenance"], "llm");
+    // An unanswered layer keeps the mechanical sentence — degrade, never
+    // break.
+    let root_layer = layer(&map, "root");
+    assert_eq!(
+        root_layer["description"]["text"],
+        "Files at the repository root"
+    );
+    assert_eq!(root_layer["description"]["provenance"], "structural");
+
+    // A plain rescan — no provider — reattaches the description for free.
+    scan(repo.path(), false, None).success();
+    let map = read_map(repo.path());
+    assert_schema_valid(&map);
+    let src = layer(&map, "src");
+    assert_eq!(
+        src["description"]["text"],
+        "The whole application: entry points, helpers and greeting logic."
+    );
+    assert_eq!(src["description"]["provenance"], "llm");
+
+    // Editing a member file's CONTENT changes no membership: the next
+    // --enrich must not re-buy the description.
+    let util = repo.path().join("src/util.ts");
+    let mut source = fs::read_to_string(&util).unwrap();
+    source.push_str("\n// edited\n");
+    fs::write(&util, source).unwrap();
+    let provider = canned_provider(
+        canned.path(),
+        &[("layer-description:src", "MUST NOT APPLY")],
+    );
+    scan(repo.path(), true, Some(&provider)).success();
+    let map = read_map(repo.path());
+    assert_eq!(
+        layer(&map, "src")["description"]["text"],
+        "The whole application: entry points, helpers and greeting logic.",
+        "a carried-over description was re-purchased"
+    );
+
+    // A new file in src/ changes the membership: the prose expires, the
+    // mechanical sentence returns, and the next --enrich re-selects the
+    // slot.
+    fs::write(
+        repo.path().join("src/extra.ts"),
+        "export function extra(): void {}\n",
+    )
+    .unwrap();
+    scan(repo.path(), false, None).success();
+    let map = read_map(repo.path());
+    assert_schema_valid(&map);
+    let src = layer(&map, "src");
+    assert_eq!(
+        src["description"]["text"], "Files under src/",
+        "stale prose must never describe a changed membership"
+    );
+    assert_eq!(src["description"]["provenance"], "structural");
+
+    let provider = canned_provider(
+        canned.path(),
+        &[("layer-description:src", "Fresh prose for the grown layer.")],
+    );
+    scan(repo.path(), true, Some(&provider)).success();
+    let map = read_map(repo.path());
+    assert_schema_valid(&map);
+    assert_eq!(
+        layer(&map, "src")["description"]["text"],
+        "Fresh prose for the grown layer."
+    );
+    assert_eq!(layer(&map, "src")["description"]["provenance"], "llm");
+}
+
+#[test]
 fn provider_failure_mid_run_leaves_a_complete_schema_valid_structural_map() {
     let repo = materialize("simple");
 

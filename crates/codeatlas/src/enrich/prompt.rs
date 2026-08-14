@@ -27,7 +27,9 @@ has a kind and a key; echo each slot's key exactly as given and answer for \
 every slot. Slot kinds: 'summary' — one concise sentence describing the \
 entity's purpose, grounded in its kind, name, path, and mechanical summary; \
 'layer-name' — a short human-readable name (a few words) for the group of \
-files under the given directory; 'flow-name' — a short business-domain name \
+files under the given directory; 'layer-description' — one sentence of prose \
+saying what the group of files under the given directory is, grounded in the \
+directory name and file count; 'flow-name' — a short business-domain name \
 for the call flow described by its entry point and steps; 'tour-label' — one \
 engaging sentence narrating this stop on a guided tour of the codebase, \
 grounded in the path and its import fan-in/fan-out.";
@@ -62,6 +64,12 @@ pub fn slot_payload(slot: &EnrichmentSlot) -> serde_json::Value {
         }),
         EnrichmentSlot::LayerName(s) => json!({
             "slot": "layer-name",
+            "key": key,
+            "directory": s.id,
+            "member_files": s.member_files,
+        }),
+        EnrichmentSlot::LayerDescription(s) => json!({
+            "slot": "layer-description",
             "key": key,
             "directory": s.id,
             "member_files": s.member_files,
@@ -290,7 +298,7 @@ mod tests {
     //! transports say the same thing.
 
     use super::*;
-    use crate::enrich::SummarySlot;
+    use crate::enrich::{LayerSlot, SummarySlot};
     use crate::map::{NodeId, NodeKind};
 
     fn summary_slot() -> EnrichmentSlot {
@@ -315,6 +323,33 @@ mod tests {
             fields,
             ["key", "kind", "mechanical_summary", "name", "path", "slot"],
             "the documented set of fields, and nothing else"
+        );
+    }
+
+    /// The description slot matches the layer-name slot's discipline: the
+    /// layer ID and its file count, never the member list, never edges — so
+    /// `docs/SECURITY.md`'s statement of what a model receives stays true
+    /// with the new kind in the request.
+    #[test]
+    fn a_layer_description_slot_carries_exactly_the_documented_fields() {
+        let payload = slot_payload(&EnrichmentSlot::LayerDescription(LayerSlot {
+            id: "src".into(),
+            member_files: 3,
+        }));
+        let fields: Vec<&str> = payload.as_object().unwrap().keys().map(|k| &**k).collect();
+
+        assert_eq!(
+            fields,
+            ["directory", "key", "member_files", "slot"],
+            "the layer ID and its file count, and nothing else"
+        );
+        assert_eq!(payload["slot"], "layer-description");
+        assert_eq!(payload["key"], "layer-description:src");
+        // The system prompt teaches every kind the request can carry; a slot
+        // the model was never told about gets guessed-at answers.
+        assert!(
+            SYSTEM_PROMPT.contains("'layer-description'"),
+            "the system prompt never mentions the kind: {SYSTEM_PROMPT}"
         );
     }
 

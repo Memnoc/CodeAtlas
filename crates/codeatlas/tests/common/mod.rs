@@ -119,7 +119,8 @@ pub fn node<'m>(map: &'m serde_json::Value, id: &str) -> &'m serde_json::Value {
 }
 
 /// Writes a canned-responses file (slot key → text; keys are prefixed by slot
-/// kind: `summary:<node-id>`, `layer-name:<layer-id>`, `flow-name:<flow-id>`,
+/// kind: `summary:<node-id>`, `layer-name:<layer-id>`,
+/// `layer-description:<layer-id>`, `flow-name:<flow-id>`,
 /// `tour-label:<node-id>`) OUTSIDE the scanned repo and returns the `fake:`
 /// provider spec selecting it.
 pub fn canned_provider(dir: &Path, answers: &[(&str, &str)]) -> String {

@@ -33,7 +33,8 @@
 //!
 //! - `fake:<path>` — canned typed responses from a JSON file mapping
 //!   slot key → text (see [`EnrichmentSlot::key`]), e.g.
-//!   `summary:<node-id>`, `layer-name:<layer-id>`, `flow-name:<flow-id>`,
+//!   `summary:<node-id>`, `layer-name:<layer-id>`,
+//!   `layer-description:<layer-id>`, `flow-name:<flow-id>`,
 //!   `tour-label:<node-id>`
 //! - `fail` — a provider that errors on every call (failure injection,
 //!   spec story 14)
@@ -164,6 +165,11 @@ pub struct TourSlot {
 pub enum EnrichmentSlot {
     NodeSummary(SummarySlot),
     LayerName(LayerSlot),
+    /// A structural layer's prose description (ticket 07). Carries the same
+    /// [`LayerSlot`] the name slot does — the layer ID and its file count,
+    /// never the member list — because the two are the same bounded question
+    /// about the same topology, asked for different prose.
+    LayerDescription(LayerSlot),
     FlowName(FlowSlot),
     TourLabel(TourSlot),
 }
@@ -178,6 +184,7 @@ impl EnrichmentSlot {
         match self {
             Self::NodeSummary(s) => summary_key(s.node.as_str()),
             Self::LayerName(s) => layer_key(&s.id),
+            Self::LayerDescription(s) => layer_description_key(&s.id),
             Self::FlowName(s) => flow_key(&s.id),
             Self::TourLabel(s) => tour_key(s.node.as_str()),
         }
@@ -190,6 +197,10 @@ fn summary_key(node_id: &str) -> String {
 
 fn layer_key(layer_id: &str) -> String {
     format!("layer-name:{layer_id}")
+}
+
+fn layer_description_key(layer_id: &str) -> String {
+    format!("layer-description:{layer_id}")
 }
 
 fn flow_key(flow_id: &str) -> String {
@@ -289,20 +300,26 @@ pub const ANNOTATIONS_FILE: &str = "annotations.json";
 /// Purely additive optional fields do not bump it. [`ProducedBy`] (ADR-0007)
 /// is the first: a store written without it holds annotations that are still
 /// correct, and charging every existing repository a re-enrichment to learn
-/// one date would be a worse outcome than not knowing the date.
+/// one date would be a worse outcome than not knowing the date. The
+/// `layer_descriptions` section (ticket 07) is the second, by the same rule:
+/// a store without it holds nothing wrong — it merely has no descriptions to
+/// offer, and the next `--enrich` buys exactly those — while a bump would
+/// discard every purchased summary and name to learn prose the run could
+/// have bought incrementally.
 const STORE_VERSION: u32 = 2;
 
 /// The carry-over store (ADR-0005): enrichment prose keyed by identity
 /// plus a hash of what derived it. Node annotations key on the node ID
 /// (which embeds the repo-relative path) plus the node's file content
-/// hash. Semantic annotations — layers, flows, tour steps — are not
-/// file-backed, so they key on their semantic identity (layer ID, flow ID,
-/// tour node ID) plus a hash of the mechanical inputs that derived them:
-/// the layer's sorted member set, the flow's step ID chain, the tour
-/// step's mechanical label (path + import fan-in/out + entry-point
-/// status). Annotations re-attach for free while their derivation is
-/// unchanged and expire the moment it changes — stale prose never
-/// describes new code or a new shape.
+/// hash. Semantic annotations — layer names and descriptions, flows, tour
+/// steps — are not file-backed, so they key on their semantic identity
+/// (layer ID, flow ID, tour node ID) plus a hash of the mechanical inputs
+/// that derived them: the layer's sorted member set (shared by its name
+/// and its description), the flow's step ID chain, the tour step's
+/// mechanical label (path + import fan-in/out + entry-point status).
+/// Annotations re-attach for free while their derivation is unchanged and
+/// expire the moment it changes — stale prose never describes new code or
+/// a new shape.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct AnnotationStore {
     version: u32,
@@ -314,6 +331,14 @@ pub struct AnnotationStore {
     annotations: BTreeMap<String, Annotation>,
     #[serde(default)]
     layers: BTreeMap<String, SemanticAnnotation>,
+    /// Purchased layer descriptions (ticket 07), keyed by layer ID and
+    /// carried by the SAME derivation-input hash the layer's name uses — the
+    /// sorted member set. Its own section rather than a second field on the
+    /// name's, because the two are separate purchases that expire together
+    /// but are bought apart. `default` because a store written before this
+    /// section existed must keep re-attaching everything it holds.
+    #[serde(default)]
+    layer_descriptions: BTreeMap<String, SemanticAnnotation>,
     #[serde(default)]
     flows: BTreeMap<String, SemanticAnnotation>,
     #[serde(default)]
@@ -477,8 +502,9 @@ impl AnnotationStore {
     /// graph: a node whose ID is in the store and whose file content still
     /// matches the recorded hash gets its enriched summary back (and `llm`
     /// provenance) without any provider call; a layer, flow, or tour step
-    /// whose derivation-input hash still matches gets its enriched name or
-    /// label back the same way. Everything else stays structural — an
+    /// whose derivation-input hash still matches gets its enriched name,
+    /// description, or label back the same way. Everything else stays
+    /// structural — an
     /// edited file's nodes and a changed derivation's labels revert and
     /// will be re-selected by the next `--enrich`.
     pub fn reattach(&self, root: &Path, graph: &mut KnowledgeGraph) {
@@ -498,7 +524,11 @@ impl AnnotationStore {
             }
         }
 
-        if self.layers.is_empty() && self.flows.is_empty() && self.tour.is_empty() {
+        if self.layers.is_empty()
+            && self.layer_descriptions.is_empty()
+            && self.flows.is_empty()
+            && self.tour.is_empty()
+        {
             return;
         }
         let hashes = semantic_hashes(graph);
@@ -508,6 +538,17 @@ impl AnnotationStore {
             {
                 layer.name = a.text.clone();
                 layer.provenance = Provenance::Llm;
+            }
+            // The description rides the same hash (ticket 07): while the
+            // membership is unchanged it re-attaches free, and the moment
+            // it changes the mechanical sentence stands.
+            if let Some(a) = self.layer_descriptions.get(&layer.id)
+                && hashes.layers.get(&layer.id) == Some(&a.inputs_hash)
+            {
+                layer.description = Some(crate::map::LayerDescription {
+                    text: a.text.clone(),
+                    provenance: Provenance::Llm,
+                });
             }
         }
         for flow in &mut graph.domain_flows {
@@ -571,6 +612,23 @@ fn save_store(root: &Path, graph: &KnowledgeGraph, identity: ProviderIdentity) -
             ))
         })
         .collect();
+    let layer_descriptions: BTreeMap<String, SemanticAnnotation> = graph
+        .layers
+        .iter()
+        .filter_map(|l| {
+            let description = l.description.as_ref()?;
+            if description.provenance != Provenance::Llm {
+                return None;
+            }
+            Some((
+                l.id.clone(),
+                SemanticAnnotation {
+                    inputs_hash: semantic.layers.get(&l.id)?.clone(),
+                    text: description.text.clone(),
+                },
+            ))
+        })
+        .collect();
     let flows: BTreeMap<String, SemanticAnnotation> = graph
         .domain_flows
         .iter()
@@ -604,6 +662,7 @@ fn save_store(root: &Path, graph: &KnowledgeGraph, identity: ProviderIdentity) -
         produced_by: Some(ProducedBy::today(identity)),
         annotations,
         layers,
+        layer_descriptions,
         flows,
         tour,
     };
@@ -834,8 +893,9 @@ fn thousands(n: usize) -> String {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
     /// No structural-provenance slot needed filling (empty map, or every
-    /// summary, layer name, flow name, and tour label already enriched or
-    /// carried over): no provider was resolved and no request was made.
+    /// summary, layer name, layer description, flow name, and tour label
+    /// already enriched or carried over): no provider was resolved and no
+    /// request was made.
     NothingToEnrich,
     /// The provider ran; this many slots were enriched.
     Enriched(usize),
@@ -884,7 +944,9 @@ pub fn run(root: &Path, graph: &mut KnowledgeGraph, choice: ProviderChoice<'_>) 
 
 /// The slots the provider would be asked to fill: only
 /// `structural`-provenance nodes, layers, flows, and tour steps are
-/// selected (ADR-0005 — enriched slots are never re-purchased). Every slot
+/// selected (ADR-0005 — enriched slots are never re-purchased). A layer's
+/// description is its own slot under its own provenance, so an enriched
+/// name and an unenriched description select independently. Every slot
 /// carries mechanically summarized topology only — member counts, step
 /// names, fan-in/out — never the serialized graph.
 fn collect_slots(graph: &KnowledgeGraph) -> Vec<EnrichmentSlot> {
@@ -916,6 +978,25 @@ fn collect_slots(graph: &KnowledgeGraph) -> Vec<EnrichmentSlot> {
             .filter(|l| l.provenance == Provenance::Structural)
             .map(|l| {
                 EnrichmentSlot::LayerName(LayerSlot {
+                    id: l.id.clone(),
+                    member_files: member_files.get(l.id.as_str()).copied().unwrap_or(0),
+                })
+            }),
+    );
+    // The description is the layer's second slot, selected by its own
+    // provenance: a layer whose name is already enriched can still owe a
+    // description, and the reverse (ticket 07).
+    slots.extend(
+        graph
+            .layers
+            .iter()
+            .filter(|l| {
+                l.description
+                    .as_ref()
+                    .is_none_or(|d| d.provenance == Provenance::Structural)
+            })
+            .map(|l| {
+                EnrichmentSlot::LayerDescription(LayerSlot {
                     id: l.id.clone(),
                     member_files: member_files.get(l.id.as_str()).copied().unwrap_or(0),
                 })
@@ -1145,12 +1226,26 @@ fn apply_answers(graph: &mut KnowledgeGraph, answers: &BTreeMap<String, String>)
         }
     }
     for layer in &mut graph.layers {
-        if layer.provenance != Provenance::Structural {
-            continue;
-        }
-        if let Some(text) = answered(answers, &layer_key(&layer.id)) {
+        // The name and the description are separate purchases with separate
+        // provenance: an enriched name never blocks a description answer,
+        // and neither answer can land in the other's slot.
+        if layer.provenance == Provenance::Structural
+            && let Some(text) = answered(answers, &layer_key(&layer.id))
+        {
             layer.name = text.to_string();
             layer.provenance = Provenance::Llm;
+            count += 1;
+        }
+        if layer
+            .description
+            .as_ref()
+            .is_none_or(|d| d.provenance == Provenance::Structural)
+            && let Some(text) = answered(answers, &layer_description_key(&layer.id))
+        {
+            layer.description = Some(crate::map::LayerDescription {
+                text: text.to_string(),
+                provenance: Provenance::Llm,
+            });
             count += 1;
         }
     }
@@ -1691,6 +1786,16 @@ mod tests {
         graph
     }
 
+    /// [`graph_with_semantics`] with the file nodes made members of `src`,
+    /// so the layer's derivation-input hash is over a real member set and a
+    /// membership change is expressible.
+    fn layered_graph() -> KnowledgeGraph {
+        let mut graph = graph_with_semantics();
+        graph.nodes[0].layer = Some("src".into());
+        graph.nodes[2].layer = Some("src".into());
+        graph
+    }
+
     /// Canned answers plus a recording of every request's slot keys.
     struct Fake {
         answers: BTreeMap<String, String>,
@@ -1795,9 +1900,9 @@ mod tests {
     #[test]
     fn slot_addressing_is_collision_proof_across_kinds() {
         // `file:src/a.ts` identifies both a node summary slot and a tour
-        // label slot; the prefixed keys keep the namespaces apart. And an
-        // answer under a bare node ID (the pre-slot-kind format) matches
-        // nothing at all.
+        // label slot, and `src` identifies both of the layer's slots; the
+        // prefixed keys keep the namespaces apart. And an answer under a
+        // bare node ID (the pre-slot-kind format) matches nothing at all.
         let mut graph = graph_with_semantics();
         let fake = Fake {
             answers: BTreeMap::from([
@@ -1808,6 +1913,10 @@ mod tests {
                 (
                     "tour-label:file:src/a.ts".to_string(),
                     "Tour prose.".to_string(),
+                ),
+                (
+                    "layer-description:src".to_string(),
+                    "Layer prose.".to_string(),
                 ),
                 (
                     "function:src/a.ts:go".to_string(),
@@ -1826,9 +1935,15 @@ mod tests {
             "an unprefixed answer must not land in any slot"
         );
         assert_eq!(graph.nodes[1].provenance, Provenance::Structural);
-        // The layer and flow got no answers: mechanical, structural.
+        // The description answer reached the description alone: the layer's
+        // *name* got no `layer-name:` answer, so it stays mechanical even
+        // though an answer addressed to the same layer ID existed.
+        let description = graph.layers[0].description.as_ref().unwrap();
+        assert_eq!(description.text, "Layer prose.");
+        assert_eq!(description.provenance, Provenance::Llm);
         assert_eq!(graph.layers[0].name, "src");
         assert_eq!(graph.layers[0].provenance, Provenance::Structural);
+        // The flow got no answer: mechanical, structural.
         assert_eq!(graph.domain_flows[0].name, "go");
         assert_eq!(graph.domain_flows[0].provenance, Provenance::Structural);
     }
@@ -1837,12 +1952,17 @@ mod tests {
     fn enriched_semantic_slots_are_not_reoffered() {
         let mut graph = graph_with_semantics();
         graph.layers[0].provenance = Provenance::Llm;
+        graph.layers[0].description.as_mut().unwrap().provenance = Provenance::Llm;
         graph.domain_flows[0].provenance = Provenance::Llm;
         graph.tour[0].provenance = Provenance::Llm;
 
         let fake = Fake {
             answers: BTreeMap::from([
                 ("layer-name:src".to_string(), "MUST NOT APPLY".to_string()),
+                (
+                    "layer-description:src".to_string(),
+                    "MUST NOT APPLY".to_string(),
+                ),
                 (
                     "flow-name:flow:function:src/a.ts:go".to_string(),
                     "MUST NOT APPLY".to_string(),
@@ -1867,11 +1987,316 @@ mod tests {
         }
         // … and an uninvited answer for them never lands.
         assert_eq!(graph.layers[0].name, "src");
+        assert_eq!(
+            graph.layers[0].description.as_ref().unwrap().text,
+            "Files under src/"
+        );
         assert_eq!(graph.domain_flows[0].name, "go");
         assert_eq!(
             graph.tour[0].label,
             "Entry point: src/a.ts — fan-in 0, fan-out 0"
         );
+    }
+
+    #[test]
+    fn a_description_answer_lands_in_the_description_and_never_in_the_name() {
+        let mut graph = graph_with_semantics();
+        let fake = Fake {
+            answers: BTreeMap::from([(
+                "layer-description:src".to_string(),
+                "Owns the application's whole runtime.".to_string(),
+            )]),
+            requested: Mutex::new(Vec::new()),
+        };
+
+        let count = fill_slots(&mut graph, &fake).unwrap();
+        assert_eq!(count, 1, "a description answer must count as enrichment");
+
+        assert!(
+            fake.requested
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|k| k == "layer-description:src"),
+            "the description slot was never offered: {:?}",
+            fake.requested.lock().unwrap()
+        );
+
+        let layer = &graph.layers[0];
+        let description = layer.description.as_ref().expect("description missing");
+        assert_eq!(description.text, "Owns the application's whole runtime.");
+        assert_eq!(description.provenance, Provenance::Llm);
+        // Never the name: it keeps its mechanical text and its own
+        // provenance — the two are separate purchases.
+        assert_eq!(layer.name, "src");
+        assert_eq!(layer.provenance, Provenance::Structural);
+    }
+
+    #[test]
+    fn name_and_description_are_separate_purchases_that_coexist_on_one_layer() {
+        let mut graph = graph_with_semantics();
+        let fake = Fake {
+            answers: BTreeMap::from([
+                ("layer-name:src".to_string(), "Application core".to_string()),
+                (
+                    "layer-description:src".to_string(),
+                    "Everything the app runs, from entry to helpers.".to_string(),
+                ),
+            ]),
+            requested: Mutex::new(Vec::new()),
+        };
+
+        let count = fill_slots(&mut graph, &fake).unwrap();
+        assert_eq!(count, 2, "the name and the description are two purchases");
+
+        let layer = &graph.layers[0];
+        assert_eq!(layer.name, "Application core");
+        assert_eq!(layer.provenance, Provenance::Llm);
+        let description = layer.description.as_ref().unwrap();
+        assert_eq!(
+            description.text,
+            "Everything the app runs, from entry to helpers."
+        );
+        assert_eq!(description.provenance, Provenance::Llm);
+    }
+
+    #[test]
+    fn an_enriched_half_of_a_layer_is_not_reoffered_while_the_other_half_is() {
+        // Name already purchased, description still mechanical: only the
+        // description may be offered, and only its answer may land.
+        let mut graph = graph_with_semantics();
+        graph.layers[0].name = "Application core".into();
+        graph.layers[0].provenance = Provenance::Llm;
+        let fake = Fake {
+            answers: BTreeMap::from([
+                ("layer-name:src".to_string(), "MUST NOT APPLY".to_string()),
+                (
+                    "layer-description:src".to_string(),
+                    "Fresh prose.".to_string(),
+                ),
+            ]),
+            requested: Mutex::new(Vec::new()),
+        };
+        let count = fill_slots(&mut graph, &fake).unwrap();
+        assert_eq!(count, 1);
+        assert!(
+            !fake
+                .requested
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|k| k == "layer-name:src"),
+            "an enriched name was re-offered"
+        );
+        assert_eq!(graph.layers[0].name, "Application core");
+        assert_eq!(
+            graph.layers[0].description.as_ref().unwrap().text,
+            "Fresh prose."
+        );
+
+        // And the reverse: description purchased, name still mechanical.
+        let mut graph = graph_with_semantics();
+        graph.layers[0].description = Some(crate::map::LayerDescription {
+            text: "Bought prose.".into(),
+            provenance: Provenance::Llm,
+        });
+        let fake = Fake {
+            answers: BTreeMap::from([
+                ("layer-name:src".to_string(), "New name".to_string()),
+                (
+                    "layer-description:src".to_string(),
+                    "MUST NOT APPLY".to_string(),
+                ),
+            ]),
+            requested: Mutex::new(Vec::new()),
+        };
+        let count = fill_slots(&mut graph, &fake).unwrap();
+        assert_eq!(count, 1);
+        assert!(
+            !fake
+                .requested
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|k| k == "layer-description:src"),
+            "an enriched description was re-offered"
+        );
+        assert_eq!(graph.layers[0].name, "New name");
+        assert_eq!(
+            graph.layers[0].description.as_ref().unwrap().text,
+            "Bought prose.",
+            "a carried-over description was overwritten"
+        );
+    }
+
+    #[test]
+    fn the_plan_counts_a_description_slot_for_every_structural_layer() {
+        // graph_with_semantics: two structural nodes, one structural layer —
+        // which contributes TWO slots, its name and its description — one
+        // flow, one tour step. Six slots, so `--dry-run` quotes what a run
+        // will really buy.
+        let graph = graph_with_semantics();
+        let plan = Plan::of(&graph);
+        assert_eq!(
+            plan.slots(),
+            6,
+            "the estimate must count the description slot"
+        );
+        let descriptions: Vec<&LayerSlot> = plan
+            .requests
+            .iter()
+            .flat_map(|r| &r.slots)
+            .filter_map(|s| match s {
+                EnrichmentSlot::LayerDescription(l) => Some(l),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(descriptions.len(), 1, "one structural layer, one slot");
+        assert_eq!(descriptions[0].id, "src");
+    }
+
+    #[test]
+    fn a_purchased_description_is_stored_on_the_hash_the_name_uses_and_reattaches() {
+        let root = TempRoot::new("description-carry-over");
+        let mut graph = layered_graph();
+        graph.layers[0].name = "Application core".into();
+        graph.layers[0].provenance = Provenance::Llm;
+        graph.layers[0].description = Some(crate::map::LayerDescription {
+            text: "Purchased prose about src.".into(),
+            provenance: Provenance::Llm,
+        });
+        save_store(root.path(), &graph, ProviderIdentity::unnamed()).unwrap();
+
+        // Stored under its own section, keyed by layer ID, on the SAME
+        // derivation-input hash the name annotation carries — ADR-0005
+        // applied to one more slot, never a new carry-over mechanism.
+        let written: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(
+                root.path()
+                    .join(crate::scan::OUTPUT_DIR)
+                    .join(ANNOTATIONS_FILE),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            written["layer_descriptions"]["src"]["text"],
+            "Purchased prose about src."
+        );
+        assert_eq!(
+            written["layer_descriptions"]["src"]["inputs_hash"],
+            written["layers"]["src"]["inputs_hash"],
+            "the description must ride the name's derivation hash: {written}"
+        );
+
+        // A fresh mechanical graph with unchanged membership gets both back
+        // without any provider.
+        let mut fresh = layered_graph();
+        AnnotationStore::load(root.path()).reattach(root.path(), &mut fresh);
+        assert_eq!(fresh.layers[0].name, "Application core");
+        assert_eq!(fresh.layers[0].provenance, Provenance::Llm);
+        let description = fresh.layers[0].description.as_ref().unwrap();
+        assert_eq!(description.text, "Purchased prose about src.");
+        assert_eq!(description.provenance, Provenance::Llm);
+    }
+
+    #[test]
+    fn a_changed_membership_expires_the_description_exactly_as_it_expires_the_name() {
+        let root = TempRoot::new("description-expiry");
+        let mut graph = layered_graph();
+        graph.layers[0].name = "Application core".into();
+        graph.layers[0].provenance = Provenance::Llm;
+        graph.layers[0].description = Some(crate::map::LayerDescription {
+            text: "Purchased prose about src.".into(),
+            provenance: Provenance::Llm,
+        });
+        save_store(root.path(), &graph, ProviderIdentity::unnamed()).unwrap();
+
+        // Same layer, one more member file: the derivation hash moves, and
+        // both annotations expire together.
+        let mut changed = layered_graph();
+        let mut extra = node(
+            NodeId::file("src/new.ts"),
+            NodeKind::File,
+            "new.ts",
+            "src/new.ts",
+            Provenance::Structural,
+        );
+        extra.layer = Some("src".into());
+        changed.nodes.push(extra);
+        AnnotationStore::load(root.path()).reattach(root.path(), &mut changed);
+
+        assert_eq!(changed.layers[0].name, "src", "the stale name must expire");
+        assert_eq!(changed.layers[0].provenance, Provenance::Structural);
+        let description = changed.layers[0].description.as_ref().unwrap();
+        assert_eq!(
+            description.text, "Files under src/",
+            "stale prose must never describe a changed membership"
+        );
+        assert_eq!(description.provenance, Provenance::Structural);
+    }
+
+    /// The store-version decision this ticket records: `layer_descriptions`
+    /// is a purely additive optional section, so [`STORE_VERSION`] stays at
+    /// 2 — a bump is a bill (every committed store would be discarded and
+    /// every repository charged a re-enrichment), and a store without the
+    /// section holds annotations that are still *correct*. What the decision
+    /// must buy is asserted here: a store written before this ticket keeps
+    /// re-attaching everything it holds.
+    #[test]
+    fn a_store_written_before_descriptions_existed_keeps_reattaching_what_it_holds() {
+        let root = TempRoot::new("pre-description-store");
+        fs::create_dir_all(root.path().join("src")).unwrap();
+        fs::write(root.path().join("src/a.ts"), b"node body").unwrap();
+
+        let mut graph = layered_graph();
+        // Significance puts src/a.ts on the recomputed tour, so the stored
+        // tour label has a derivation to match.
+        graph.nodes[0].significance = Some(1);
+        let hashes = semantic_hashes(&graph);
+        let dir = root.path().join(crate::scan::OUTPUT_DIR);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(ANNOTATIONS_FILE),
+            format!(
+                r#"{{
+  "version": {STORE_VERSION},
+  "annotations": {{
+    "file:src/a.ts": {{"content_hash": "{}", "summary": "Old node prose."}}
+  }},
+  "layers": {{
+    "src": {{"inputs_hash": "{}", "text": "Old layer name"}}
+  }},
+  "flows": {{
+    "flow:function:src/a.ts:go": {{"inputs_hash": "{}", "text": "Old flow name"}}
+  }},
+  "tour": {{
+    "file:src/a.ts": {{"inputs_hash": "{}", "text": "Old tour label"}}
+  }}
+}}"#,
+                content_hash(b"node body"),
+                hashes.layers["src"],
+                hashes.flows["flow:function:src/a.ts:go"],
+                hashes.tour["file:src/a.ts"],
+            ),
+        )
+        .unwrap();
+
+        AnnotationStore::load(root.path()).reattach(root.path(), &mut graph);
+
+        assert_eq!(graph.nodes[0].summary, "Old node prose.");
+        assert_eq!(graph.nodes[0].provenance, Provenance::Llm);
+        assert_eq!(graph.layers[0].name, "Old layer name");
+        assert_eq!(graph.layers[0].provenance, Provenance::Llm);
+        assert_eq!(graph.domain_flows[0].name, "Old flow name");
+        assert_eq!(graph.domain_flows[0].provenance, Provenance::Llm);
+        assert_eq!(graph.tour[0].label, "Old tour label");
+        assert_eq!(graph.tour[0].provenance, Provenance::Llm);
+        // The description the store never heard of stays mechanical —
+        // present, structural, free for the next --enrich to buy.
+        let description = graph.layers[0].description.as_ref().unwrap();
+        assert_eq!(description.text, "Files under src/");
+        assert_eq!(description.provenance, Provenance::Structural);
     }
 
     #[test]
@@ -2005,6 +2430,7 @@ mod tests {
         let fake = Fake {
             answers: BTreeMap::from([
                 ("layer-name:src".to_string(), "".to_string()),
+                ("layer-description:src".to_string(), " \t ".to_string()),
                 (
                     "flow-name:flow:function:src/a.ts:go".to_string(),
                     "  ".to_string(),
@@ -2019,6 +2445,11 @@ mod tests {
 
         assert_eq!(graph.layers[0].name, "src");
         assert_eq!(graph.layers[0].provenance, Provenance::Structural);
+        // A refused description never replaces the mechanical sentence — the
+        // reader must never meet an empty card.
+        let description = graph.layers[0].description.as_ref().unwrap();
+        assert_eq!(description.text, "Files under src/");
+        assert_eq!(description.provenance, Provenance::Structural);
         assert_eq!(graph.domain_flows[0].name, "go");
         assert_eq!(graph.domain_flows[0].provenance, Provenance::Structural);
         assert_eq!(
@@ -2589,8 +3020,9 @@ mod test_provider {
 
     /// Canned typed responses from a JSON file keyed by slot address:
     /// `{ "<slot-key>": "<text>" }`, where a slot key is
-    /// `summary:<node-id>`, `layer-name:<layer-id>`, `flow-name:<flow-id>`,
-    /// or `tour-label:<node-id>` (see [`EnrichmentSlot::key`]). A key with
+    /// `summary:<node-id>`, `layer-name:<layer-id>`,
+    /// `layer-description:<layer-id>`, `flow-name:<flow-id>`, or
+    /// `tour-label:<node-id>` (see [`EnrichmentSlot::key`]). A key with
     /// no prefix — or the wrong prefix — never matches any slot.
     pub struct CannedProvider {
         pub path: PathBuf,

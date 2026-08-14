@@ -85,9 +85,9 @@ the rest in the header tally — enriched layer *names* render unbadged on
 cards, by long-standing choice.
 
 **Enrichment**:
-The optional, paid pass that buys prose — names, summaries, tour labels —
-from a provider. It may relabel what the mechanical pass created; it never
-creates structure (ADR-0004).
+The optional, paid pass that buys prose — names, descriptions, summaries,
+tour labels — from a provider. It may relabel what the mechanical pass
+created; it never creates structure (ADR-0004).
 
 **Provider**:
 A backend that answers enrichment requests and questions: the Claude API

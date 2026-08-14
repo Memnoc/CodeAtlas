@@ -397,12 +397,13 @@ and the diff overlay — stays ignored.
 This is a disclosure decision and belongs in an audit document, because it
 sends LLM-written prose into git without anyone asking for it each time. What
 the store holds is exactly what the map's enrichable slots hold: node
-summaries, layer names, domain-flow names and tour labels. Two keyings, not
-one. A node summary is keyed by node id — which embeds a repo-relative path —
-and carries a hash of that file's contents, so editing the file expires the
-prose. A layer or domain-flow label is keyed by the layer's or the flow's own
-id, and a tour label by the tour stop's node id; each of those carries an
-`inputs_hash` over the *derivation inputs* the label was bought for
+summaries, layer names and descriptions, domain-flow names and tour labels.
+Two keyings, not one. A node summary is keyed by node id — which embeds a
+repo-relative path — and carries a hash of that file's contents, so editing
+the file expires the prose. A layer's name or description is keyed by the
+layer's own id (the two ride the same membership hash), a domain-flow label
+by the flow's, and a tour label by the tour stop's node id; each of those
+carries an `inputs_hash` over the *derivation inputs* the label was bought for
 (membership, step chains), which is what expires a name for a shape that has
 changed. Neither keying holds file contents, for the reason guarantee 2 gives
 — the model is never sent any, so there are none for it to paraphrase.
