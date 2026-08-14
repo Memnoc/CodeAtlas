@@ -141,6 +141,23 @@ export function MapExplorer({
   const searchRow = useRef<HTMLDivElement | null>(null);
   const searchInput = useRef<HTMLInputElement | null>(null);
   const [tab, setTab] = useState<Tab>("info");
+  // The FILES tab's filter, region folds and open symbol list (story 22).
+  // Held by the component that owns the tabs, not by the panel, because the
+  // panel unmounts two ways — switching to another tab, folding the sidebar —
+  // and state kept inside it was lost both times. Hoisted useState and props
+  // down, deliberately nothing more: the ticket's own fence is that the
+  // moment this becomes a state-management abstraction for the whole
+  // sidebar, it has outgrown the story it serves.
+  //
+  // Folds are the *expanded* set rather than the collapsed one, so the
+  // default is folded and a region that appears later — switching
+  // Domain/Layer rebuilds them all — is folded too, without anything having
+  // to notice it arrived.
+  const [filesOpenId, setFilesOpenId] = useState<string | null>(null);
+  const [filesFilter, setFilesFilter] = useState("");
+  const [filesExpanded, setFilesExpanded] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
   const [pathOpen, setPathOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [pathFrom, setPathFrom] = useState<MapNode | null>(null);
@@ -912,7 +929,17 @@ export function MapExplorer({
               Domain | Layer only changes how the canvas groups files,
               which the Info panel then describes either way. */}
           {tab === "files" ? (
-            <FilesPanel map={map} regions={regions} onSelectNode={reveal} />
+            <FilesPanel
+              map={map}
+              regions={regions}
+              onSelectNode={reveal}
+              openId={filesOpenId}
+              onOpenId={setFilesOpenId}
+              filter={filesFilter}
+              onFilter={setFilesFilter}
+              expanded={filesExpanded}
+              onExpanded={setFilesExpanded}
+            />
           ) : mode === "learn" ? (
             <>
               <TourPanel

@@ -16,25 +16,39 @@
 // screen and never leaves it. Matching only on path is what keeps the two
 // distinguishable — a box here that also found symbols by name would be the
 // header's search box in a worse position.
-import { useMemo, useState } from "react";
+import { useMemo, type Dispatch, type SetStateAction } from "react";
 import type { KnowledgeGraph, Node as MapNode } from "../index.js";
 import type { Region } from "./regions.js";
 
+// The filter, the region folds and the open symbol list are props, not local
+// state (story 22): this panel unmounts whenever the reader switches tabs or
+// folds the sidebar, and state kept here died with it. The explorer that owns
+// the tabs holds it and hands it down, so the panel comes back as it was left.
 export function FilesPanel({
   map,
   regions,
   onSelectNode,
+  openId,
+  onOpenId,
+  filter,
+  onFilter,
+  expanded,
+  onExpanded,
 }: {
   map: KnowledgeGraph;
   regions: readonly Region[];
   onSelectNode: (id: string) => void;
+  /** The one file whose symbols are listed, or null for none. */
+  openId: string | null;
+  onOpenId: (id: string | null) => void;
+  /** The filter box's text, exactly as typed. */
+  filter: string;
+  onFilter: (text: string) => void;
+  /** The regions unfolded by hand — a `SetStateAction` setter, because the
+   * toggle below updates from the previous set. */
+  expanded: ReadonlySet<string>;
+  onExpanded: Dispatch<SetStateAction<ReadonlySet<string>>>;
 }) {
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [filter, setFilter] = useState("");
-  // Expanded rather than collapsed, so the default is folded and a region that
-  // appears later — switching Domain/Layer rebuilds them all — is folded
-  // too, without anything having to notice it arrived.
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
 
   // Symbols under each file, through the containment edges that put them
   // there — the map's own answer, rather than a second guess from paths.
@@ -81,7 +95,7 @@ export function FilesPanel({
         aria-label="Filter files"
         placeholder="Filter these files by path…"
         value={filter}
-        onChange={(e) => setFilter(e.target.value)}
+        onChange={(e) => onFilter(e.target.value)}
       />
 
       {query !== "" && shown.length === 0 && (
@@ -105,7 +119,7 @@ export function FilesPanel({
                 className="files-region-toggle"
                 aria-expanded={regionOpen}
                 onClick={() =>
-                  setExpanded((was) => {
+                  onExpanded((was) => {
                     const next = new Set(was);
                     if (!next.delete(region.id)) {
                       next.add(region.id);
@@ -148,7 +162,7 @@ export function FilesPanel({
                             className="file-expand"
                             aria-expanded={open}
                             aria-label={`${open ? "Hide" : "Show"} the ${contained.length} symbols in ${file.path}`}
-                            onClick={() => setOpenId(open ? null : file.id)}
+                            onClick={() => onOpenId(open ? null : file.id)}
                           >
                             {contained.length}
                           </button>

@@ -204,6 +204,109 @@ describe("the files tab filters what it shows", () => {
   });
 });
 
+describe("the files tab remembers what you were doing (story 22)", () => {
+  // The panel unmounts in two ways — switching to another tab, and folding
+  // the whole sidebar away — and state kept inside it died with it both
+  // times. These drive each gesture as a round trip and assert the panel
+  // comes back as it was left. Nothing here asserts where the state lives;
+  // hoisting is the mechanism, surviving the round trip is the behaviour.
+
+  /** Open region headings until a row with a symbols expander is on screen —
+   * not every region in the fixture holds one. */
+  async function openUntilExpander(
+    user: ReturnType<typeof userEvent.setup>,
+  ): Promise<HTMLElement> {
+    for (const toggle of screen
+      .getAllByRole("button")
+      .filter((b) => b.classList.contains("files-region-toggle"))) {
+      await user.click(toggle);
+      const expander = document.querySelector<HTMLElement>(".file-expand");
+      if (expander !== null) {
+        return expander;
+      }
+    }
+    throw new Error("no region in the fixture contains a file with symbols");
+  }
+
+  it("keeps the filter across a tab round trip", async () => {
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+    await openFiles(user);
+
+    await user.type(screen.getByLabelText("Filter files"), "src");
+    const filtered = rows();
+    expect(filtered.length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("tab", { name: "Info" }));
+    await openFiles(user);
+
+    // The text is still in the box and still filtering: same rows, not a
+    // fresh unfiltered tab that happens to have a value somewhere.
+    expect(screen.getByLabelText("Filter files")).toHaveValue("src");
+    expect(rows()).toEqual(filtered);
+  });
+
+  it("keeps the folds and the open symbol list across a tab round trip", async () => {
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+    await openFiles(user);
+
+    const expander = await openUntilExpander(user);
+    const opened = rows();
+    expect(opened.length).toBeGreaterThan(0);
+    await user.click(expander);
+    expect(document.querySelectorAll(".symbol-list li").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("tab", { name: "Info" }));
+    await openFiles(user);
+
+    expect(rows()).toEqual(opened);
+    expect(
+      document.querySelector<HTMLElement>(".file-expand"),
+    ).toHaveAttribute("aria-expanded", "true");
+    expect(document.querySelectorAll(".symbol-list li").length).toBeGreaterThan(0);
+  });
+
+  it("keeps the filter across folding and unfolding the sidebar", async () => {
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+    await openFiles(user);
+
+    await user.type(screen.getByLabelText("Filter files"), "src");
+    const filtered = rows();
+    expect(filtered.length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "Hide the side panel" }));
+    expect(screen.queryByLabelText("Filter files")).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Panel/ }));
+
+    // The FILES tab is still the selected tab — that state already lives in
+    // the explorer — so the panel is back without another click, filter and
+    // all.
+    expect(screen.getByLabelText("Filter files")).toHaveValue("src");
+    expect(rows()).toEqual(filtered);
+  });
+
+  it("keeps the folds and the open symbol list across folding and unfolding the sidebar", async () => {
+    const user = userEvent.setup();
+    render(<MapExplorer map={map} />);
+    await openFiles(user);
+
+    const expander = await openUntilExpander(user);
+    const opened = rows();
+    expect(opened.length).toBeGreaterThan(0);
+    await user.click(expander);
+
+    await user.click(screen.getByRole("button", { name: "Hide the side panel" }));
+    await user.click(screen.getByRole("button", { name: /Panel/ }));
+
+    expect(rows()).toEqual(opened);
+    expect(
+      document.querySelector<HTMLElement>(".file-expand"),
+    ).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
 describe("the filter and the header's search are different things", () => {
   it("matches paths only, leaving summaries to the header's search", async () => {
     // Both boxes are on screen at once and the distinction is the only reason
