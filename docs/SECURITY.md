@@ -87,6 +87,34 @@ answer questions.
 (`crates/codeatlas/src/serve.rs`); there is no `--host` flag, so the
 listener cannot be pointed at a routable interface.
 
+#### The served surface, in full
+
+The route list below is the code's own dispatch table — `serve::REGISTRY`
+(`crates/codeatlas/src/serve.rs`), the `const` slice `handle` walks — so a
+route absent from it is not served at all, and this list cannot be more or
+less than what the server answers:
+
+- `GET /api/map` — the map JSON, read from disk per request
+- `GET /api/diff` — the diff overlay, when `codeatlas diff` has written one;
+  404 otherwise, which is how the dashboard knows to hide its toggle
+- `GET /api/capabilities` — one boolean: whether this process was started
+  with `--ask`
+- `POST /api/ask` — registered only while `--ask` puts a backend behind it;
+  without the flag the route does not exist rather than existing and
+  refusing, which is guarantee 1's plain-`serve` claim above
+
+Every other GET is answered from the embedded dashboard assets in process
+memory, or 404s — the dashboard itself, every remaining path rather than a
+route with one of its own. Any other method is a 405.
+
+**Enforced by** `every_registered_route_is_named_in_the_security_document`
+(`crates/codeatlas/tests/routes.rs`): it derives the route set from
+`serve::REGISTRY` and fails, naming the route and this document, when one is
+not named here — so a route can no longer ship undocumented, which this
+document did let happen three times during V1. The registry rather than a
+source scanner, deliberately: a scanner that recognises a spelling
+convention cannot fail for a route spelled unexpectedly.
+
 **CI:** the `rust` job (default features) and both legs of the
 `feature-configuration` matrix — sealed, and `agent-cli` without `network` —
 run this suite on `ubuntu-latest`. The counter-tests need the API backend, so
@@ -486,6 +514,16 @@ text — those claims are about what git does:
   them. CI on `ubuntu-latest`, where user namespaces work, is the enforcing
   environment; that runner assumption is stated in
   `crates/codeatlas/tests/egress.rs`.
+- **The netns tests prove no TCP egress, not the absence of a DNS channel.**
+  `unshare -r -n` removes every route off the host, so a command that
+  succeeds inside the namespace has proven it needs no network — but a
+  binary that fired resolver queries and shrugged off their failure would
+  pass there exactly as a clean one does, because nothing in the suite
+  watches the resolver. The complementary guarantee is the sealed
+  dependency-tree probe (guarantee 3,
+  `sealed_dependency_tree_links_no_networking_crates`): evidence about what
+  code exists in the sealed build — no networking crates at all — rather
+  than about what one run inside a namespace happened to do.
 - **Subprocesses resolved via `PATH`.** Two programs are run by name, so a
   hostile executable earlier on the user's `PATH` runs with the user's
   privileges — the standard trust model of any CLI that shells out, noted

@@ -2,9 +2,11 @@
 //! — only when asked for — questions about the map (ticket 34).
 //!
 //! The server is a hand-rolled HTTP/1.1 responder on `std::net::TcpListener`
-//! rather than a server crate: four GET routes, one optional POST, and zero
-//! TLS/streaming/routing machinery, so even the smallest server dependency
-//! (tiny_http and its transitive tree) would be more code than this file.
+//! rather than a server crate: three GET routes and one optional POST — all
+//! declared in [`REGISTRY`], the table `handle` dispatches through — plus
+//! the embedded-asset fallback, and zero TLS/streaming/routing machinery, so
+//! even the smallest server dependency (tiny_http and its transitive tree)
+//! would be more code than this file.
 //! Under ADR-0006 the serve path must survive a security audit by reading it
 //! — a screenful of std with one hardcoded loopback bind is the strongest
 //! form of that argument.
@@ -153,16 +155,97 @@ pub const ASK_ROUTE: &str = "/api/ask";
 /// whether the route is there.
 pub const CAPABILITIES_ROUTE: &str = "/api/capabilities";
 
+/// What answers one registered route — the dispatch half of a [`REGISTRY`]
+/// entry, kept apart so each entry stays one readable line of facts.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Endpoint {
+    /// The map JSON, read from disk per request.
+    Map,
+    /// The diff overlay, optional on disk.
+    Diff,
+    /// One boolean about this process: whether [`ASK_ROUTE`] is registered.
+    Capabilities,
+    /// A question, answered through the provider `--ask` resolved.
+    Ask,
+}
+
+/// One route this server answers: the request line that selects it, and the
+/// endpoint that answers it. The fields a request is matched on are public
+/// so `tests/routes.rs` can derive the served surface from the same table
+/// [`handle`] walks; the struct cannot be built outside this module, so the
+/// registry stays closed.
+pub struct Route {
+    pub method: &'static str,
+    pub path: &'static str,
+    endpoint: Endpoint,
+}
+
+/// Every route this server can answer, and the only place one is declared:
+/// [`handle`] dispatches by walking this slice, so a route absent from it is
+/// not served at all — the code and the route list are the same thing, which
+/// is what lets `tests/routes.rs` hold `docs/SECURITY.md` to naming every
+/// entry (V2 story 17; deferred ticket 36, the registry chosen over a source
+/// scanner because a scanner that recognises a spelling convention cannot
+/// fail for a route spelled unexpectedly).
+///
+/// [`ASK_ROUTE`] is the one conditional entry: [`Routes::route`] registers
+/// it only while a backend stands behind it, so without `--ask` that route
+/// does not exist rather than existing and refusing — a plain `serve` still
+/// answers the POST with the same 405 as any other non-GET.
+///
+/// Deliberately not in this table: the embedded-asset fallback. A GET whose
+/// path is registered nowhere is looked up in `ASSETS` and 404s when it is
+/// not there — that is the dashboard itself, every remaining path rather
+/// than a route with one of its own, and `docs/SECURITY.md` states it
+/// separately.
+pub const REGISTRY: &[Route] = &[
+    Route {
+        method: "GET",
+        path: "/api/map",
+        endpoint: Endpoint::Map,
+    },
+    Route {
+        method: "GET",
+        path: "/api/diff",
+        endpoint: Endpoint::Diff,
+    },
+    Route {
+        method: "GET",
+        path: CAPABILITIES_ROUTE,
+        endpoint: Endpoint::Capabilities,
+    },
+    Route {
+        method: "POST",
+        path: ASK_ROUTE,
+        endpoint: Endpoint::Ask,
+    },
+];
+
 /// What a connection may be answered from. Cloned per connection: two
 /// paths and, when `--ask` was given, a shared handle on the provider.
 #[derive(Clone)]
 struct Routes {
     map_path: PathBuf,
     overlay_path: PathBuf,
-    /// Present exactly when `serve --ask` was given. `None` is what makes
-    /// `POST /api/ask` a 405 like any other non-GET: the route does not
-    /// exist rather than existing and refusing.
+    /// Present exactly when `serve --ask` was given. `None` is what keeps
+    /// the ask entry out of the registry ([`Routes::route`]), which is what
+    /// makes `POST /api/ask` a 405 like any other non-GET: the route does
+    /// not exist rather than existing and refusing.
     ask: Option<SharedProvider>,
+}
+
+impl Routes {
+    /// The [`REGISTRY`] as this server runs it: the entry matching the
+    /// request line, if what backs it exists. One condition today — the ask
+    /// entry needs the provider `--ask` resolved — and it lives here so the
+    /// table above stays a plain list of facts.
+    fn route(&self, method: &str, path: &str) -> Option<&'static Route> {
+        REGISTRY.iter().find(|route| {
+            route.method == method
+                && route.path == path
+                && (route.endpoint != Endpoint::Ask || self.ask.is_some())
+        })
+    }
 }
 
 /// How long a handler thread waits on a read before giving up on the
@@ -262,13 +345,20 @@ fn handle(stream: TcpStream, routes: &Routes) -> std::io::Result<()> {
     };
     let path = target.split(['?', '#']).next().unwrap_or(&target);
 
-    // The one non-GET route, and only when `--ask` put a backend behind it.
-    // Reading a body is confined to this branch on purpose: without `--ask`
-    // the server ignores one exactly as it did before ADR-0009, so its
-    // behaviour on every other route is unchanged rather than merely
-    // similar.
-    if method == "POST"
-        && path == ASK_ROUTE
+    // The whole surface is one lookup: [`REGISTRY`] filtered by what this
+    // server actually holds. Everything below is what the found entry says.
+    let route = routes.route(&method, path);
+
+    // The one non-GET route, and only when `--ask` put a backend behind it —
+    // otherwise `routes.route` never registered it. Reading a body is
+    // confined to this branch on purpose: without `--ask` the server ignores
+    // one exactly as it did before ADR-0009, so its behaviour on every other
+    // route is unchanged rather than merely similar. It keeps the buffered
+    // reader for that body; every other endpoint answers on the bare stream.
+    if let Some(Route {
+        endpoint: Endpoint::Ask,
+        ..
+    }) = route
         && let Some(provider) = &routes.ask
     {
         return answer_question(reader, routes, provider.as_ref(), &headers);
@@ -286,56 +376,62 @@ fn handle(stream: TcpStream, routes: &Routes) -> std::io::Result<()> {
         return respond(&mut stream, "405 Method Not Allowed", "text/plain", served);
     }
 
-    if path == "/api/map" {
-        // Read from disk per request so a re-scan shows up on refresh.
-        return match std::fs::read(&routes.map_path) {
-            Ok(map) => respond(&mut stream, "200 OK", "application/json", &map),
-            Err(_) => respond(
+    match route.map(|route| route.endpoint) {
+        Some(Endpoint::Map) => {
+            // Read from disk per request so a re-scan shows up on refresh.
+            match std::fs::read(&routes.map_path) {
+                Ok(map) => respond(&mut stream, "200 OK", "application/json", &map),
+                Err(_) => respond(
+                    &mut stream,
+                    "404 Not Found",
+                    "application/json",
+                    format!(
+                        "{{\"error\":\"no map at {} — run `codeatlas scan` first\"}}",
+                        routes.map_path.display()
+                    )
+                    .as_bytes(),
+                ),
+            }
+        }
+        Some(Endpoint::Capabilities) => {
+            // Always 200, always answered, in every build: an absent route
+            // and a route saying "no" would be two ways to express one fact,
+            // and the client would have to treat them the same anyway.
+            respond(
                 &mut stream,
-                "404 Not Found",
+                "200 OK",
                 "application/json",
-                format!(
-                    "{{\"error\":\"no map at {} — run `codeatlas scan` first\"}}",
-                    routes.map_path.display()
-                )
-                .as_bytes(),
-            ),
-        };
-    }
-
-    if path == CAPABILITIES_ROUTE {
-        // Always 200, always answered, in every build: an absent route and a
-        // route saying "no" would be two ways to express one fact, and the
-        // client would have to treat them the same anyway.
-        return respond(
-            &mut stream,
-            "200 OK",
-            "application/json",
-            format!("{{\"ask\":{}}}", routes.ask.is_some()).as_bytes(),
-        );
-    }
-
-    if path == "/api/diff" {
-        // The overlay is optional: absent means `codeatlas diff` has not
-        // run, and the dashboard hides its toggle on the 404.
-        return match std::fs::read(&routes.overlay_path) {
-            Ok(overlay) => respond(&mut stream, "200 OK", "application/json", &overlay),
-            Err(_) => respond(
-                &mut stream,
-                "404 Not Found",
-                "application/json",
-                b"{\"error\":\"no diff overlay - run `codeatlas diff` first\"}",
-            ),
-        };
-    }
-
-    let asset_path = match path.trim_start_matches('/') {
-        "" => "index.html",
-        rest => rest,
-    };
-    match ASSETS.iter().find(|a| a.path == asset_path) {
-        Some(asset) => respond(&mut stream, "200 OK", asset.content_type, asset.bytes),
-        None => respond(&mut stream, "404 Not Found", "text/plain", b"not found"),
+                format!("{{\"ask\":{}}}", routes.ask.is_some()).as_bytes(),
+            )
+        }
+        Some(Endpoint::Diff) => {
+            // The overlay is optional: absent means `codeatlas diff` has not
+            // run, and the dashboard hides its toggle on the 404.
+            match std::fs::read(&routes.overlay_path) {
+                Ok(overlay) => respond(&mut stream, "200 OK", "application/json", &overlay),
+                Err(_) => respond(
+                    &mut stream,
+                    "404 Not Found",
+                    "application/json",
+                    b"{\"error\":\"no diff overlay - run `codeatlas diff` first\"}",
+                ),
+            }
+        }
+        // No registered route: the embedded dashboard answers every
+        // remaining GET, 404 when it holds no such asset. `Ask` cannot in
+        // fact arrive here — it is registered for POST alone, and POST left
+        // at the 405 — but falling to the asset lookup is also the honest
+        // meaning of "no GET route by that name exists".
+        Some(Endpoint::Ask) | None => {
+            let asset_path = match path.trim_start_matches('/') {
+                "" => "index.html",
+                rest => rest,
+            };
+            match ASSETS.iter().find(|a| a.path == asset_path) {
+                Some(asset) => respond(&mut stream, "200 OK", asset.content_type, asset.bytes),
+                None => respond(&mut stream, "404 Not Found", "text/plain", b"not found"),
+            }
+        }
     }
 }
 

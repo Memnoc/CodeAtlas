@@ -21,12 +21,21 @@
 //! This is the spirit of CI's `contract` job, which regenerates the schema
 //! and the TypeScript types and fails on drift between the committed and the
 //! generated artifacts. Two strings want a check, not a code generator.
+//!
+//! V2 story 17 widens the charter from the dashboard to the committed
+//! documents: the serve surface is declared once, in `serve::REGISTRY`, and
+//! the tests at the bottom of this file hold `docs/SECURITY.md` to naming
+//! every route in it, and hold both `README.md` and `docs/SECURITY.md` to
+//! V1 story 9's sentence with the spec as the authority. Same pattern —
+//! a Rust test reading a non-Rust file, because the failure would otherwise
+//! be silent: a route ships undocumented, every suite passes, and the
+//! security document has quietly gone false. It did, three times, in V1.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use codeatlas::enrich::ask::MAX_TURNS;
-use codeatlas::serve::{ASK_ROUTE, CAPABILITIES_ROUTE};
+use codeatlas::serve::{ASK_ROUTE, CAPABILITIES_ROUTE, REGISTRY};
 
 /// The dashboard module that declares both routes.
 fn dashboard_routes() -> String {
@@ -34,6 +43,16 @@ fn dashboard_routes() -> String {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dashboard/src/app/ask.ts");
     fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("cannot read the dashboard's route module at {path:?}: {e}"))
+}
+
+/// A committed file at the repository root, read whole. These tests build
+/// nothing: the registry is a `const` this test binary already links, and
+/// everything else is a file on disk.
+fn repo_file(relative: &str) -> String {
+    let path: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(relative);
+    fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {relative} at {path:?}: {e}"))
 }
 
 #[test]
@@ -72,4 +91,71 @@ fn the_dashboard_carries_the_turn_bound_this_binary_clamps_to() {
          `ask::MAX_TURNS` — as written, the dashboard and the server \
          disagree about how much history a request may carry"
     );
+}
+
+/// V2 story 17, deferred ticket 36's registry option: the route set is
+/// derived from `serve::REGISTRY` — the dispatch table `handle` itself
+/// walks, so this set is the served surface by construction — never from a
+/// scan of the source, which could not fail for a route spelled
+/// unexpectedly. The one conditional entry (`POST /api/ask`, registered
+/// only while `--ask` puts a backend behind it) is checked unconditionally,
+/// because the document describes both shapes of the server; the registry
+/// `const` is the same slice in every build configuration, so this test is
+/// too.
+#[test]
+fn every_registered_route_is_named_in_the_security_document() {
+    let document = repo_file("docs/SECURITY.md");
+
+    for route in REGISTRY {
+        assert!(
+            document.contains(route.path),
+            "docs/SECURITY.md does not name `{path}` — the server answers \
+             `{method} {path}` (serve::REGISTRY, crates/codeatlas/src/serve.rs), \
+             and every route the registry holds must be named in the security \
+             document; a route shipping undocumented is the drift this test \
+             exists to catch",
+            method = route.method,
+            path = route.path,
+        );
+    }
+}
+
+/// Markdown wraps lines where it likes and quotes with `> `, so the copies
+/// of one sentence are compared as words, not bytes: quoting stripped,
+/// whitespace collapsed, every other character — backticks and the em-dash
+/// included — still load-bearing.
+fn normalized(text: &str) -> String {
+    text.split_whitespace()
+        .filter(|word| *word != ">")
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// V1 story 9's amended sentence is the one every security document holds
+/// to, and the V1 spec is the authority: this test lifts the sentence from
+/// `docs/specs/2026-08-09-codeatlas-v1.md` — between the emphasis markers
+/// the amendment set it in — and requires `README.md` and `docs/SECURITY.md`
+/// to carry it verbatim, so no copy can drift from the spec alone.
+#[test]
+fn story_9s_sentence_is_pinned_verbatim_in_readme_and_security_document() {
+    let spec = "docs/specs/2026-08-09-codeatlas-v1.md";
+    let text = repo_file(spec);
+    let opening = "*CodeAtlas has exactly two ways to reach a model";
+    let start = text
+        .find(opening)
+        .unwrap_or_else(|| panic!("{spec} no longer opens story 9's amended sentence with `{opening}` — this test needs the authority before it can hold the copies to it"));
+    let rest = &text[start + 1..];
+    let end = rest.find('*').unwrap_or_else(|| {
+        panic!("{spec} never closes story 9's sentence's emphasis — cannot tell where the authority's sentence ends")
+    });
+    let sentence = normalized(&rest[..end]);
+
+    for document in ["README.md", "docs/SECURITY.md"] {
+        assert!(
+            normalized(&repo_file(document)).contains(&sentence),
+            "{document} does not carry V1 story 9's sentence verbatim — the \
+             spec ({spec}) is the authority, and both README.md and \
+             docs/SECURITY.md pin it word for word:\n{sentence}"
+        );
+    }
 }
