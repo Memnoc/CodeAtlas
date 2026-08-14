@@ -261,6 +261,30 @@ fn prepare(stream: TcpStream) -> std::io::Result<TcpStream> {
     Ok(stream)
 }
 
+/// How long a whole request may take to arrive — request line, header block
+/// and, on the one route that reads one, the body. [`READ_TIMEOUT`] is per
+/// read, and a per-read timeout bounds no request: any number of reads that
+/// each beat it add up to no limit at all, so a client trickling one header
+/// line every few seconds held a handler thread for as long as it cared to
+/// (deferred V1 ticket 38). Twice [`READ_TIMEOUT`], so the per-read guard
+/// keeps its own job — a client that goes quiet is dropped by it at ten
+/// seconds, half of this deadline — and twenty seconds is a geological age
+/// for a request an honest loopback client completes in microseconds.
+const REQUEST_DEADLINE: Duration = Duration::from_secs(20);
+
+/// The most bytes one line of a request head may carry — the request line
+/// or one header line. Without a cap, a client sending one endless line
+/// grows a buffer for as long as [`REQUEST_DEADLINE`] runs; with one, the
+/// line is refused the moment it passes the cap. 8 KiB is the head-line
+/// ceiling Apache and nginx default to, and the two headers this server
+/// keeps ([`Headers`]) fit an honest line in under a hundred bytes.
+const MAX_HEADER_LINE: usize = 8 * 1024;
+
+/// The most header lines one request may carry. A browser sends a dozen or
+/// two; a client past sixty-four is not describing a request, it is testing
+/// how long this server will listen — and the answer must be a number.
+const MAX_HEADER_LINES: usize = 64;
+
 /// The most bytes a request body may carry. A question is a sentence in a
 /// small JSON object; anything larger is a mistake or an attempt to make a
 /// hand-rolled server allocate on demand.
@@ -305,15 +329,173 @@ struct Headers {
     content_type: String,
 }
 
-/// Consumes the header block, keeping only [`Headers`]. An unparseable
-/// content length reads as no body, and the route that wanted one rejects
-/// the empty request on its own terms.
-fn read_headers(reader: &mut BufReader<TcpStream>) -> std::io::Result<Headers> {
-    let mut headers = Headers::default();
+/// Arms the socket for one read inside the whole-request deadline: at most
+/// the time left until it, never more than [`READ_TIMEOUT`] of that, and
+/// returns the timeout armed so the caller can tell which guard a timeout
+/// then belongs to. `None` when the budget is already spent — or when it
+/// would not go onto the socket, the same refusal-to-hope as [`hang_up`]'s:
+/// the deadline is only consulted between reads, so a stream left on the
+/// ten-second timeout could overshoot the bound this file states.
+fn arm(stream: &TcpStream, deadline: Instant) -> Option<Duration> {
+    let left = deadline.saturating_duration_since(Instant::now());
+    if left.is_zero() {
+        return None;
+    }
+    let wait = left.min(READ_TIMEOUT);
+    stream.set_read_timeout(Some(wait)).ok()?;
+    Some(wait)
+}
+
+/// Whether a read failed by running out the timeout [`arm`] set rather than
+/// by the connection dying. Unix reports an armed timeout as `WouldBlock`,
+/// Windows as `TimedOut`; both mean the same silence.
+fn timed_out(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
+}
+
+/// One line of a request head, or the bound that cut it short.
+enum HeadLine {
+    /// A complete line, terminator still attached — or whatever had arrived
+    /// when the peer sent EOF, empty included — exactly as `read_line` used
+    /// to hand it over, so the caller's blank-line and end-of-stream checks
+    /// read unchanged.
+    Line(String),
+    /// The line passed [`MAX_HEADER_LINE`] without ending.
+    OverLong,
+    /// [`REQUEST_DEADLINE`] ran out while the line was still arriving.
+    PastDeadline,
+}
+
+/// Reads one line of the request head under two of the three bounds: at
+/// most [`MAX_HEADER_LINE`] bytes, inside [`REQUEST_DEADLINE`]. One
+/// `fill_buf` at a time so the cap is enforced *while* the line arrives —
+/// `read_line` would grow its `String` for as long as the peer withheld the
+/// newline, which is exactly the defect this replaces.
+///
+/// A timeout inside the armed wait is the deadline's refusal when the wait
+/// was clamped below [`READ_TIMEOUT`], and the per-read guard's plain I/O
+/// error — a dropped connection, no response, the behaviour that guard has
+/// always had — when it was not.
+fn head_line(reader: &mut BufReader<TcpStream>, deadline: Instant) -> std::io::Result<HeadLine> {
+    let mut line = Vec::new();
     loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line)? == 0 || line == "\r\n" || line == "\n" {
-            return Ok(headers);
+        let Some(wait) = arm(reader.get_ref(), deadline) else {
+            return Ok(HeadLine::PastDeadline);
+        };
+        let buffered = match reader.fill_buf() {
+            Ok(buffered) => buffered,
+            Err(err) if timed_out(&err) && wait < READ_TIMEOUT => {
+                return Ok(HeadLine::PastDeadline);
+            }
+            Err(err) => return Err(err),
+        };
+        if buffered.is_empty() {
+            break; // EOF: hand back the partial line, as `read_line` did.
+        }
+        let newline = buffered.iter().position(|&byte| byte == b'\n');
+        let take = newline.map_or(buffered.len(), |at| at + 1);
+        if line.len() + take > MAX_HEADER_LINE {
+            return Ok(HeadLine::OverLong);
+        }
+        line.extend_from_slice(&buffered[..take]);
+        reader.consume(take);
+        if newline.is_some() {
+            break;
+        }
+    }
+    String::from_utf8(line).map(HeadLine::Line).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "request head is not UTF-8")
+    })
+}
+
+/// What reading a request head produced: a request to route, or the refusal
+/// that ends it. Three bounds, three separate failures — never one "request
+/// too large" condition, because the reader of a refusal wants to know which
+/// bound tripped. The per-read timeout is deliberately not represented here:
+/// its failure stays what it always was, an I/O error and a silently dropped
+/// connection, because a client that went quiet is not reading refusals.
+enum Head {
+    /// The request line and the two headers this server keeps.
+    Complete {
+        request_line: String,
+        headers: Headers,
+    },
+    /// The bound that tripped: response status, and the sentence naming it.
+    Refused {
+        status: &'static str,
+        reason: String,
+    },
+}
+
+/// [`REQUEST_DEADLINE`]'s refusal. 408 is HTTP's own word for it — "the
+/// server did not receive a complete request within the time it was
+/// prepared to wait" — and it is sent as a real response rather than a bare
+/// close because [`respond`]'s hang-up keeps even a refused trickler's
+/// remaining hold on the thread bounded.
+fn past_deadline() -> Head {
+    Head::Refused {
+        status: "408 Request Timeout",
+        reason: deadline_reason(),
+    }
+}
+
+/// The sentence both 408s carry — the head's, above, and the body read's in
+/// [`answer_question`], which answers in that route's JSON error shape.
+fn deadline_reason() -> String {
+    format!(
+        "the whole request must arrive within {} seconds",
+        REQUEST_DEADLINE.as_secs()
+    )
+}
+
+/// [`MAX_HEADER_LINE`]'s refusal. 431 is the status RFC 6585 provides for a
+/// header block a server will not hold — for one oversized field and for an
+/// oversized total alike, with the response saying which; here the sentence
+/// names this cap and [`read_head`]'s count refusal names that one. The
+/// request line rides the same cap and draws the same refusal: it is the
+/// first line of the head, and a second status for the same bound on a
+/// different line would be a fourth failure for three bounds.
+fn over_long_line() -> Head {
+    Head::Refused {
+        status: "431 Request Header Fields Too Large",
+        reason: format!("a header line may be at most {MAX_HEADER_LINE} bytes"),
+    }
+}
+
+/// Consumes the request line and header block under the three bounds —
+/// [`REQUEST_DEADLINE`] across every read, [`MAX_HEADER_LINE`] per line,
+/// [`MAX_HEADER_LINES`] on the count — keeping only what [`handle`] routes
+/// on. An unparseable content length reads as no body, and the route that
+/// wanted one rejects the empty request on its own terms.
+fn read_head(reader: &mut BufReader<TcpStream>, deadline: Instant) -> std::io::Result<Head> {
+    let request_line = match head_line(reader, deadline)? {
+        HeadLine::Line(line) => line,
+        HeadLine::OverLong => return Ok(over_long_line()),
+        HeadLine::PastDeadline => return Ok(past_deadline()),
+    };
+    let mut headers = Headers::default();
+    let mut lines = 0usize;
+    loop {
+        let line = match head_line(reader, deadline)? {
+            HeadLine::Line(line) => line,
+            HeadLine::OverLong => return Ok(over_long_line()),
+            HeadLine::PastDeadline => return Ok(past_deadline()),
+        };
+        if line.is_empty() || line == "\r\n" || line == "\n" {
+            return Ok(Head::Complete {
+                request_line,
+                headers,
+            });
+        }
+        lines += 1;
+        if lines > MAX_HEADER_LINES {
+            return Ok(Head::Refused {
+                status: "431 Request Header Fields Too Large",
+                reason: format!("a request may carry at most {MAX_HEADER_LINES} header lines"),
+            });
         }
         let Some((name, value)) = line.split_once(':') else {
             continue;
@@ -330,10 +512,20 @@ fn read_headers(reader: &mut BufReader<TcpStream>) -> std::io::Result<Headers> {
 /// Answers one request and closes the connection (`Connection: close` — the
 /// dashboard is a handful of requests, keep-alive buys nothing but state).
 fn handle(stream: TcpStream, routes: &Routes) -> std::io::Result<()> {
+    // The whole-request clock starts before the first byte is read: the
+    // deadline is the bound a per-read timeout is not, a total.
+    let deadline = Instant::now() + REQUEST_DEADLINE;
     let mut reader = BufReader::new(prepare(stream)?);
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line)?;
-    let headers = read_headers(&mut reader)?;
+    let (request_line, headers) = match read_head(&mut reader, deadline)? {
+        Head::Complete {
+            request_line,
+            headers,
+        } => (request_line, headers),
+        Head::Refused { status, reason } => {
+            let mut stream = reader.into_inner();
+            return respond(&mut stream, status, "text/plain", reason.as_bytes());
+        }
+    };
 
     let mut parts = request_line.split_whitespace();
     let (method, target) = match (parts.next(), parts.next()) {
@@ -361,7 +553,7 @@ fn handle(stream: TcpStream, routes: &Routes) -> std::io::Result<()> {
     }) = route
         && let Some(provider) = &routes.ask
     {
-        return answer_question(reader, routes, provider.as_ref(), &headers);
+        return answer_question(reader, routes, provider.as_ref(), &headers, deadline);
     }
 
     let mut stream = reader.into_inner();
@@ -477,6 +669,7 @@ fn answer_question(
     routes: &Routes,
     provider: &dyn EnrichmentProvider,
     headers: &Headers,
+    deadline: Instant,
 ) -> std::io::Result<()> {
     // Both of these are settled by the header block, so they are settled
     // before a byte of the body is read: an over-long request costs this
@@ -499,14 +692,21 @@ fn answer_question(
         );
     }
 
-    // The only body this server reads, and the check above is what bounds
-    // it: past that point the declared length is known to be within
-    // `MAX_BODY`, so `take` needs no second cap of its own.
-    let mut body = Vec::new();
-    reader
-        .by_ref()
-        .take(headers.content_length as u64)
-        .read_to_end(&mut body)?;
+    // The only body this server reads. The 413 above bounds it in bytes;
+    // [`REQUEST_DEADLINE`] bounds it in time, because a declared length
+    // under the cap says nothing about when the bytes come — a body
+    // dribbled one read at a time beats the per-read timeout on every one
+    // of them, exactly as a trickled header block does.
+    let body = match read_body(&mut reader, headers.content_length, deadline)? {
+        Some(body) => body,
+        None => {
+            return json_error(
+                &mut reader.into_inner(),
+                "408 Request Timeout",
+                &deadline_reason(),
+            );
+        }
+    };
     let stream = &mut reader.into_inner();
 
     let asked = match serde_json::from_slice::<AskBody>(&body) {
@@ -571,6 +771,34 @@ fn answer_question(
         }
         Err(err) => json_error(stream, "502 Bad Gateway", &format!("{err:#}")),
     }
+}
+
+/// Reads the declared body inside what is left of the whole-request
+/// deadline: `None` when [`REQUEST_DEADLINE`] ran out first, for the caller
+/// to refuse. A body shorter than declared ends at EOF exactly as the old
+/// `take`-based read did — that is the JSON parser's 400 to hand out, not
+/// an I/O failure. The caller has already checked `length` against
+/// [`MAX_BODY`], so the allocation here is bounded by that check.
+fn read_body(
+    reader: &mut BufReader<TcpStream>,
+    length: usize,
+    deadline: Instant,
+) -> std::io::Result<Option<Vec<u8>>> {
+    let mut body = vec![0u8; length];
+    let mut filled = 0;
+    while filled < body.len() {
+        let Some(wait) = arm(reader.get_ref(), deadline) else {
+            return Ok(None);
+        };
+        match reader.read(&mut body[filled..]) {
+            Ok(0) => break,
+            Ok(read) => filled += read,
+            Err(err) if timed_out(&err) && wait < READ_TIMEOUT => return Ok(None),
+            Err(err) => return Err(err),
+        }
+    }
+    body.truncate(filled);
+    Ok(Some(body))
 }
 
 fn read_graph(map_path: &Path) -> anyhow::Result<KnowledgeGraph> {

@@ -1259,6 +1259,281 @@ fn a_body_far_past_the_drain_bound_costs_the_client_its_refusal() {
     );
 }
 
+/// Reads the child's kernel thread count from `/proc` — the state V1's
+/// `TCPAbortOnClose` lesson says to count, because a "dropped" connection
+/// that leaves a thread parked is the same defect wearing a passing test.
+/// Linux-only, like the netns egress suite; CI's `ubuntu-latest` is the
+/// enforcing environment.
+fn thread_count(pid: u32) -> usize {
+    let status = fs::read_to_string(format!("/proc/{pid}/status"))
+        .expect("this test counts kernel state via /proc and needs Linux");
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Threads:"))
+        .expect("a Threads: line in /proc/<pid>/status")
+        .trim()
+        .parse()
+        .expect("the thread count parses")
+}
+
+/// The thread count once it has stopped moving: handler threads from earlier
+/// requests die asynchronously, so a baseline is only a baseline after two
+/// readings 200 ms apart agree.
+fn settled_thread_count(pid: u32) -> usize {
+    let mut last = thread_count(pid);
+    for _ in 0..25 {
+        thread::sleep(Duration::from_millis(200));
+        let now = thread_count(pid);
+        if now == last {
+            return now;
+        }
+        last = now;
+    }
+    last
+}
+
+/// Story 18, the bound itself (ticket 12; deferred V1 ticket 38). A per-read
+/// timeout is not a bound: a client that trickles one header line every few
+/// seconds beats the ten-second `READ_TIMEOUT` on every read and, on the
+/// server V1 shipped, held a handler thread for as long as it cared to. The
+/// whole-read `REQUEST_DEADLINE` is what ends it, with a 408 naming the
+/// deadline.
+///
+/// The proof counts kernel state, not green assertions: the child's own
+/// `/proc` thread count shows a handler thread parked while the trickle runs
+/// and released after the refusal, the trickler's write fails — the only way
+/// a client learns its socket is gone — and the server answers a fresh
+/// request promptly afterwards.
+#[test]
+fn a_client_that_trickles_header_lines_is_dropped_at_the_request_deadline() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let server = serve(repo.path());
+    let pid = server.child.id();
+
+    /// Between trickled header lines: comfortably inside the server's
+    /// ten-second per-read timeout, so no single read ever times out and
+    /// only a deadline across the whole read can end the request.
+    const TRICKLE: Duration = Duration::from_millis(600);
+    /// How long the client keeps trickling — far past the server's
+    /// twenty-second `REQUEST_DEADLINE`, and at one line per 600 ms it also
+    /// stays under the 64-line header cap, so the deadline is the only bound
+    /// this connection can trip.
+    const PATIENCE: Duration = Duration::from_secs(35);
+    /// The give-up margin asserted, measured from just before the request
+    /// line went out. Not the server's own deadline — the client cannot see
+    /// that — but a window a loaded machine still lands in and an unbounded
+    /// read never does: at or after the deadline, within six seconds of it.
+    const REFUSED_AFTER: Duration = Duration::from_secs(19);
+    const REFUSED_WITHIN: Duration = Duration::from_secs(26);
+
+    // Warm up, then take the thread baseline the release is measured against.
+    let (status, _, _) = http_get(server.port, "/api/map");
+    assert!(status.contains("200"), "warm-up status: {status}");
+    let baseline = settled_thread_count(pid);
+
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    stream.set_nodelay(true).unwrap();
+    // A hang must be a failed test, not a stuck suite: if the server never
+    // gives up, this read times out and the expect below names the missing
+    // refusal.
+    stream
+        .set_read_timeout(Some(Duration::from_secs(30)))
+        .unwrap();
+    let began = Instant::now();
+    write!(stream, "GET /api/map HTTP/1.1\r\nHost: 127.0.0.1\r\n").unwrap();
+
+    let mut dribbling = stream.try_clone().unwrap();
+    let trickler = thread::spawn(move || {
+        let mut line = 0u32;
+        while began.elapsed() < PATIENCE {
+            line += 1;
+            if write!(dribbling, "X-Drip-{line}: {line}\r\n")
+                .and_then(|()| dribbling.flush())
+                .is_err()
+            {
+                return Some(began.elapsed());
+            }
+            thread::sleep(TRICKLE);
+        }
+        None
+    });
+
+    // While the trickle runs, a handler thread is parked on it — counted, so
+    // the release below is a release of something demonstrably held.
+    thread::sleep(Duration::from_secs(2));
+    assert!(
+        thread_count(pid) > baseline,
+        "no handler thread is holding this connection; its release would prove nothing"
+    );
+
+    let (status, _, body) = read_response(&mut stream)
+        .expect("the 408 never arrived: nothing bounds the whole request read");
+    let refused = began.elapsed();
+    assert!(status.contains("408"), "status: {status}");
+    assert!(
+        String::from_utf8_lossy(&body).contains("20 seconds"),
+        "the refusal must name the deadline that tripped: {:?}",
+        String::from_utf8_lossy(&body)
+    );
+    assert!(
+        refused >= REFUSED_AFTER,
+        "gave up before the deadline: {refused:?}"
+    );
+    assert!(
+        refused < REFUSED_WITHIN,
+        "the deadline overshot its stated margin: refused after {refused:?}"
+    );
+
+    let write_failed = trickler.join().unwrap().unwrap_or_else(|| {
+        panic!("the server was still reading a trickled head after {PATIENCE:?}")
+    });
+    assert!(
+        write_failed < REFUSED_WITHIN + Duration::from_secs(3),
+        "the socket outlived the refusal: writes still landing at {write_failed:?}"
+    );
+    eprintln!("trickler refused after {refused:?}, its write failed at {write_failed:?}");
+
+    // The kernel-state half: the handler thread is gone, not merely quiet.
+    let mut released = false;
+    for _ in 0..50 {
+        if thread_count(pid) <= baseline {
+            released = true;
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        released,
+        "the handler thread was never released — a drop that leaves a thread \
+         parked is the same defect wearing a passing test"
+    );
+
+    // And the server keeps serving other requests promptly.
+    let asked = Instant::now();
+    let (status, _, _) = http_get(server.port, "/api/map");
+    assert!(
+        status.contains("200"),
+        "map status after the trickler: {status}"
+    );
+    assert!(
+        asked.elapsed() < Duration::from_secs(5),
+        "the map took {:?} after a trickler was dropped",
+        asked.elapsed()
+    );
+}
+
+/// Story 18's second bound: an over-long header line ends the request rather
+/// than growing a buffer, with a 431 naming the line cap — its own failure,
+/// never folded into the count cap's or the deadline's, because the operator
+/// reading a refusal wants to know which bound tripped.
+#[test]
+fn an_over_long_header_line_ends_the_request_instead_of_growing_a_buffer() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let server = serve(repo.path());
+
+    // Politely over the cap: one 9 000-byte line, past the server's 8 KiB
+    // `MAX_HEADER_LINE`, sent whole so the refusal itself is readable.
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    write!(
+        stream,
+        "GET /api/map HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Longing: {}\r\n\r\n",
+        "a".repeat(9_000)
+    )
+    .unwrap();
+    let (status, _, body) = read_response(&mut stream).expect("the 431 never arrived");
+    assert!(status.contains("431"), "status: {status}");
+    let reason = String::from_utf8_lossy(&body);
+    assert!(
+        reason.contains("header line may be at most 8192 bytes"),
+        "the refusal must name the line cap, and name it as its own failure: {reason:?}"
+    );
+
+    // Hostile: one line, sixteen megabytes, never a newline. The server must
+    // stop reading at the cap and close — observed from here as the client's
+    // own write failing partway, which a server buffering the line whole
+    // could not produce.
+    let mut endless = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    write!(endless, "GET /api/map HTTP/1.1\r\nX-Endless: ").unwrap();
+    let err = endless
+        .write_all(&vec![b'a'; 16 * 1024 * 1024])
+        .and_then(|()| endless.flush())
+        .expect_err("sixteen megabytes of one header line were accepted — nothing caps the line");
+    assert!(
+        matches!(
+            err.kind(),
+            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+        ),
+        "expected the server to stop reading and close, got: {err:?}"
+    );
+
+    // And the server is unharmed by both.
+    let (status, _, _) = http_get(server.port, "/api/map");
+    assert!(
+        status.contains("200"),
+        "map status after the long line: {status}"
+    );
+}
+
+/// Story 18's third bound: a client that sends header lines forever is told
+/// to stop — a 431 naming the count cap, distinct from the line cap's
+/// refusal, and past the refusal the server stops reading rather than
+/// parsing headers for as long as they come.
+#[test]
+fn a_header_block_of_too_many_lines_is_told_to_stop() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let server = serve(repo.path());
+
+    // Politely over the cap: 200 short lines against `MAX_HEADER_LINES`, 64.
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    let mut request = String::from("GET /api/map HTTP/1.1\r\nHost: 127.0.0.1\r\n");
+    for line in 0..200 {
+        request.push_str(&format!("X-Count-{line}: {line}\r\n"));
+    }
+    request.push_str("\r\n");
+    stream.write_all(request.as_bytes()).unwrap();
+    let (status, _, body) = read_response(&mut stream).expect("the 431 never arrived");
+    assert!(status.contains("431"), "status: {status}");
+    let reason = String::from_utf8_lossy(&body);
+    assert!(
+        reason.contains("at most 64 header lines"),
+        "the refusal must name the count cap, its own failure and not the line cap's: {reason:?}"
+    );
+
+    // Hostile: four megabytes of header lines and never a blank one. The
+    // write failing partway is the server refusing and closing; a server
+    // that reads headers forever accepts every byte of this.
+    let mut endless = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+    write!(endless, "GET /api/map HTTP/1.1\r\n").unwrap();
+    let line = format!("X-Forever: {}\r\n", "b".repeat(100));
+    let mut wrote = Ok(());
+    for _ in 0..40_000 {
+        wrote = endless
+            .write_all(line.as_bytes())
+            .and_then(|()| endless.flush());
+        if wrote.is_err() {
+            break;
+        }
+    }
+    let err =
+        wrote.expect_err("four megabytes of header lines were accepted — nothing caps the count");
+    assert!(
+        matches!(
+            err.kind(),
+            std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+        ),
+        "expected the server to stop reading and close, got: {err:?}"
+    );
+
+    let (status, _, _) = http_get(server.port, "/api/map");
+    assert!(
+        status.contains("200"),
+        "map status after the endless headers: {status}"
+    );
+}
+
 /// Seams 3 and 4 together: a question travelling all the way from HTTP to a
 /// spawned child, asserted on the argv that child actually received.
 ///

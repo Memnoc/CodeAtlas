@@ -188,7 +188,8 @@ file contents, never edges, never member lists. At most
 `enrich::BATCH_SIZE` slots per request, so a prompt cannot grow with the
 repository.
 
-**Enforced by** `a_summary_slot_carries_exactly_the_documented_fields` and
+**Enforced by** `a_summary_slot_carries_exactly_the_documented_fields`,
+`a_layer_description_slot_carries_exactly_the_documented_fields` and
 `the_message_carries_the_project_and_its_slots_and_no_more`
 (`crates/codeatlas/src/enrich/prompt.rs`), and
 `the_prompt_carries_the_slots_and_nothing_from_the_repository`
@@ -547,8 +548,34 @@ text — those claims are about what git does:
   server. Accepted connections carry a 10-second read timeout
   (`accepted_connections_carry_a_read_timeout`,
   `crates/codeatlas/src/serve.rs`), so a connection that goes silent on a
-  read errors out rather than blocking on it forever — but that timeout is
-  per read and not per request, which is the next bullet. A handler thread
+  read errors out rather than blocking on it forever. That timeout is per
+  read, and a per-read timeout bounds no request — any number of reads that
+  each beat it add up to no limit at all — so the whole request read is
+  bounded on its own terms, in total time, line length and line count:
+  `REQUEST_DEADLINE`, twenty seconds across the entire read (request line,
+  header block and, on the one route that reads one, the body);
+  `MAX_HEADER_LINE`, 8 KiB, on any one head line; and `MAX_HEADER_LINES`,
+  64, on the count — all in `crates/codeatlas/src/serve.rs`, beside the
+  per-read timeout they complete. Three bounds, three separate refusals, so
+  the reader of one knows which tripped: the deadline draws a 408 naming
+  its twenty seconds; each cap draws a 431 naming its own number. Half-open
+  requests cannot park threads forever — the sentence this document once
+  claimed, then moved down here to the limitations when it was found false
+  (V1 ticket 38), and now claims again with the code and the tests that
+  make it true. **Enforced by**, all in `crates/codeatlas/tests/serve.rs`:
+  `a_client_that_trickles_header_lines_is_dropped_at_the_request_deadline`,
+  which trickles header lines inside the per-read timeout at the real
+  binary, requires the 408 within a stated margin of the deadline (measured
+  2026-08-14: refused at 20.0 s against the 20-second deadline, the
+  trickler's write dead at 21.0 s), and counts kernel state rather than
+  green assertions — the child's own `/proc` thread count shows a handler
+  thread parked while the trickle runs and released after the refusal, and
+  a fresh request answers promptly after the drop;
+  `an_over_long_header_line_ends_the_request_instead_of_growing_a_buffer`
+  and `a_header_block_of_too_many_lines_is_told_to_stop`, each of which
+  also sends its bound megabytes of hostility and requires the server to
+  stop reading — observed as the client's own write failing, kernel state
+  again — and to keep serving afterwards. A handler thread
   also outlives its own response, by at most `DRAIN_DEADLINE` — one second:
   every response is followed by a half-close and a drain of whatever the
   client is still sending, because closing on unread bytes resets the
@@ -581,23 +608,18 @@ text — those claims are about what git does:
   last is the only thing the server discloses about its own configuration
   rather than about the repository, and it is a fact a local process could
   establish anyway by asking a question and seeing what comes back.
-- **A slow header block can park a handler thread indefinitely.**
-  `read_headers` (`crates/codeatlas/src/serve.rs`) loops on `read_line` with
-  no cap on the number of header lines, no cap on the length of one line and
-  no deadline across the block. The only limit is the 10-second
-  `READ_TIMEOUT` above, and it applies per read: a local client sending one
-  header line every nine seconds holds a handler thread for as long as it
-  cares to, and one sending a very long line without a newline grows a
-  `String` while it does. `serve` is thread-per-connection and nothing caps
-  how many threads exist. This is on the request path and predates all of the
-  response-path work above; it is filed as ticket 38
-  (`.scratch/codeatlas-v1/38-a-header-block-that-never-ends.md`) and deferred
-  past V1, because it is reachable only from loopback by someone already
-  running code on the machine. It is written here rather than fixed, and it
-  is written here rather than in the bullet above because the bullet above
-  claimed the opposite until this was found — that half-open requests cannot
-  park threads forever. They can, and this is how. A limitation an auditor
-  can read is a different thing from a guarantee that is not true.
+- **Nothing caps how many connections hold threads at once.** `serve` is
+  thread-per-connection and no thread cap exists. What the request-read
+  bounds in the bullet above changed is each thread's tenure — one
+  connection can no longer park one thread forever, only occupy it for the
+  bounded request read plus the bounded drain — not how many such threads a
+  client that opens connection after connection can hold at once. A
+  concurrent-connection cap is a larger change to the hand-rolled shape
+  that must be argued on its own; deferred V1 ticket 38 said so when it
+  diagnosed the unbounded read, and the V2 spec's Out of Scope carries the
+  decision. Reachable only from loopback, by someone already running code
+  on the machine, and it affects availability of the local dashboard only,
+  never confidentiality.
 - **A request body past `MAX_DRAIN` costs its sender the refusal.** The drain
   stops at one mebibyte, so a client that declares and sends more than that
   is still sending when the server gives up reading and closes — which resets
