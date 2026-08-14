@@ -145,3 +145,16 @@ Suites (2026-08-14): cargo test 267/267 (was 258 + 9 new: 7 enrich unit,
 1 prompt unit, 1 integration); sealed 228/228 (220 + 8 — the prompt test
 is compiled out there); agent-cli 255/255; fmt clean; clippy ×3 clean
 (default, sealed, agent-cli).
+
+**Residual from the crosscheck (2026-08-14), accepted without send-back:**
+the no-bump decision's record covered reading, not re-enriching — a pre-07
+binary that runs `--enrich` against a newer store rebuilds it wholesale
+(`save_store`'s documented self-pruning) and silently drops the
+`layer_descriptions` section, discarding purchased prose. Bounded: the
+store is a committed artifact (ADR-0007), so the drop is visible in the
+git diff a reviewer reads before merging, and the next `--enrich` on a
+current binary re-buys eight slots at most. Stated here so the consequence
+is a decision, not a surprise. The reviewer also noted SECURITY.md's
+"What a model receives" Enforced-by list omits the new payload-pin test —
+folded into the next pass over that document (ticket 12 or 13, whichever
+lands first, both touch SECURITY.md).
