@@ -144,6 +144,12 @@ so growth becomes a decision someone makes.
     it is a lens I look through rather than a place I have to navigate home
     from.
 
+**The conversation, beside the map**
+
+26. As a reader, I want the conversation in a column beside the canvas rather
+    than a band above it, so that the map I am asking about stays on screen
+    while I read what it answered.
+
 ## Implementation Decisions
 
 **Contract** (ceremony per [ADR-0003](../adr/0003-rust-types-generate-the-public-map-contract.md):
@@ -205,6 +211,16 @@ conversation as a thread in the existing answer panel, shows per-turn usage
 and a running total, and offers a way to start a fresh conversation; it
 enforces the same turn bound the server does, so clamping is a backstop, not
 the mechanism.
+
+**The conversation column.** The answer panel V1 built was a band between
+the search bar and the canvas, sized for one answer; a six-turn thread in
+that band pushes the map off the screen, and the reader ends up choosing
+between the conversation and the thing it describes. The thread moves to a
+column docked beside the canvas: bounded width, scrolling internally, the
+canvas keeping the remainder and staying interactive — so a citation click
+lights a card the reader can actually see. One question or six, the
+conversation lives in the same place. Decided 2026-08-14 from a reader's
+walk of the shipped thread; story 26.
 
 **The serve surface.** The module gains a route registry that the request
 handler itself dispatches through, so the code and the route list are the
@@ -330,3 +346,8 @@ ten times over in this repository.
   decision to amend the spec rather than carry an orphan ticket is
   deliberate — `/harden` verifies stories, so work that is not a story is work
   nobody checks.
+- Story 26 was added on 2026-08-14, the same way and for the same reason:
+  Memnoc walked the shipped thread against the live map and the band layout
+  failed the reader — the spec's own "in the existing answer panel" was the
+  premise that aged. The column supersedes that clause; the thread's
+  behaviour (stories 10, 12, 13) is unchanged.
