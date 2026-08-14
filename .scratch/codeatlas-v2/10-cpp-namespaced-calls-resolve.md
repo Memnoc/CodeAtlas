@@ -199,3 +199,67 @@ byte-identical (measured 10:47–10:52 IST). Suites, all green:
 passed; `--no-default-features --features agent-cli` 259 passed;
 `cargo fmt --all --check` clean; clippy `-D warnings` clean on all three
 feature sets.
+
+## Correction (2026-08-14, from the /crosscheck of this ticket's commit)
+
+The crosscheck built both binaries and proved the cost paragraph above
+("One new guard…") understates what the guard cost, in two ways. The
+original paragraphs stand as written — a record is a record — and this
+section says what was actually true and what the repair commit changed.
+
+**The sibling call was a regression, not a non-goal.** The paragraph says
+the unqualified sibling call — `nsq(k)` inside `geo::twice` —
+"resolves to nothing this lap" and files resolving it under the parked
+scope-tracking family. What was actually true: that call **resolved before
+this ticket** (symbols were stored bare, so the same-file lookup matched —
+correct per C++ name lookup) and **stopped resolving** when definitions
+became `geo::nsq` while the callee text stayed `nsq`. And resolving it
+never needed the parked scope tracking: the caller's own stored name
+already carries its namespace path. The repair walks that path outward
+within the caller's file — `geo::inner::f` calling `nsq` tries
+`geo::inner::nsq`, then `geo::nsq`, then the bare name — which is C++'s
+enclosing-namespace lookup order, from data the parser already had
+(`qualify_bare_callees` in `c_cpp.rs`). `twice → geo::nsq` resolves again.
+What genuinely stays in the parked family: `using namespace`, namespace
+aliases, and enclosing-namespace lookup **across** files (a bare call whose
+namespaced sibling is only declared in an included header stays
+unresolved — following it needs a cross-file symbol table, and the walk
+deliberately stops at the file boundary).
+
+**The suppression was file-wide, not namespace-scoped.** The paragraph
+reads as if the trailing-segment guard declined only the call C++ gives to
+`geo::nsq`. In fact it suppressed the bare tail for **every** caller in the
+file: the crosscheck's counter-case — a *global-scope* function calling a
+global `nsq()` from an included header, in a file that also defines a
+namespaced `…::nsq` — lost a legitimate edge, since global-scope lookup
+cannot see `geo::nsq` unqualified and the header's global really does
+answer. The repair makes the suppression caller-scoped by construction:
+the walk rewrites a namespaced caller's bare callee to the qualified
+same-file sibling (defined, so never offered to includes — the decoy stays
+unreachable), while a global-scope caller's bare callee stays bare and is
+offered. The tail-claiming in `bind_includes` is gone; the fixture
+`mixed.cpp` holds both directions (`use_global → bare.cpp:nsq` now exists;
+`alg::inner::f → alg::inner::nsq` pins the walk order), and the checklist's
+C++ unqualified-call cell gains the `use_global` edge — the only cells
+touched are C++'s.
+
+### How the repair's guards were proved able to fail (2026-08-14)
+
+Three mutations, each applied to `c_cpp.rs`, run, and reverted; the
+restored file byte-matches the pre-tamper snapshot (sha256 checked).
+
+| Mutation | What it printed |
+|---|---|
+| F1: the walk removed (`qualify_bare_callees` not called) | scan.rs — *fabricated calls edge geo::twice -> bare.cpp:nsq: the resolver reached the decoy* (mutation E's guard still fires), and both sibling-resolution tests red |
+| F2: the walk inverted (outermost prefix first) | only the walk-order pin red — *no calls edge alg::inner::f -> alg::inner::nsq* while `twice → geo::nsq` stayed green, so the order is asserted by its own cell |
+| F3: file-wide tail suppression restored in `bind_includes` | scan.rs — *no calls edge use_global -> bare.cpp:nsq*; conventions — the C++ unqualified-call cell red on the same edge; sibling resolution stayed green |
+
+### Suites (2026-08-14, repair commit)
+
+All green: `cargo test --workspace` 272 passed; `--no-default-features`
+(sealed) 233 passed; `--no-default-features --features agent-cli` 260
+passed; `cargo fmt --all --check` clean; clippy `-D warnings` clean on all
+three feature sets. One pre-existing test edited, with reason: the two
+closing asserts of `cpp_namespaced_symbols_carry_qualified_names_and_resolve_in_file`
+pinned the regression itself ("resolve to nothing this lap"); they now
+assert `twice → geo::nsq` while the decoy assert stands unweakened.

@@ -1962,11 +1962,14 @@ fn cpp_namespaced_symbols_carry_qualified_names_and_resolve_in_file() {
         "edges: {edges:?}"
     );
 
-    // The unqualified sibling call inside `namespace geo` is the lap's
-    // recorded non-goal: resolving `nsq(k)` to `geo::nsq` is scope tracking.
-    // It stays unresolved — and it must not be offered to the includes
-    // either, where bare.hpp's pair implements a *global* nsq that C++ name
-    // lookup would never give this call to.
+    // The unqualified sibling call inside `namespace geo` resolves to the
+    // same-file sibling C++ name lookup gives it: `nsq(k)` inside geo::twice
+    // means geo::nsq, restored by the enclosing-namespace walk over the
+    // caller's own stored name (this edge existed before ticket 10 and
+    // briefly did not after it — the 2026-08-14 crosscheck; the two asserts
+    // this replaces pinned that regression as if it were the intent). The
+    // decoy stays untouchable: bare.hpp's pair implements a *global* nsq
+    // that name lookup inside `namespace geo` would never give this call to.
     assert!(
         ids.contains(&"function:bare.cpp:nsq".to_string()),
         "the decoy must exist for this guard to mean anything: {ids:?}"
@@ -1981,10 +1984,86 @@ fn cpp_namespaced_symbols_carry_qualified_names_and_resolve_in_file() {
         "fabricated calls edge geo::twice -> bare.cpp:nsq: the resolver reached the decoy"
     );
     assert!(
-        !edges
-            .iter()
-            .any(|e| e["kind"] == "calls" && e["source"] == "function:geo.cpp:geo::twice"),
-        "geo::twice's unqualified sibling call must resolve to nothing this lap: {edges:?}"
+        has_edge(
+            &map,
+            "calls",
+            "function:geo.cpp:geo::twice",
+            "function:geo.cpp:geo::nsq"
+        ),
+        "geo::twice's unqualified sibling call must resolve to geo::nsq in its own file: {edges:?}"
+    );
+}
+
+/// Ticket 10's crosscheck repair: a bare callee resolves the way C++
+/// enclosing-namespace lookup does *within the caller's own file*, using the
+/// namespace path the caller's stored name already carries — no scope
+/// tracking involved. `alg::inner::f` tries `alg::inner::nsq` before
+/// `alg::nsq`; a global-scope caller carries no path, so its bare call is
+/// offered to the includes, where a header fronting a global of that name is
+/// a legitimate answer, not a fabrication — the suppression is
+/// caller-scoped, not file-wide. What stays parked with `using namespace`:
+/// the walk never crosses files, so a bare call whose namespaced sibling is
+/// only declared in a header stays unresolved.
+#[test]
+fn cpp_bare_calls_walk_the_callers_namespace_outward_within_the_file() {
+    let repo = materialize("cppproj");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let edges = map["edges"].as_array().unwrap();
+
+    // The innermost enclosing namespace wins: both alg::inner::nsq and
+    // alg::nsq exist, and C++ gives the call to the inner one.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:mixed.cpp:alg::inner::f",
+            "function:mixed.cpp:alg::inner::nsq"
+        ),
+        "edges: {edges:?}"
+    );
+    assert!(
+        !has_edge(
+            &map,
+            "calls",
+            "function:mixed.cpp:alg::inner::f",
+            "function:mixed.cpp:alg::nsq"
+        ),
+        "the walk overshot the innermost match: {edges:?}"
+    );
+
+    // Only the outer level defines dbl: the walk skips inner and lands on it.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:mixed.cpp:alg::inner::g",
+            "function:mixed.cpp:alg::dbl"
+        ),
+        "edges: {edges:?}"
+    );
+
+    // Global scope carries no namespace path: lookup there cannot see
+    // alg::nsq unqualified, so the bare call is offered to the includes and
+    // legitimately lands on the global nsq that bare.hpp fronts. This is the
+    // edge the file-wide tail-suppression swallowed (2026-08-14 crosscheck).
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:mixed.cpp:use_global",
+            "function:bare.cpp:nsq"
+        ),
+        "edges: {edges:?}"
+    );
+    assert!(
+        !has_edge(
+            &map,
+            "calls",
+            "function:mixed.cpp:use_global",
+            "function:mixed.cpp:alg::nsq"
+        ),
+        "global-scope lookup reached into a namespace: {edges:?}"
     );
 }
 

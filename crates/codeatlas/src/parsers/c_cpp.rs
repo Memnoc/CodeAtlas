@@ -34,11 +34,16 @@
 //!   `::` scope names a namespace, never a translation unit, so there is no
 //!   module for a receiver to resolve to and [`Call::receiver`] stays empty.
 //!   A namespace does not change linkage — a non-static function at
-//!   namespace scope is still exported (under the qualified name). What is
-//!   *not* resolved is the scope-tracking family: an unqualified call to a
-//!   same-namespace sibling, a `using namespace` binding, a namespace alias.
-//!   Those stay unresolved rather than guessed at — see [`bind_includes`]
-//!   for the one guard that costs.
+//!   namespace scope is still exported (under the qualified name).
+//! - **A bare callee walks its caller's namespace outward, within the file**:
+//!   `nsq(k)` written inside `geo::twice` means the sibling `geo::nsq` when
+//!   this file defines it, found by trying the caller's own namespace path
+//!   prefix by prefix — C++'s enclosing-namespace lookup order, using only
+//!   the path the caller's stored name already carries
+//!   ([`qualify_bare_callees`]). What is *not* resolved is the genuine
+//!   scope-tracking family: a `using namespace` binding, a namespace alias,
+//!   and enclosing-namespace lookup *across* files (a sibling only declared
+//!   in a header). Those stay unresolved rather than guessed at.
 
 use std::collections::HashSet;
 
@@ -105,6 +110,7 @@ impl Parser for CFamily {
             },
             &mut analysis,
         );
+        qualify_bare_callees(&mut analysis);
         bind_includes(&mut analysis);
         analysis
     }
@@ -167,27 +173,71 @@ fn normalize(path: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 
+/// Restores what C++ enclosing-namespace lookup finds *within the caller's
+/// own file*: a bare callee written inside `namespace geo` means a sibling
+/// `geo::nsq` when this file defines one. No scope tracking is needed — the
+/// caller's stored name already carries its namespace path — so the walk
+/// tries the path prefix by prefix, innermost first (`geo::inner::f` calling
+/// `nsq` tries `geo::inner::nsq`, then `geo::nsq`), which is C++'s actual
+/// lookup order, and keeps the bare name when no enclosing prefix defines it
+/// (a global-scope caller, or a name that really comes from an include).
+/// Rewriting to the qualified stored name is what makes the same-file lookup
+/// match again — and what keeps [`bind_includes`] from offering the name to
+/// a header whose pair implements an unrelated global, so the suppression
+/// that guard needs is caller-scoped by construction rather than file-wide.
+///
+/// The walk stops at this file's own definitions. Enclosing-namespace lookup
+/// *across* files — a header's `geo::nsq` prototype answering a bare call
+/// inside another file's `namespace geo` — is the scope-tracking family
+/// ticket 10 parked alongside `using namespace`, and it stays parked.
+fn qualify_bare_callees(analysis: &mut Analysis) {
+    let defined: HashSet<&str> = analysis.symbols.iter().map(|s| s.name.as_str()).collect();
+    for call in &mut analysis.calls {
+        if call.callee.contains("::") {
+            continue;
+        }
+        let mut namespace = caller_namespace(&call.caller);
+        while !namespace.is_empty() {
+            let candidate = format!("{namespace}::{}", call.callee);
+            if defined.contains(candidate.as_str()) {
+                call.callee = candidate;
+                break;
+            }
+            namespace = namespace.rsplit_once("::").map_or("", |(outer, _)| outer);
+        }
+    }
+}
+
+/// The namespace path a caller's stored name carries: `geo::twice` lives in
+/// `geo`, `geo::inner::deep` in `geo::inner`, and a global-scope `main` in
+/// none. A method (`geo::Circle.area`) looks up from its class's namespace —
+/// the path before the class's own segment; class-member lookup itself is
+/// not modeled, matching the pre-ticket parser, whose bare stored names
+/// never distinguished it either.
+fn caller_namespace(caller: &str) -> &str {
+    let scope = match caller.rsplit_once('.') {
+        Some((class_scope, _)) => class_scope,
+        None => caller,
+    };
+    scope
+        .rsplit_once("::")
+        .map_or("", |(namespace, _)| namespace)
+}
+
 /// Offers every callee the file does not define to every quoted include: the
 /// parser sees one file at a time, so which header provides which name is
 /// decided later by cross-file resolution (the header must re-export it).
 ///
-/// A namespaced definition also claims its trailing segment. An unqualified
-/// call written inside `namespace geo` to a sibling `nsq` stays unresolved
-/// this lap — resolving it is the scope tracking ticket 10 excludes — and
-/// offering the bare name to the includes would let a header whose pair
-/// implements a *global* `nsq` answer a call C++ name lookup gives to
-/// `geo::nsq`. Declining costs an edge; offering fabricates one between two
-/// files with no relationship, and with the error directions that
-/// asymmetric the approximation leans the way the Go shadow check does.
+/// Bare callees that really mean a namespaced sibling never reach the offer:
+/// [`qualify_bare_callees`] runs first and rewrites them to the qualified
+/// name the file defines, so `nsq(k)` inside `namespace geo` arrives here as
+/// `geo::nsq` — defined, not offered — while the same spelling at *global
+/// scope* stays bare and is offered, because lookup there cannot see
+/// `geo::nsq` unqualified and a header's global `nsq` is a legitimate
+/// answer. `cppproj/bare.hpp`/`bare.cpp` holds both proofs: the decoy the
+/// namespaced caller must not reach, and the target the global caller must.
 fn bind_includes(analysis: &mut Analysis) {
-    let defined: HashSet<&str> = analysis
-        .symbols
-        .iter()
-        .flat_map(|s| {
-            let tail = s.name.rsplit_once("::").map(|(_, tail)| tail);
-            std::iter::once(s.name.as_str()).chain(tail)
-        })
-        .collect();
+    let defined: HashSet<&str> = analysis.symbols.iter().map(|s| s.name.as_str()).collect();
     let mut candidates: Vec<&str> = analysis
         .calls
         .iter()

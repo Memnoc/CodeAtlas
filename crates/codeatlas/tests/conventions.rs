@@ -883,14 +883,30 @@ const CHECKLIST: &[Cell] = &[
     Cell {
         language: Language::Cpp,
         convention: Convention::UnqualifiedCall,
-        form: "#include \"legacy.h\"; legacy_go()",
+        // Two callers, because since ticket 10's crosscheck the sibling
+        // suppression is caller-scoped rather than file-wide: main() calls a
+        // plain included name, and use_global() sits at *global scope* in a
+        // file that also defines alg::nsq — C++ lookup at global scope
+        // cannot see alg::nsq unqualified, so its bare nsq(4) still belongs
+        // to the global nsq that bare.hpp fronts, and the offer to the
+        // include is legitimate. Only a caller *inside* a namespace that
+        // defines the sibling stays off the includes (its call resolves in
+        // its own file instead — the scan.rs walk tests).
+        form: "#include \"legacy.h\"; legacy_go() — and mixed.cpp's global-scope nsq(4)",
         verdict: Verdict::Holds {
             fixture: "cppproj",
-            expect: Expect::Edges(&[(
-                "calls",
-                "function:main.cpp:main",
-                "function:legacy.cpp:legacy_go",
-            )]),
+            expect: Expect::Edges(&[
+                (
+                    "calls",
+                    "function:main.cpp:main",
+                    "function:legacy.cpp:legacy_go",
+                ),
+                (
+                    "calls",
+                    "function:mixed.cpp:use_global",
+                    "function:bare.cpp:nsq",
+                ),
+            ]),
         },
     },
     // -- a qualified call through an imported module -----------------------
