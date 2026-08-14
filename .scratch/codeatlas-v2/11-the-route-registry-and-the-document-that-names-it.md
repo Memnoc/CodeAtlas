@@ -93,6 +93,44 @@ route in it.
 - `tests/serve.rs` (32 real-TCP tests) needed no edits: refusal messages and
   status codes are byte-identical through the registry dispatch.
 
+## Verification record — crosscheck fix (2026-08-14)
+
+The crosscheck found the "more" direction unenforced: a route removed from
+`REGISTRY` but still described in `docs/SECURITY.md` failed nothing. Added
+`every_route_the_security_document_names_is_still_registered`
+(`crates/codeatlas/tests/routes.rs`): it scans the whole document for
+`/api/`-prefixed path tokens — each `/api/` occurrence extended through
+ASCII alphanumerics, `-` and `_`, stopped by any other character — and
+fails when the registry no longer holds one. The substring limitation of
+the naming check is now stated in its doc comment, and the document's
+"cannot be more or less" sentence was retired for one that claims exactly
+the two enforced directions.
+
+- Proven able to fail (stale direction), 2026-08-14: a fake
+  `GET /api/ghost` bullet added to the served-surface list tripped it
+  with — "docs/SECURITY.md names `/api/ghost`, but serve::REGISTRY
+  (crates/codeatlas/src/serve.rs) no longer holds it — a route still
+  described in the security document after leaving the registry is stale,
+  the same false claim as an undocumented route in the other direction" —
+  then removed; docs/SECURITY.md byte-identical to its pre-mutation
+  snapshot.
+- Missing direction re-proven not weakened, 2026-08-14: the throwaway
+  `GET /api/throwaway` registry entry tripped
+  `every_registered_route_is_named_in_the_security_document` again with —
+  "docs/SECURITY.md does not name `/api/throwaway` — the server answers
+  `GET /api/throwaway` (serve::REGISTRY, crates/codeatlas/src/serve.rs),
+  and every route the registry holds must be named in the security
+  document; a route shipping undocumented is the drift this test exists to
+  catch" — then removed; serve.rs byte-identical to its pre-mutation
+  snapshot.
+- `cargo test --workspace` — 255 passed, 0 failed
+- `cargo test --workspace --no-default-features` — 217 passed, 0 failed
+- `cargo test --workspace --no-default-features --features agent-cli` —
+  243 passed, 0 failed (each one more than above: the new test)
+- `cargo fmt --all --check` — clean;
+  `cargo clippy --all-targets -- -D warnings` clean in all three
+  configurations
+
 ## Notes
 
 The source-scanning alternative was rejected in the interview for the reason

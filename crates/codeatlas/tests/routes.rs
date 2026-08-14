@@ -25,7 +25,8 @@
 //! V2 story 17 widens the charter from the dashboard to the committed
 //! documents: the serve surface is declared once, in `serve::REGISTRY`, and
 //! the tests at the bottom of this file hold `docs/SECURITY.md` to naming
-//! every route in it, and hold both `README.md` and `docs/SECURITY.md` to
+//! every route in it and no route beyond it, and hold both `README.md` and
+//! `docs/SECURITY.md` to
 //! V1 story 9's sentence with the spec as the authority. Same pattern —
 //! a Rust test reading a non-Rust file, because the failure would otherwise
 //! be silent: a route ships undocumented, every suite passes, and the
@@ -102,6 +103,12 @@ fn the_dashboard_carries_the_turn_bound_this_binary_clamps_to() {
 /// because the document describes both shapes of the server; the registry
 /// `const` is the same slice in every build configuration, so this test is
 /// too.
+///
+/// The naming check is a plain substring match — a code fence, a longer
+/// path such as `/api/mapx`, or a sentence recording a route's removal
+/// would each satisfy it falsely — accepted here because the document is
+/// reviewed prose rather than adversarial input, and the sibling test below
+/// holds every `/api/` token the document does mention to the registry.
 #[test]
 fn every_registered_route_is_named_in_the_security_document() {
     let document = repo_file("docs/SECURITY.md");
@@ -116,6 +123,62 @@ fn every_registered_route_is_named_in_the_security_document() {
              exists to catch",
             method = route.method,
             path = route.path,
+        );
+    }
+}
+
+/// Every distinct `/api/...` path the document mentions, in order of first
+/// mention. The rule is mechanical: each occurrence of `/api/` anywhere in
+/// the document — prose, bullet and code fence alike — extended rightward
+/// through ASCII alphanumerics, `-` and `_`, and stopped by any other
+/// character (`/` included: every registered path is one segment). A bare
+/// `/api/` naming no segment is not a route mention and is skipped.
+fn api_route_mentions(document: &str) -> Vec<String> {
+    const PREFIX: &str = "/api/";
+    let mut mentions: Vec<String> = Vec::new();
+    let mut rest = document;
+    while let Some(start) = rest.find(PREFIX) {
+        let after = &rest[start + PREFIX.len()..];
+        let end = after
+            .find(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+            .unwrap_or(after.len());
+        let path = format!("{PREFIX}{}", &after[..end]);
+        if end > 0 && !mentions.contains(&path) {
+            mentions.push(path);
+        }
+        rest = &after[end..];
+    }
+    mentions
+}
+
+/// The other direction of the same drift (ticket 11's crosscheck): a route
+/// removed from `serve::REGISTRY` but still described in `docs/SECURITY.md`
+/// fails nothing without this test, and a stale route description in a
+/// security document is the same species of false claim as a missing one.
+/// Every `/api/` token the document mentions ([`api_route_mentions`] is the
+/// rule) must be a path the registry holds. Checked against the `const`
+/// slice rather than any runtime table for the reason the test above gives:
+/// the document describes both shapes of the server, and the `const` is the
+/// same in every build configuration, so this test is too.
+#[test]
+fn every_route_the_security_document_names_is_still_registered() {
+    let document = repo_file("docs/SECURITY.md");
+    let mentions = api_route_mentions(&document);
+    assert!(
+        !mentions.is_empty(),
+        "docs/SECURITY.md mentions no `/api/...` route at all — the served \
+         surface has left the document entirely, and this test is scanning \
+         nothing"
+    );
+
+    for path in mentions {
+        assert!(
+            REGISTRY.iter().any(|route| route.path == path),
+            "docs/SECURITY.md names `{path}`, but serve::REGISTRY \
+             (crates/codeatlas/src/serve.rs) no longer holds it — a route \
+             still described in the security document after leaving the \
+             registry is stale, the same false claim as an undocumented \
+             route in the other direction"
         );
     }
 }

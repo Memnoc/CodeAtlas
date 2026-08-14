@@ -91,8 +91,8 @@ listener cannot be pointed at a routable interface.
 
 The route list below is the code's own dispatch table — `serve::REGISTRY`
 (`crates/codeatlas/src/serve.rs`), the `const` slice `handle` walks — so a
-route absent from it is not served at all, and this list cannot be more or
-less than what the server answers:
+route absent from it is not served at all, and this document can neither
+omit a route the server answers nor keep naming one it no longer does:
 
 - `GET /api/map` — the map JSON, read from disk per request
 - `GET /api/diff` — the diff overlay, when `codeatlas diff` has written one;
@@ -107,13 +107,21 @@ Every other GET is answered from the embedded dashboard assets in process
 memory, or 404s — the dashboard itself, every remaining path rather than a
 route with one of its own. Any other method is a 405.
 
-**Enforced by** `every_registered_route_is_named_in_the_security_document`
-(`crates/codeatlas/tests/routes.rs`): it derives the route set from
-`serve::REGISTRY` and fails, naming the route and this document, when one is
-not named here — so a route can no longer ship undocumented, which this
-document did let happen three times during V1. The registry rather than a
-source scanner, deliberately: a scanner that recognises a spelling
-convention cannot fail for a route spelled unexpectedly.
+**Enforced by** two tests in `crates/codeatlas/tests/routes.rs`, one per
+direction of drift.
+`every_registered_route_is_named_in_the_security_document` derives the
+route set from `serve::REGISTRY` and fails, naming the route and this
+document, when one is not named here — so a route can no longer ship
+undocumented, which this document did let happen three times during V1.
+`every_route_the_security_document_names_is_still_registered` walks the
+other way: it scans this whole document for `/api/`-prefixed path tokens
+and fails, naming the token, when the registry no longer holds it — a
+stale route description is the same false claim as a missing one. The
+registry rather than a source scanner for the served surface, deliberately:
+a scanner that recognises a spelling convention cannot fail for a route
+spelled unexpectedly. (The document side has no such option — a document
+can only be scanned — so its scan is the mechanical token rule the second
+test documents.)
 
 **CI:** the `rust` job (default features) and both legs of the
 `feature-configuration` matrix — sealed, and `agent-cli` without `network` —
