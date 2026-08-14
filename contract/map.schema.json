@@ -70,8 +70,19 @@
       "type": "string"
     },
     "Layer": {
-      "description": "A horizontal grouping of files. Membership is structural (each file node's\n`layer` field); the name is the enrichable slot — mechanically it is the\nderiving directory, enrichment may relabel it.",
+      "description": "A horizontal grouping of files. Membership is structural (each file node's\n`layer` field); the name and the description are the enrichable slots —\nmechanically the name is the deriving directory and the description a\ndirectory sentence; enrichment may relabel either, each under its own\nprovenance.",
       "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayerDescription"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the layer's files *are*, in prose. The scan publishes the\nmechanical sentence; enrichment may replace it (ticket 07). Optional\nin the contract (maps before 0.5.0 omit it); always emitted by the\nCLI."
+        },
         "id": {
           "description": "Stable layer ID: the top-level directory that derived it, or `root`\nfor files at the repository root.",
           "type": "string"
@@ -81,12 +92,30 @@
           "type": "string"
         },
         "provenance": {
-          "$ref": "#/$defs/Provenance"
+          "$ref": "#/$defs/Provenance",
+          "description": "Provenance of the *name*; the description carries its own."
         }
       },
       "required": [
         "id",
         "name",
+        "provenance"
+      ],
+      "type": "object"
+    },
+    "LayerDescription": {
+      "description": "A layer's prose description with provenance of its own — separate from\nthe name's, because the two are separate purchases: a layer with a\nmechanical name and an enriched description (or the reverse) must be\nbadged truthfully per part, and one provenance covering both would lie\nabout half the card.",
+      "properties": {
+        "provenance": {
+          "$ref": "#/$defs/Provenance"
+        },
+        "text": {
+          "description": "Mechanical or enriched prose; `provenance` says which.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
         "provenance"
       ],
       "type": "object"
@@ -226,7 +255,7 @@
       "type": "object"
     }
   },
-  "$id": "urn:codeatlas:map-contract:0.4.0",
+  "$id": "urn:codeatlas:map-contract:0.5.0",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "domain_flows": {

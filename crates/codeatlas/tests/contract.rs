@@ -37,7 +37,7 @@ fn committed_schema_carries_a_versioned_id() {
     let schema = committed_schema();
     let id = schema["$id"].as_str().expect("schema has no $id");
     assert_eq!(
-        id, "urn:codeatlas:map-contract:0.4.0",
+        id, "urn:codeatlas:map-contract:0.5.0",
         "$id must be the stable contract URI carrying the current version"
     );
 }
@@ -80,6 +80,51 @@ fn a_map_written_before_significance_still_validates() {
         errors.is_empty(),
         "a map written before `significance` was rejected by the committed \
          contract: {errors:?}"
+    );
+}
+
+/// Story 9 again, for ticket 06: `Layer.description` is optional, so a map
+/// whose layers were written before the field existed validates unchanged.
+/// `known-good.json` carries no layers at all, which would prove optionality
+/// only vacuously — this fixture is a map with layers (one of them enriched)
+/// that predate the field, and it must keep passing.
+#[test]
+fn a_map_written_before_layer_descriptions_still_validates() {
+    let schema = committed_schema();
+    let layer = &schema["$defs"]["Layer"];
+    assert!(
+        layer["properties"].get("description").is_some(),
+        "the contract must publish `Layer.description`, or its optionality \
+         here proves nothing"
+    );
+    let required: Vec<&str> = layer["required"]
+        .as_array()
+        .expect("Layer lists its required properties")
+        .iter()
+        .map(|r| r.as_str().unwrap())
+        .collect();
+    assert!(
+        !required.contains(&"description"),
+        "`description` must stay optional — a map written before it cannot \
+         carry it: {required:?}"
+    );
+
+    let map = fixture_map("known-good-layered.json");
+    let layers = map["layers"].as_array().expect("fixture must have layers");
+    assert!(!layers.is_empty(), "fixture must have layers");
+    for layer in layers {
+        assert!(
+            layer.get("description").is_none(),
+            "the stored fixture must predate `description`, or validating it \
+             proves nothing: {layer:?}"
+        );
+    }
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let errors: Vec<String> = validator.iter_errors(&map).map(|e| e.to_string()).collect();
+    assert!(
+        errors.is_empty(),
+        "a map written before `Layer.description` was rejected by the \
+         committed contract: {errors:?}"
     );
 }
 

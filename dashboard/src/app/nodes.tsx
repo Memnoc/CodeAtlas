@@ -1,6 +1,7 @@
 import { Handle, type NodeProps } from "@xyflow/react";
 import type { Anchor } from "./anchors.js";
 import type { EntityFlowNode, RegionFlowNode } from "./graph.js";
+import { ProvenanceBadge } from "./ProvenanceBadge.js";
 
 /** The points edges land on, as the handles React Flow measures.
  *
@@ -28,7 +29,15 @@ function Anchors({ anchors }: { anchors: readonly Anchor[] }) {
 }
 
 /** One region card on the overview: coloured spine, the complexity word, the
- * name, the mechanical description, and the file count. */
+ * name, the description, and the file count.
+ *
+ * The description is badged by ITS provenance, not the layer's — the name
+ * and the description are separate purchases (ticket 06), and borrowing the
+ * name's provenance would badge a lie about half the card. Mechanical text —
+ * published or synthesised — wears no badge, exactly as every card rendered
+ * before the contract carried descriptions; the badge appears only when a
+ * model wrote the sentence. It sits outside the clamped text, so a long
+ * description can never clip its own label away. */
 export function RegionNode({ data, selected }: NodeProps<RegionFlowNode>) {
   const { region, colorIndex, caption, anchors } = data;
   const fileCount = region.files.length;
@@ -49,7 +58,14 @@ export function RegionNode({ data, selected }: NodeProps<RegionFlowNode>) {
         </span>
       </div>
       <span className="region-name">{region.name}</span>
-      <span className="region-description">{region.description}</span>
+      <span className="region-description-row">
+        <span className="region-description" title={region.description}>
+          {region.description}
+        </span>
+        {region.descriptionProvenance === "llm" && (
+          <ProvenanceBadge provenance={region.descriptionProvenance} />
+        )}
+      </span>
       {caption !== undefined && (
         <span className="region-caption">{caption}</span>
       )}

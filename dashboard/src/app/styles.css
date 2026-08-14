@@ -1017,6 +1017,22 @@ button.crumb:hover {
   white-space: nowrap;
 }
 
+/* The description and its (llm-only) badge share one row: the badge sits
+ * outside the clamped text so a long purchased sentence can never clip its
+ * own label away, and the single-line ellipsis is what keeps a description
+ * from growing the card — the card's size comes from the projection, and
+ * prose of any length stays one truncated line (full text in the title). */
+.region-description-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.region-description-row .badge {
+  flex-shrink: 0;
+}
+
 .region-description {
   font-size: 11px;
   color: var(--muted);
@@ -1024,6 +1040,11 @@ button.crumb:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.region-description-row .region-description {
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .region-count {

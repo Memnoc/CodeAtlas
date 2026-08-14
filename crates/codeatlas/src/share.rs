@@ -26,7 +26,8 @@
 //! are structural and share-safe under the spec's story-8 assumption that
 //! the recipient is a colleague with repository access; a future audience
 //! knob can revisit that. Prose slots (`Node.summary`, `Layer.name`,
-//! `DomainFlow.name`, `TourStep.label`) are provenance-conditional:
+//! `LayerDescription.text`, `DomainFlow.name`, `TourStep.label`) are
+//! provenance-conditional:
 //! mechanical prose ("Rust file, 214 lines: 3 functions") only restates
 //! structure and passes through, while LLM-enriched prose may paraphrase
 //! proprietary logic and is replaced with [`REDACTION_MARKER`]. Missing or
@@ -115,6 +116,16 @@ pub const FIELD_CLASSIFICATIONS: &[(&str, Classification)] = &[
     ("Layer.id", ShareSafe),
     ("Layer.name", RedactedWhenLlm),
     ("Layer.provenance", ShareSafe),
+    // The description is a container whose element governs itself: the
+    // walker recurses into it and reads the description's OWN provenance,
+    // not the layer's, because the two are separate purchases (ticket 06).
+    // The text follows `Layer.name`'s precedent exactly — mechanical prose
+    // ("Files under crates/") restates directory structure the artifact
+    // already ships, while an enriched description may paraphrase
+    // proprietary logic and is replaced with the marker.
+    ("Layer.description", ShareSafe),
+    ("LayerDescription.text", RedactedWhenLlm),
+    ("LayerDescription.provenance", ShareSafe),
     // Flow IDs, domains, and steps are projected from the call graph; the
     // display name is the enrichable slot.
     ("DomainFlow.id", ShareSafe),

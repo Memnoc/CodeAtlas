@@ -232,6 +232,50 @@ fn redaction_denies_by_default() {
     );
 }
 
+/// Ticket 06: a layer's description carries provenance of its own, and the
+/// walker honors it per part — a purchased description on a mechanically
+/// named layer is redacted, and a mechanical description on an enriched-name
+/// layer ships. One provenance covering both halves of the card would either
+/// leak the purchase or redact plain structure.
+#[test]
+fn layer_descriptions_are_redacted_by_their_own_provenance() {
+    let mut map = fixture_map();
+    // layers[0]: enriched name, mechanical description.
+    map["layers"][0]["description"] = json!({
+        "text": "Files under src/",
+        "provenance": "structural"
+    });
+    // layers[1]: mechanical name, purchased description.
+    map["layers"][1]["description"] = json!({
+        "text": "SECRET-ENRICHED-DESCRIPTION paraphrasing the region",
+        "provenance": "llm"
+    });
+
+    let redaction = redact(&map);
+    // The mechanical sentence ships even though the layer's *name* is
+    // enriched: the name's provenance is not the description's.
+    assert_eq!(
+        redaction.map["layers"][0]["description"]["text"],
+        "Files under src/"
+    );
+    assert_eq!(redaction.map["layers"][0]["name"], REDACTION_MARKER);
+    // The purchased sentence is redacted even though the layer's name is
+    // mechanical.
+    assert_eq!(
+        redaction.map["layers"][1]["description"]["text"],
+        REDACTION_MARKER
+    );
+    assert_eq!(redaction.map["layers"][1]["name"], "docs");
+    assert!(
+        redaction
+            .redacted
+            .iter()
+            .any(|(field, count)| field == "LayerDescription.text" && *count == 1),
+        "disclosure must count the redacted description: {:?}",
+        redaction.redacted
+    );
+}
+
 #[test]
 fn redacted_map_still_validates_against_the_contract() {
     let committed: Value = serde_json::from_str(

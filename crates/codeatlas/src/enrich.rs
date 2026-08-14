@@ -1670,6 +1670,10 @@ mod tests {
         graph.layers = vec![Layer {
             id: "src".into(),
             name: "src".into(),
+            description: Some(crate::map::LayerDescription {
+                text: "Files under src/".into(),
+                provenance: Provenance::Structural,
+            }),
             provenance: Provenance::Structural,
         }];
         graph.domain_flows = vec![DomainFlow {

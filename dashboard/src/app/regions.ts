@@ -3,11 +3,12 @@
 // directory-derived grouping every file node carries) or a domain (the
 // grouping the map's call flows are already bucketed into).
 //
-// Everything here is derived from the published contract as it stands; no
-// field was added to the map for it. Where the reference UI shows a number
-// the contract does not publish — a region's file count, its complexity
-// word — the rule is written down here and used by every consumer, so two
-// panels can never disagree about the same region.
+// Since contract 0.5.0 a layer may publish its own description (ticket 06);
+// a region prefers it and falls back to synthesising the same sentence the
+// scan would have published. Where the reference UI shows a number the
+// contract does not publish — a region's file count, its complexity word —
+// the rule is written down here and used by every consumer, so two panels
+// can never disagree about the same region.
 import type { KnowledgeGraph, Node as MapNode, Provenance } from "../index.js";
 
 /** How busy a region is, as a word. See [`complexityOf`] for the rule. */
@@ -17,9 +18,16 @@ export type Region = {
   id: string;
   /** Display name: mechanical (the directory) or enriched; provenance says. */
   name: string;
-  /** Mechanically derived one-liner — the contract publishes no prose. */
+  /** What the region is: the contract's published description when a layer
+   * carries one, else the mechanical one-liner synthesised here. */
   description: string;
+  /** Provenance of the name — the description carries its own below. */
   provenance: Provenance;
+  /** Provenance of the description alone: a purchased description on a
+   * mechanically named region (or the reverse) is badged truthfully per
+   * part. Synthesised text is always `structural` — the dashboard wrote it,
+   * no model did. */
+  descriptionProvenance: Provenance;
   /** The file nodes in this region, in map order. */
   files: MapNode[];
   complexity: Complexity;
@@ -89,14 +97,23 @@ export function structuralRegions(map: KnowledgeGraph): Region[] {
   const declared = new Map((map.layers ?? []).map((l) => [l.id, l]));
   const byPath = fileRegions(map);
   const counts = weightPerRegion(map, (node) => regionOfNode(node, byPath));
-  return [...members].map(([id, files]) => ({
-    id,
-    name: declared.get(id)?.name ?? id,
-    description: describeDirectory(id),
-    provenance: declared.get(id)?.provenance ?? "structural",
-    files,
-    complexity: complexityOf(files.length, counts.get(id) ?? 0),
-  }));
+  return [...members].map(([id, files]) => {
+    // The contract's description when the layer carries a non-blank one,
+    // else the synthesised sentence — the reader never sees an empty card.
+    // The fallback is the dashboard's own prose, so it is `structural`
+    // whatever the publisher claimed for text it did not actually supply.
+    const published = declared.get(id)?.description;
+    const usable = published != null && published.text !== "";
+    return {
+      id,
+      name: declared.get(id)?.name ?? id,
+      description: usable ? published.text : describeDirectory(id),
+      provenance: declared.get(id)?.provenance ?? "structural",
+      descriptionProvenance: usable ? published.provenance : "structural",
+      files,
+      complexity: complexityOf(files.length, counts.get(id) ?? 0),
+    };
+  });
 }
 
 /** The region holding every file no call flow runs through. Domains cover
@@ -161,6 +178,8 @@ export function domainRegions(map: KnowledgeGraph): Region[] {
           ? "Files no call flow runs through"
           : `${flows} call ${plural("flow", flows)} rooted here`,
       provenance: "structural" as const,
+      // Domains are not contract entities; their text is always synthesised.
+      descriptionProvenance: "structural" as const,
       files: held,
       complexity: complexityOf(held.length, counts.get(id) ?? 0),
     };
@@ -277,8 +296,8 @@ export function regionsOf(map: KnowledgeGraph, kind: RegionKind): Region[] {
   return kind === "structural" ? structuralRegions(map) : domainRegions(map);
 }
 
-/** Mechanical description of a directory-derived region, matching how the
- * CLI describes the same thing. */
+/** Mechanical description of a directory-derived region — the exact sentence
+ * the CLI publishes since 0.5.0, kept for maps that predate the field. */
 function describeDirectory(id: string): string {
   return id === "root" ? "Files at the repository root" : `Files under ${id}/`;
 }

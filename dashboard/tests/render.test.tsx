@@ -93,6 +93,75 @@ describe("rendering a map file", () => {
   });
 });
 
+// Ticket 06 (spec story 7, mechanical half): the region card renders the
+// contract's description, badged by the description's OWN provenance — a
+// card with a mechanical name and a purchased description (or the reverse)
+// is badged truthfully per part, and mechanical text never wears `llm`.
+describe("the region card says what the region is", () => {
+  /** small-map with descriptions published: docs pairs a mechanical name
+   * with purchased prose; src pairs its enriched name with the mechanical
+   * sentence. The two lie-shaped combinations, one card each. */
+  const described: KnowledgeGraph = {
+    ...map,
+    layers: [
+      {
+        id: "docs",
+        name: "docs",
+        provenance: "structural",
+        description: {
+          text: "Guides and reference material",
+          provenance: "llm",
+        },
+      },
+      {
+        id: "src",
+        name: "Source code",
+        provenance: "llm",
+        description: { text: "Files under src/", provenance: "structural" },
+      },
+    ],
+  };
+
+  it("renders a purchased description with an llm badge on that part alone", () => {
+    render(<MapExplorer map={described} />);
+
+    const docs = screen.getByTestId("region-docs");
+    expect(
+      within(docs).getByText("Guides and reference material"),
+    ).toBeInTheDocument();
+    // Exactly one badge on the card, it says llm, and it sits in the
+    // description row — the name is mechanical and stays unbadged.
+    const badges = within(docs).getAllByTestId("provenance-badge");
+    expect(badges).toHaveLength(1);
+    expect(badges[0]).toHaveTextContent("llm");
+    expect(badges[0]?.closest(".region-description-row")).not.toBeNull();
+  });
+
+  it("never badges mechanical text as enrichment, whatever the name's author", () => {
+    render(<MapExplorer map={described} />);
+
+    // src's *name* was purchased, but its description was not: the
+    // mechanical sentence must not inherit the name's provenance.
+    const src = screen.getByTestId("region-src");
+    expect(within(src).getByText("Files under src/")).toBeInTheDocument();
+    expect(within(src).queryAllByTestId("provenance-badge")).toHaveLength(0);
+  });
+
+  it("renders a description-less map exactly as it did before the field existed", () => {
+    render(<MapExplorer map={map} />);
+
+    // small-map's layers predate the field: the synthesised sentence, and
+    // not one badge anywhere on the overview's cards.
+    const docs = screen.getByTestId("region-docs");
+    expect(within(docs).getByText("Files under docs/")).toBeInTheDocument();
+    const src = screen.getByTestId("region-src");
+    expect(within(src).getByText("Source code")).toBeInTheDocument();
+    for (const card of [docs, src]) {
+      expect(within(card).queryAllByTestId("provenance-badge")).toHaveLength(0);
+    }
+  });
+});
+
 // Story 5: the projection spreading anchors is only half of it — React Flow
 // measures the handles a card actually renders, so a card that still exposed
 // one point per side would draw the knot the projection had already undone.

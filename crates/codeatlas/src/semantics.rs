@@ -6,7 +6,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::map::{
-    DomainFlow, EdgeKind, KnowledgeGraph, Layer, NodeId, NodeKind, Provenance, TourStep,
+    DomainFlow, EdgeKind, KnowledgeGraph, Layer, LayerDescription, NodeId, NodeKind, Provenance,
+    TourStep,
 };
 
 /// Runs every mechanical projection over a freshly built structural graph.
@@ -26,6 +27,19 @@ fn top_directory(path: &str) -> &str {
     match path.split_once('/') {
         Some((top, _)) => top,
         None => ROOT_LAYER,
+    }
+}
+
+/// The mechanical sentence describing a layer — the exact text the dashboard
+/// synthesised for a region card before the contract carried a description,
+/// so a map with this description renders as one without it did. Published
+/// by the scan under `structural` provenance; enrichment may replace it
+/// (ticket 07), never this function.
+fn describe_layer(id: &str) -> String {
+    if id == ROOT_LAYER {
+        "Files at the repository root".to_string()
+    } else {
+        format!("Files under {id}/")
     }
 }
 
@@ -49,6 +63,10 @@ fn assign_layers(graph: &mut KnowledgeGraph) {
         .into_iter()
         .map(|id| Layer {
             name: id.clone(),
+            description: Some(LayerDescription {
+                text: describe_layer(&id),
+                provenance: Provenance::Structural,
+            }),
             id,
             provenance: Provenance::Structural,
         })

@@ -26,12 +26,23 @@ const SHARE_COMMAND = "codeatlas share";
 const SHARE_OUTPUT = ".codeatlas/share.html";
 
 /** How many prose slots in this map an LLM wrote — exactly the set the share
- * allowlist redacts (`Node.summary`, `Layer.name`, `DomainFlow.name`,
- * `TourStep.label`), which is what makes it the right number to warn with. */
+ * allowlist redacts (`Node.summary`, `Layer.name`, `LayerDescription.text`,
+ * `DomainFlow.name`, `TourStep.label`), which is what makes it the right
+ * number to warn with. A layer's description counts by its own provenance —
+ * it is a separate purchase from the name (ticket 06). */
 function enrichedSlots(map: KnowledgeGraph): number {
-  return [map.nodes, map.layers ?? [], map.domain_flows ?? [], map.tour ?? []]
+  const named = [
+    map.nodes,
+    map.layers ?? [],
+    map.domain_flows ?? [],
+    map.tour ?? [],
+  ]
     .flat()
     .filter((slot) => slot.provenance === "llm").length;
+  const described = (map.layers ?? []).filter(
+    (layer) => layer.description?.provenance === "llm",
+  ).length;
+  return named + described;
 }
 
 type CopyState = "idle" | "copied" | "failed";
@@ -170,8 +181,8 @@ export function ExportMenu({
               <p className="export-warning">
                 Not redacted: this file carries the map&rsquo;s {enriched}{" "}
                 LLM-written prose {enriched === 1 ? "field" : "fields"} — node
-                summaries, layer and flow names, tour narration. The shared
-                page above removes them.
+                summaries, layer names and descriptions, flow names, tour
+                narration. The shared page above removes them.
               </p>
             )}
             <button

@@ -60,6 +60,61 @@ describe("structural regions", () => {
     expect(byId.get("docs")?.files).toHaveLength(1);
   });
 
+  it("prefers the description the contract publishes, each part keeping its own author", () => {
+    const described: KnowledgeGraph = {
+      ...small,
+      layers: [
+        {
+          id: "docs",
+          name: "docs",
+          provenance: "structural",
+          description: {
+            text: "Guides and reference material",
+            provenance: "llm",
+          },
+        },
+        {
+          id: "src",
+          name: "Source code",
+          provenance: "llm",
+          description: { text: "Files under src/", provenance: "structural" },
+        },
+      ],
+    };
+    const byId = new Map(structuralRegions(described).map((r) => [r.id, r]));
+
+    // Mechanical name, purchased description…
+    expect(byId.get("docs")?.description).toBe("Guides and reference material");
+    expect(byId.get("docs")?.descriptionProvenance).toBe("llm");
+    expect(byId.get("docs")?.provenance).toBe("structural");
+    // …and the reverse: neither part inherits the other's provenance.
+    expect(byId.get("src")?.description).toBe("Files under src/");
+    expect(byId.get("src")?.descriptionProvenance).toBe("structural");
+    expect(byId.get("src")?.provenance).toBe("llm");
+  });
+
+  it("synthesises when the map publishes no description — never an empty card", () => {
+    // small-map's layers predate the field entirely: the fallback is the
+    // mechanical sentence, owned as structural.
+    const byId = new Map(structuralRegions(small).map((r) => [r.id, r]));
+    expect(byId.get("docs")?.description).toBe("Files under docs/");
+    expect(byId.get("docs")?.descriptionProvenance).toBe("structural");
+
+    // A published-but-blank text is treated as absent, not rendered: the
+    // synthesised replacement is the dashboard's own, so it may never wear
+    // the publisher's enrichment provenance either.
+    const blank: KnowledgeGraph = {
+      ...small,
+      layers: (small.layers ?? []).map((l) => ({
+        ...l,
+        description: { text: "", provenance: "llm" as const },
+      })),
+    };
+    const blankDocs = structuralRegions(blank).find((r) => r.id === "docs");
+    expect(blankDocs?.description).toBe("Files under docs/");
+    expect(blankDocs?.descriptionProvenance).toBe("structural");
+  });
+
   it("keeps a declared layer that holds no files", () => {
     const empty: KnowledgeGraph = {
       ...small,
@@ -207,6 +262,9 @@ describe("domain regions", () => {
   it("says how many flows are rooted in each", () => {
     const src = domainRegions(tour).find((r) => r.id === "src");
     expect(src?.description).toBe("1 call flow rooted here");
+    // Domain text is always the dashboard's own synthesis — domains are not
+    // contract entities, so nothing purchasable ever lands here.
+    expect(src?.descriptionProvenance).toBe("structural");
   });
 
   it("yields nothing for a map with no flows, rather than throwing", () => {

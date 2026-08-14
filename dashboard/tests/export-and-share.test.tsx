@@ -143,6 +143,28 @@ describe("the export route", () => {
     );
   });
 
+  it("counts a purchased layer description as a slot of its own", async () => {
+    const user = userEvent.setup();
+    // Ticket 06: the description's provenance is separate from the name's,
+    // so a purchased description on an otherwise-structural layer is one
+    // more field the JSON leaks — and a count keyed on `layer.provenance`
+    // alone would miss every one of them.
+    const described: KnowledgeGraph = {
+      ...structural,
+      layers: (structural.layers ?? []).map((layer) => ({
+        ...layer,
+        description: { text: "Purchased prose", provenance: "llm" as const },
+      })),
+    };
+    render(<MapExplorer map={described} />);
+
+    // Two layers, two purchased descriptions, nothing else enriched.
+    const menu = await openMenu(user);
+    expect(menu.getByText(/not redacted/i)).toHaveTextContent(
+      /\b2 LLM-written prose fields\b/,
+    );
+  });
+
   it("says nothing about redaction when there is no enriched prose", async () => {
     const user = userEvent.setup();
     render(<MapExplorer map={structural} />);

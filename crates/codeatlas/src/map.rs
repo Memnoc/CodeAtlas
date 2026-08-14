@@ -18,7 +18,12 @@ use serde::{Deserialize, Serialize};
 /// 0.4.0: added optional `Node.significance` (ADR-0010). A new optional
 /// field is a backward-compatible extension: maps written under 0.3.1 stay
 /// valid, and a consumer that ignores the field reads them as before.
-pub const MAP_CONTRACT_VERSION: &str = "0.4.0";
+/// 0.5.0: added optional `Layer.description` — prose saying what a region
+/// *is*, with provenance of its own so a layer whose name and description
+/// were written by different authors is badged truthfully per part. Same
+/// backward-compatible extension as 0.4.0: maps written before it stay
+/// valid.
+pub const MAP_CONTRACT_VERSION: &str = "0.5.0";
 
 /// The published contract schema: the schemars-derived schema for
 /// [`KnowledgeGraph`] plus a stable, versioned `$id`. This is the single
@@ -96,8 +101,10 @@ pub struct DomainFlow {
 }
 
 /// A horizontal grouping of files. Membership is structural (each file node's
-/// `layer` field); the name is the enrichable slot — mechanically it is the
-/// deriving directory, enrichment may relabel it.
+/// `layer` field); the name and the description are the enrichable slots —
+/// mechanically the name is the deriving directory and the description a
+/// directory sentence; enrichment may relabel either, each under its own
+/// provenance.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct Layer {
     /// Stable layer ID: the top-level directory that derived it, or `root`
@@ -105,6 +112,25 @@ pub struct Layer {
     pub id: String,
     /// Mechanical or enriched display name; provenance says which.
     pub name: String,
+    /// What the layer's files *are*, in prose. The scan publishes the
+    /// mechanical sentence; enrichment may replace it (ticket 07). Optional
+    /// in the contract (maps before 0.5.0 omit it); always emitted by the
+    /// CLI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<LayerDescription>,
+    /// Provenance of the *name*; the description carries its own.
+    pub provenance: Provenance,
+}
+
+/// A layer's prose description with provenance of its own — separate from
+/// the name's, because the two are separate purchases: a layer with a
+/// mechanical name and an enriched description (or the reverse) must be
+/// badged truthfully per part, and one provenance covering both would lie
+/// about half the card.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct LayerDescription {
+    /// Mechanical or enriched prose; `provenance` says which.
+    pub text: String,
     pub provenance: Provenance,
 }
 

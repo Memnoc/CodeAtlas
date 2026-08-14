@@ -691,6 +691,43 @@ fn every_file_node_belongs_to_exactly_one_directory_derived_layer() {
     assert_ne!(layer_of("file:src/main.ts"), layer_of("file:README.md"));
 }
 
+/// Ticket 06 (spec story 7, mechanical half): every structural layer says
+/// what it is in prose the scan wrote — the same sentence the dashboard
+/// synthesised before the contract carried one — and the description wears
+/// its own provenance, so mechanical text can never be badged as enrichment.
+#[test]
+fn every_structural_layer_carries_a_mechanical_description() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let map = read_map(repo.path());
+
+    let layers = map["layers"].as_array().expect("map must carry layers");
+    assert!(!layers.is_empty(), "this fixture must produce layers");
+    for layer in layers {
+        let id = layer["id"].as_str().unwrap();
+        let description = layer
+            .get("description")
+            .unwrap_or_else(|| panic!("layer {id} publishes no description: {layer:?}"));
+        let expected = if id == "root" {
+            "Files at the repository root".to_string()
+        } else {
+            format!("Files under {id}/")
+        };
+        assert_eq!(
+            description["text"].as_str().unwrap(),
+            expected,
+            "the mechanical sentence must match what the dashboard \
+             synthesised before the field existed: {layer:?}"
+        );
+        // The description's provenance is its own, and a scan wrote this
+        // text mechanically — `llm` here would badge a lie on every card.
+        assert_eq!(
+            description["provenance"], "structural",
+            "mechanical description wearing enrichment provenance: {layer:?}"
+        );
+    }
+}
+
 #[test]
 fn domain_flows_are_call_chains_rooted_at_functions_nothing_else_calls() {
     let repo = materialize("simple");

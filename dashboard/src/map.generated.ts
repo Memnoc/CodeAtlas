@@ -84,10 +84,19 @@ export interface Edge {
 }
 /**
  * A horizontal grouping of files. Membership is structural (each file node's
- * `layer` field); the name is the enrichable slot — mechanically it is the
- * deriving directory, enrichment may relabel it.
+ * `layer` field); the name and the description are the enrichable slots —
+ * mechanically the name is the deriving directory and the description a
+ * directory sentence; enrichment may relabel either, each under its own
+ * provenance.
  */
 export interface Layer {
+  /**
+   * What the layer's files *are*, in prose. The scan publishes the
+   * mechanical sentence; enrichment may replace it (ticket 07). Optional
+   * in the contract (maps before 0.5.0 omit it); always emitted by the
+   * CLI.
+   */
+  description?: LayerDescription | null;
   /**
    * Stable layer ID: the top-level directory that derived it, or `root`
    * for files at the repository root.
@@ -97,7 +106,25 @@ export interface Layer {
    * Mechanical or enriched display name; provenance says which.
    */
   name: string;
+  /**
+   * Whether a node's descriptive fields were produced mechanically or by LLM
+   * enrichment (ADR-0005).
+   */
+  provenance: "structural" | "llm";
+}
+/**
+ * A layer's prose description with provenance of its own — separate from
+ * the name's, because the two are separate purchases: a layer with a
+ * mechanical name and an enriched description (or the reverse) must be
+ * badged truthfully per part, and one provenance covering both would lie
+ * about half the card.
+ */
+export interface LayerDescription {
   provenance: Provenance;
+  /**
+   * Mechanical or enriched prose; `provenance` says which.
+   */
+  text: string;
 }
 export interface Node {
   /**

@@ -9,6 +9,7 @@ import {
   projectCounts,
   publishesSignificance,
 } from "./insights.js";
+import { ProvenanceBadge } from "./ProvenanceBadge.js";
 import type { Region, RegionLink } from "./regions.js";
 
 export function InfoPanel({
@@ -122,6 +123,16 @@ export function InfoPanel({
                 </span>
                 <span className="region-row-description">
                   {region.description}
+                  {/* Same rule as the region card: the description's own
+                      provenance, badged only when a model wrote it. */}
+                  {region.descriptionProvenance === "llm" && (
+                    <>
+                      {" "}
+                      <ProvenanceBadge
+                        provenance={region.descriptionProvenance}
+                      />
+                    </>
+                  )}
                 </span>
               </button>
             </li>
