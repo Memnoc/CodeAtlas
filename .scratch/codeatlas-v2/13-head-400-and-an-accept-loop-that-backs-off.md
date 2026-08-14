@@ -154,3 +154,18 @@ server keeps serving; it just stops spinning.
   loop 0 ticks; recovery after the pressure lifted, inside the 10 s
   patience. Recorded in `docs/SECURITY.md`'s loopback-DoS bullet with the
   date.
+
+**Residuals from the crosscheck (2026-08-14), accepted — V-next harvest
+material, none a fault of this ticket:**
+
+- The 405 still omits the `Allow` header RFC 9110 §15.5.6 makes a MUST.
+  Pre-existing, and criterion 4's byte-identical-405s constraint forbade
+  touching it here; story 19's "the way HTTP promises" is otherwise served.
+- `starts_with("HTTP/")` accepts a four-token request line
+  (`GET / HTTP/1.1 junk`); strict grammar is exactly three parts.
+- `FROB /x HTTP/1.1` draws the unchanged 405; purist HTTP wants 501 for an
+  unrecognised method. Pinned as-is by this ticket's tests.
+- The backoff test is Linux-only (`/proc`), matching the thread-count
+  precedent from ticket 12; the reviewer ran it and measured 0 ticks in
+  3.62 s with a wide margin, and verified failure paths leak neither the
+  parked connections nor the starved child.
