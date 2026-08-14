@@ -1917,6 +1917,77 @@ fn cpp_files_yield_classes_methods_includes_and_calls() {
     );
 }
 
+/// Ticket 10: namespaced symbols are stored and exported under their
+/// qualified name — `geo::nsq` — which is the form call sites use, so
+/// qualified calls resolve by name with no receiver-module binding (a C++
+/// `::` names a namespace, never a translation unit). The cross-file edges
+/// are the two C++ qualified-call cells in `tests/conventions.rs`; this test
+/// holds the pieces the table has no row for.
+#[test]
+fn cpp_namespaced_symbols_carry_qualified_names_and_resolve_in_file() {
+    let repo = materialize("cppproj");
+    scan(repo.path());
+    let map = read_map(repo.path());
+    let ids = node_ids(&map);
+    let edges = map["edges"].as_array().unwrap();
+
+    // Stored names are the qualified ones, for functions and classes alike,
+    // through both namespace spellings (geo.hpp nests blocks; geo.cpp also
+    // uses the compact `namespace geo::inner`).
+    assert!(
+        ids.contains(&"function:geo.cpp:geo::nsq".to_string()),
+        "ids: {ids:?}"
+    );
+    assert!(ids.contains(&"function:geo.cpp:geo::inner::deep".to_string()));
+    assert!(ids.contains(&"class:geo.hpp:geo::Disc".to_string()));
+
+    // The namespace does not change linkage: a non-static free function in a
+    // namespace is exported, under its qualified name.
+    assert!(has_edge(
+        &map,
+        "exports",
+        "file:geo.cpp",
+        "function:geo.cpp:geo::nsq"
+    ));
+
+    // A qualified call to a sibling namespace in the same file resolves
+    // without going through an include.
+    assert!(
+        has_edge(
+            &map,
+            "calls",
+            "function:geo.cpp:geo::inner::deep",
+            "function:geo.cpp:geo::nsq"
+        ),
+        "edges: {edges:?}"
+    );
+
+    // The unqualified sibling call inside `namespace geo` is the lap's
+    // recorded non-goal: resolving `nsq(k)` to `geo::nsq` is scope tracking.
+    // It stays unresolved — and it must not be offered to the includes
+    // either, where bare.hpp's pair implements a *global* nsq that C++ name
+    // lookup would never give this call to.
+    assert!(
+        ids.contains(&"function:bare.cpp:nsq".to_string()),
+        "the decoy must exist for this guard to mean anything: {ids:?}"
+    );
+    assert!(
+        !has_edge(
+            &map,
+            "calls",
+            "function:geo.cpp:geo::twice",
+            "function:bare.cpp:nsq"
+        ),
+        "fabricated calls edge geo::twice -> bare.cpp:nsq: the resolver reached the decoy"
+    );
+    assert!(
+        !edges
+            .iter()
+            .any(|e| e["kind"] == "calls" && e["source"] == "function:geo.cpp:geo::twice"),
+        "geo::twice's unqualified sibling call must resolve to nothing this lap: {edges:?}"
+    );
+}
+
 // `external_go_modules_with_colliding_package_suffixes_produce_no_edge` used
 // to sit here. It asserted that `github.com/external/lib/util` — an external
 // module whose trailing segment collides with the in-repo `util/` package —

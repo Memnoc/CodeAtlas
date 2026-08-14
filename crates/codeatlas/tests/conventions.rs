@@ -969,10 +969,25 @@ const CHECKLIST: &[Cell] = &[
     Cell {
         language: Language::Cpp,
         convention: Convention::QualifiedCall,
-        form: "—",
-        verdict: Verdict::NotApplicable {
-            because: "`util::helper()` qualifies by namespace or class, never by \
-                      translation unit, so there is no module for the receiver to name",
+        // Not-applicable until ticket 10, on the reason that a C++ `::`
+        // qualifies by namespace, never by translation unit, so there is no
+        // module for the receiver to name. That is still true of the
+        // receiver — and it is exactly why the qualification lives in the
+        // *stored name* instead: a namespaced symbol is stored and exported
+        // as `geo::nsq`, the form every call site writes, so the qualified
+        // call resolves by name through the include with no receiver-module
+        // binding involved.
+        form: "#include \"geo.hpp\"; geo::nsq(2)",
+        verdict: Verdict::Holds {
+            fixture: "cppproj",
+            expect: Expect::Edges(&[
+                ("imports", "file:uses_geo.cpp", "file:geo.hpp"),
+                (
+                    "calls",
+                    "function:uses_geo.cpp:use_geo",
+                    "function:geo.cpp:geo::nsq",
+                ),
+            ]),
         },
     },
     // -- a qualified call through an aliased module ------------------------
@@ -1042,7 +1057,11 @@ const CHECKLIST: &[Cell] = &[
         form: "—",
         verdict: Verdict::NotApplicable {
             because: "a C++ namespace alias renames a namespace, not a translation unit, \
-                      so there is still no module for the receiver to name",
+                      so there is no module to alias. Since ticket 10 a qualified call \
+                      resolves by its stored qualified name, and an alias-qualified \
+                      `g::nsq()` would need the `namespace g = geo;` declaration tracked \
+                      to rewrite it back to `geo::nsq` — the scope-tracking family that \
+                      ticket excludes alongside `using namespace`",
         },
     },
     // -- a qualified call through a nested module path ---------------------
@@ -1109,10 +1128,20 @@ const CHECKLIST: &[Cell] = &[
     Cell {
         language: Language::Cpp,
         convention: Convention::QualifiedCallThroughNestedPath,
-        form: "—",
-        verdict: Verdict::NotApplicable {
-            because: "a nested `a::b::c()` qualifies by nested namespace, never by \
-                      translation unit",
+        // Same move as the qualified-call cell above: a nested namespace
+        // symbol is stored under its full qualification — `geo::inner::deep`,
+        // declared in geo.hpp's classic nested blocks and defined in geo.cpp's
+        // compact `namespace geo::inner` spelling — so the nested path
+        // resolves as written, wherever in the chain of namespaces the name
+        // actually lives.
+        form: "#include \"geo.hpp\"; geo::inner::deep(3)",
+        verdict: Verdict::Holds {
+            fixture: "cppproj",
+            expect: Expect::Edges(&[(
+                "calls",
+                "function:uses_geo.cpp:use_deep",
+                "function:geo.cpp:geo::inner::deep",
+            )]),
         },
     },
     // -- NON-EDGE: a call whose receiver is a value ------------------------

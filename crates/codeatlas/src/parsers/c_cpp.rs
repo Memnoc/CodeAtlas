@@ -26,6 +26,19 @@
 //!   which names a header provides, so every callee not defined in the file
 //!   is offered to every quoted include; cross-file resolution keeps only
 //!   the candidates the included header actually re-exports.
+//! - **Namespaced symbols carry their qualified name** — `geo::nsq`,
+//!   `geo::inner::deep` — which is the form idiomatic call sites use, and a
+//!   qualified callee is recorded as that same text, so the two match by
+//!   name (ticket 10, the spec's C++ namespaced-calls decision). This is
+//!   where the C++ shape deliberately diverges from Go's receiver binding: a
+//!   `::` scope names a namespace, never a translation unit, so there is no
+//!   module for a receiver to resolve to and [`Call::receiver`] stays empty.
+//!   A namespace does not change linkage — a non-static function at
+//!   namespace scope is still exported (under the qualified name). What is
+//!   *not* resolved is the scope-tracking family: an unqualified call to a
+//!   same-namespace sibling, a `using namespace` binding, a namespace alias.
+//!   Those stay unresolved rather than guessed at — see [`bind_includes`]
+//!   for the one guard that costs.
 
 use std::collections::HashSet;
 
@@ -87,6 +100,7 @@ impl Parser for CFamily {
             source.as_bytes(),
             Ctx {
                 scope: None,
+                namespace: None,
                 enclosing_fn: None,
             },
             &mut analysis,
@@ -156,8 +170,24 @@ fn normalize(path: &str) -> Option<String> {
 /// Offers every callee the file does not define to every quoted include: the
 /// parser sees one file at a time, so which header provides which name is
 /// decided later by cross-file resolution (the header must re-export it).
+///
+/// A namespaced definition also claims its trailing segment. An unqualified
+/// call written inside `namespace geo` to a sibling `nsq` stays unresolved
+/// this lap — resolving it is the scope tracking ticket 10 excludes — and
+/// offering the bare name to the includes would let a header whose pair
+/// implements a *global* `nsq` answer a call C++ name lookup gives to
+/// `geo::nsq`. Declining costs an edge; offering fabricates one between two
+/// files with no relationship, and with the error directions that
+/// asymmetric the approximation leans the way the Go shadow check does.
 fn bind_includes(analysis: &mut Analysis) {
-    let defined: HashSet<&str> = analysis.symbols.iter().map(|s| s.name.as_str()).collect();
+    let defined: HashSet<&str> = analysis
+        .symbols
+        .iter()
+        .flat_map(|s| {
+            let tail = s.name.rsplit_once("::").map(|(_, tail)| tail);
+            std::iter::once(s.name.as_str()).chain(tail)
+        })
+        .collect();
     let mut candidates: Vec<&str> = analysis
         .calls
         .iter()
@@ -186,10 +216,36 @@ fn bind_includes(analysis: &mut Analysis) {
 
 #[derive(Clone, Copy)]
 struct Ctx<'a> {
-    /// Enclosing class/struct name, for scope-qualifying methods.
+    /// Enclosing class/struct name, for scope-qualifying methods. Already
+    /// namespace-qualified when the class sits inside a namespace.
     scope: Option<&'a str>,
+    /// Enclosing namespace path (`geo`, `geo::inner`), for qualifying the
+    /// names namespaced symbols are stored and exported under. Separate from
+    /// `scope` because the two answer different questions: a class scope
+    /// makes a method (never exported), a namespace changes only the name.
+    namespace: Option<&'a str>,
     /// Index into `Analysis::symbols` of the innermost enclosing function.
     enclosing_fn: Option<usize>,
+}
+
+/// `name` as stored under the enclosing namespace: `geo` + `nsq` →
+/// `geo::nsq`; no namespace, no change.
+fn qualify(namespace: Option<&str>, name: &str) -> String {
+    match namespace {
+        Some(ns) => format!("{ns}::{name}"),
+        None => name.to_string(),
+    }
+}
+
+/// A qualified name normalized to how a definition stores it: segments
+/// trimmed, empty ones dropped (`:: nsq` — explicit global qualification —
+/// becomes the bare `nsq` it names), rejoined with `::`.
+fn normalize_qualified(text: &str) -> String {
+    text.split("::")
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("::")
 }
 
 fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
@@ -222,7 +278,7 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
                 .child_by_field_name("declarator")
                 .and_then(|d| declared_function(d, source))
                 .filter(|(scope, _)| scope.is_none())
-                .map(|(_, name)| name)
+                .map(|(_, name)| qualify(ctx.namespace, &name))
             {
                 out.reexports.push(Reexport {
                     exported: name.clone(),
@@ -233,15 +289,20 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
             return;
         }
         "call_expression" => {
+            // A qualified callee — `geo::nsq(…)` — is recorded as its own
+            // normalized text, the form namespaced definitions are stored
+            // under, so the two match by name. The receiver stays empty: a
+            // `::` scope names a namespace or a class, never a translation
+            // unit, so there is no module for a receiver to resolve to.
             if let (Some(callee), Some(caller_idx)) = (
                 node.child_by_field_name("function")
-                    .filter(|f| f.kind() == "identifier")
+                    .filter(|f| matches!(f.kind(), "identifier" | "qualified_identifier"))
                     .and_then(|f| f.utf8_text(source).ok()),
                 ctx.enclosing_fn,
             ) {
                 out.calls.push(Call {
                     caller: out.symbols[caller_idx].name.clone(),
-                    callee: callee.to_string(),
+                    callee: normalize_qualified(callee),
                     receiver: Vec::new(),
                 });
             }
@@ -251,18 +312,33 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
 
     let mut pushed_fn = None;
     let mut class_name: Option<String> = None;
+    let mut namespace_path: Option<String> = None;
     match node.kind() {
+        // `namespace geo { … }`, nested blocks, or the compact C++17
+        // `namespace geo::inner { … }` (whose name field is one node with
+        // `::` in its text). An anonymous namespace adds no qualifier: its
+        // members are referred to unqualified, so the enclosing path is the
+        // truest stored name. (Its internal linkage is not modeled — the
+        // exported flag keeps meaning "not static", as before this ticket.)
+        "namespace_definition" => {
+            if let Some(name) = field_text(node, "name", source) {
+                namespace_path = Some(qualify(ctx.namespace, &normalize_qualified(&name)));
+            }
+        }
         "function_definition" => {
             if let Some((scope, name)) = node
                 .child_by_field_name("declarator")
                 .and_then(|d| declared_function(d, source))
             {
-                // `Circle::area` definitions carry their own scope; inline
-                // methods take the enclosing class's.
-                let scope = scope.or_else(|| ctx.scope.map(str::to_string));
+                // `Circle::area` definitions carry their own scope, prefixed
+                // by the enclosing namespace; inline methods take the
+                // enclosing class's, which is already namespace-qualified.
+                let scope = scope
+                    .map(|own| qualify(ctx.namespace, &own))
+                    .or_else(|| ctx.scope.map(str::to_string));
                 let qualified = match &scope {
                     Some(s) => format!("{s}.{name}"),
-                    None => name.clone(),
+                    None => qualify(ctx.namespace, &name),
                 };
                 out.symbols.push(Symbol {
                     kind: SymbolKind::Function,
@@ -282,6 +358,10 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
             if node.child_by_field_name("body").is_some()
                 && let Some(name) = field_text(node, "name", source)
             {
+                // A class in a namespace is a namespaced symbol like any
+                // other: stored qualified, and its methods scope under the
+                // qualified name (`geo::Circle.area`).
+                let name = qualify(ctx.namespace, &name);
                 push_class(node, name.clone(), ctx, out);
                 class_name = Some(name);
             }
@@ -297,11 +377,13 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
                 .filter(|t| t.child_by_field_name("name").is_none())
                 && let Some(name) = field_text(node, "declarator", source)
             {
+                let name = qualify(ctx.namespace, &name);
                 push_class(node, name.clone(), ctx, out);
                 class_name = Some(name);
                 // Recurse into the struct body under the typedef name.
                 let child_ctx = Ctx {
                     scope: class_name.as_deref(),
+                    namespace: ctx.namespace,
                     enclosing_fn: ctx.enclosing_fn,
                 };
                 let mut cursor = inner.walk();
@@ -318,6 +400,7 @@ fn collect(node: TsNode, source: &[u8], ctx: Ctx, out: &mut Analysis) {
     for child in node.children(&mut cursor) {
         let child_ctx = Ctx {
             scope: class_name.as_deref().or(ctx.scope),
+            namespace: namespace_path.as_deref().or(ctx.namespace),
             enclosing_fn: pushed_fn.or(ctx.enclosing_fn),
         };
         collect(child, source, child_ctx, out);
