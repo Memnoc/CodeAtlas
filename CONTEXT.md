@@ -79,7 +79,10 @@ _Avoid_: tour (reserved for the map's)
 
 **Provenance**:
 Who wrote a label: `structural` (mechanical) or `llm` (enrichment). Every
-prose-bearing thing in the map carries it, and the dashboard badges it.
+prose-bearing thing in the map carries it; the dashboard badges enriched
+prose where it renders it (node summaries, layer descriptions) and counts
+the rest in the header tally — enriched layer *names* render unbadged on
+cards, by long-standing choice.
 
 **Enrichment**:
 The optional, paid pass that buys prose — names, summaries, tour labels —

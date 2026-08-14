@@ -90,6 +90,12 @@ on absent *and* blank text, asserted), and mechanical text never wears an
 enrichment badge — the badge renders only for `llm` description provenance,
 and the scan test refuses a mechanical sentence published as `llm`.
 
+*Correction from the crosscheck (2026-08-14): the clause "the header tally
+and panels carry that disclosure" below was inaccurate — the tally counts
+only nodes, and no panel badges layer names. The outcome (names unbadged on
+cards) was nonetheless the correct pin of the pre-existing rendering;
+CONTEXT.md's Provenance entry now states the true badging rule.*
+
 On-card badging is the description's alone: the card badges the description
 when (and only when) a model wrote it, and the *name* stays unbadged on the
 card whatever its provenance — criterion 7 pins today's rendering for
