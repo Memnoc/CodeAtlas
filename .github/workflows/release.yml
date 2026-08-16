@@ -1,0 +1,318 @@
+name: Release
+
+# ADR-0014: a release is evidence, never a hand-built upload. A `v*` tag
+# builds the default and sealed binaries for all four targets, re-runs the
+# full CI gates, smoke-runs every artifact on the runner that built it, runs
+# the sealed probe against the built bytes themselves, writes a SHA-256
+# checksums file, produces and verifies build-provenance attestation for
+# every artifact — and only then publishes a GitHub Release.
+#
+# `workflow_dispatch` is the dry run (spec seam 6): the same workflow end to
+# end, publishing nothing. The publish job is gated on the tag-push context
+# below, so on a dispatch it is skipped by construction — dispatch runs on a
+# branch ref, and even a dispatch pointed at a tag is not a tag push.
+# Attestation does run on a dry run: it writes hash metadata to the public
+# Sigstore log, which is acceptable (hashes only; the artifacts themselves
+# are never published).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tamper_smoke:
+        description: >-
+          Prove the smoke guard can fail: run every smoke assertion with a
+          deliberately wrong expected line. The run must go red at the
+          smoke steps and nowhere earlier (the proven-able-to-fail rule).
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  # The tree-sitter grammars' C objects and the linker both go through
+  # musl-gcc on the Linux targets (musl-tools provides it, natively per
+  # architecture — see the aarch64 note on the build matrix). Target-scoped,
+  # so host build scripts and the macOS jobs never see them.
+  CC_x86_64_unknown_linux_musl: musl-gcc
+  CC_aarch64_unknown_linux_musl: musl-gcc
+  CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+
+jobs:
+  # The tag every artifact name carries. On a tag push it is the tag itself;
+  # on a dry run it is derived honestly from the Cargo version plus `-dry` —
+  # never a pretend tag, because no tag exists.
+  meta:
+    name: Artifact tag
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            version="$(cargo metadata --no-deps --format-version 1 \
+              | jq -r '.packages[0].version')"
+            tag="v${version}-dry"
+          fi
+          echo "tag=$tag" | tee -a "$GITHUB_OUTPUT"
+
+  # The full CI gates, as one reusable call rather than a hand-maintained
+  # copy (copies drift — ci.yml says so itself). Publishing waits on this:
+  # no artifact ships that CI would not pass (ADR-0014, spec story 13).
+  gates:
+    name: Full CI gates
+    uses: ./.github/workflows/ci.yml
+
+  # One job per target, each on its own native runner — including the smoke
+  # run, so every shipped binary has executed on the architecture it ships
+  # for. aarch64 Linux builds on the native arm runner rather than
+  # cross-compiling: the grammars' C objects then need no cross toolchain,
+  # and the smoke run and sealed probe exercise the real artifact on real
+  # hardware, which a cross-compiling x86_64 runner could not do at all.
+  build:
+    name: ${{ matrix.name }}
+    needs: meta
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64 (musl, static)
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - name: Linux aarch64 (musl, static, native arm runner)
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+          - name: macOS arm64
+            runner: macos-15
+            target: aarch64-apple-darwin
+          - name: macOS x86_64
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+    env:
+      TAG: ${{ needs.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the musl toolchain (fully static Linux binaries)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      # build.rs embeds the dashboard in every configuration, so release
+      # builds need the npm toolchain exactly as CI's do.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install dashboard toolchain (build.rs embeds the dashboard)
+        run: npm ci
+        working-directory: dashboard
+      - name: Build and collect the default binary
+        run: |
+          cargo build --release --locked -p codeatlas --target ${{ matrix.target }}
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/codeatlas" \
+             "dist/codeatlas-${TAG}-${{ matrix.target }}"
+      - name: Build and collect the sealed binary (--no-default-features, ADR-0006)
+        run: |
+          cargo build --release --locked -p codeatlas --target ${{ matrix.target }} \
+            --no-default-features
+          cp "target/${{ matrix.target }}/release/codeatlas" \
+             "dist/codeatlas-${TAG}-${{ matrix.target }}-sealed"
+      - name: Prove both Linux binaries fully static
+        if: runner.os == 'Linux'
+        run: |
+          file dist/*
+          for bin in dist/*; do
+            out="$(ldd "$bin" 2>&1 || true)"
+            echo "$bin: $out"
+            echo "$out" | grep -Eq 'not a dynamic executable|statically linked|static-pie' || {
+              echo "::error::$bin is dynamically linked"
+              exit 1
+            }
+          done
+      # macOS ships no `timeout`; the sealed probe's serve sections need one.
+      # The runner image carries GNU coreutils' gtimeout.
+      - name: Provide GNU timeout for the sealed probe
+        if: runner.os == 'macOS'
+        run: |
+          command -v timeout >/dev/null && exit 0
+          command -v gtimeout >/dev/null || brew install coreutils
+          mkdir -p "$RUNNER_TEMP/bin"
+          ln -s "$(command -v gtimeout)" "$RUNNER_TEMP/bin/timeout"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Smoke-run the default binary on its own runner
+        env:
+          RELEASE_SMOKE_EXPECT: ${{ inputs.tamper_smoke && 'mapped 2 files' || '' }}
+        run: scripts/release-smoke.sh "dist/codeatlas-${TAG}-${{ matrix.target }}"
+      - name: Smoke-run the sealed binary on its own runner
+        env:
+          RELEASE_SMOKE_EXPECT: ${{ inputs.tamper_smoke && 'mapped 2 files' || '' }}
+        run: scripts/release-smoke.sh "dist/codeatlas-${TAG}-${{ matrix.target }}-sealed"
+      # The shipped bytes, not a CI build: sealed subject, default binary as
+      # the live control (ADR-0014, spec story 13).
+      - name: Sealed probe against the built release artifacts
+        run: |
+          scripts/sealed-probe.sh \
+            "dist/codeatlas-${TAG}-${{ matrix.target }}-sealed" \
+            "dist/codeatlas-${TAG}-${{ matrix.target }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # Everything the release page would carry, assembled and verified:
+  # checksums over every artifact, provenance attested and then verified the
+  # way a downloader would verify it, and the notes rendered from the
+  # committed template with every slot filled from measurements.
+  verify:
+    name: Checksums, attestation, release notes
+    needs: [meta, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      TAG: ${{ needs.meta.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The notes' highlights slot measures history since the previous
+          # v* tag; a shallow clone would have none of it.
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
+      - name: Every expected artifact, exactly
+        run: |
+          ls -l dist
+          count="$(ls dist | wc -l)"
+          [ "$count" -eq 8 ] || {
+            echo "::error::expected 8 artifacts, found $count"
+            exit 1
+          }
+          for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
+                   aarch64-apple-darwin x86_64-apple-darwin; do
+            for suffix in "" "-sealed"; do
+              [ -f "dist/codeatlas-${TAG}-${t}${suffix}" ] || {
+                echo "::error::missing codeatlas-${TAG}-${t}${suffix}"
+                exit 1
+              }
+            done
+          done
+      - name: SHA-256 checksums over every artifact
+        run: |
+          cd dist
+          sha256sum codeatlas-* > "codeatlas-${TAG}-checksums.txt"
+          cat "codeatlas-${TAG}-checksums.txt"
+      - name: Attest build provenance (every artifact and the checksums file)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/codeatlas-*
+      - name: Verify every attestation as a downloader would
+        run: |
+          for f in dist/codeatlas-*; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY"
+          done
+      - name: Render the release notes from the committed template
+        run: |
+          mkdir -p notes
+          scripts/release-notes.sh "$TAG" dist "codeatlas-${TAG}-checksums.txt" \
+            > notes/notes.md
+          cat notes/notes.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: dist/codeatlas-*-checksums.txt
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: notes/notes.md
+          if-no-files-found: error
+
+  # A fresh runner downloads the artifacts and the checksums file it never
+  # generated and runs the check a downloader would run. Generating and
+  # checking on the same runner would verify almost nothing.
+  checksums-verify:
+    name: Checksums verify on a fresh runner
+    needs: [meta, verify]
+    runs-on: ubuntu-24.04
+    env:
+      TAG: ${{ needs.meta.outputs.tag }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: checksums
+          path: dist
+      - name: Verify every artifact against the checksums file
+        run: |
+          cd dist
+          sha256sum --check --strict "codeatlas-${TAG}-checksums.txt"
+          listed="$(wc -l < "codeatlas-${TAG}-checksums.txt")"
+          [ "$listed" -eq 8 ] || {
+            echo "::error::checksums file lists $listed artifacts, expected 8"
+            exit 1
+          }
+
+  # The only leg that publishes, and the one a dry run must never reach: a
+  # dispatch runs on a branch ref, so both conditions below are false there
+  # by construction — the skip in a dry run's job list is the inertness
+  # proof. On a real `v*` tag push it creates the GitHub Release carrying
+  # the binaries, the checksums file, and the rendered notes.
+  publish:
+    name: Publish the GitHub Release (real tag pushes only)
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [meta, gates, build, verify, checksums-verify]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.meta.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: checksums
+          path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: notes
+      - name: Create the release
+        run: |
+          gh release create "$TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" \
+            --notes-file notes/notes.md \
+            --verify-tag

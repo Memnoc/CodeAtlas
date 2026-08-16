@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # The release workflow re-runs these gates as one reusable call rather
+  # than as a hand-maintained copy (ADR-0014: no artifact ships that CI
+  # would not pass). Nothing changes for push or PR runs.
+  workflow_call:
 
 jobs:
   rust:

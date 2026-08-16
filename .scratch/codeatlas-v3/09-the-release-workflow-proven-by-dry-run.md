@@ -14,7 +14,7 @@ documents. (Working the open-code tickets first is the spec's recorded
 sequencing; it is not an edge — the workflow builds whatever `main`
 holds.)
 
-**Status:** ready
+**Status:** in-progress
 
 - [ ] A release workflow beside CI, triggered by `v*` tags, with a dry-run
       entry point that builds and verifies everything and publishes
