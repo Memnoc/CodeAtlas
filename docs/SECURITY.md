@@ -139,12 +139,25 @@ through the registry's GET entries and answered with GET's status and
 headers, `Content-Length` included, and no body (RFC 9110 §9.3.2) — so it
 is derived from the table above rather than listed beside it
 (`head_is_answered_wherever_get_is_with_gets_headers_and_no_body`,
-`crates/codeatlas/tests/serve.rs`). Any other method is a 405 naming what
-is served, and a request the parser cannot make sense of — a request line
-that is not `<method> <target> HTTP/<version>`, a head that is not UTF-8 —
-draws a 400 saying what was wrong rather than a silent close
-(`a_request_that_cannot_be_parsed_draws_a_400_instead_of_a_silent_close`,
-same file).
+`crates/codeatlas/tests/serve.rs`). Any other method draws the refusal
+RFC 9110 assigns it, and the two refusals answer different questions. A
+method HTTP itself defines but this path does not serve is a 405 carrying
+the `Allow` header that refusal owes (§15.5.6's MUST): `GET, HEAD`
+everywhere, `POST` beside them only at `/api/ask` and only while `--ask`
+holds that route registered — the header reflects the registry as this
+process runs it, flags included, never a fixed sentence. A method HTTP
+never defined is a 501, because a 405 there would claim a
+method-of-this-path problem the request does not have. And a request the
+parser cannot make sense of — a request line that is not exactly
+`<method> <target> HTTP/<version>`, three tokens with nothing after the
+version; a head that is not UTF-8 — draws a 400 saying what was wrong
+rather than a silent close or a silent tolerance. Enforced by
+`other_methods_draw_a_405_whose_allow_header_names_the_served_surface`,
+`allow_names_post_exactly_where_ask_is_registered`,
+`an_unrecognised_method_draws_501_and_a_recognised_one_stays_405`,
+`a_request_that_cannot_be_parsed_draws_a_400_instead_of_a_silent_close`
+and `a_request_line_of_more_than_three_tokens_is_refused_not_tolerated`
+(`crates/codeatlas/tests/serve.rs`).
 
 **Enforced by** two tests in `crates/codeatlas/tests/routes.rs`, one per
 direction of drift.

@@ -598,32 +598,105 @@ fn head_of_the_post_only_question_route_mirrors_gets_404() {
     assert!(status.contains("404"), "plain HEAD /api/ask: {status}");
 }
 
-/// The unchanged half of story 19's criterion: HEAD left the 405 lane and
-/// nobody else did. Every other non-GET method still draws the refusal
-/// that names what is actually served — the plain shape's flat sentence
-/// here, byte-identical; the `--ask` shape's sentence is pinned by
-/// `the_method_refusal_describes_the_server_it_came_from` below.
+/// A bodyless request in an arbitrary method — the refusal lanes' own
+/// helper, for methods no honest helper above speaks.
+fn http_method(port: u16, method: &str, path: &str) -> (String, Vec<String>, Vec<u8>) {
+    raw_request(
+        port,
+        format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n")
+            .as_bytes(),
+    )
+    .unwrap()
+}
+
+/// V2 ticket 13 pinned this refusal byte-identical across every refused
+/// method, `Allow`-less; this lap supersedes that pin DELIBERATELY (V3,
+/// `docs/specs/2026-08-16-codeatlas-v3.md` stories 18–19, ticket 05 — the
+/// spec says so in as many words: "that constraint pinned a shape, and this
+/// lap changes the shape on purpose"). RFC 9110 §15.5.6 makes `Allow` a
+/// MUST on every 405, so the refusal now names what is served in the header
+/// machines read as well as the sentence humans do. The sentence itself is
+/// unchanged — HEAD left the 405 lane in V2 and nobody else has — and the
+/// header is asserted with equality, never `contains`: at a path where only
+/// GET (and so HEAD) is served, `Allow` is exactly that, and an over-claim
+/// is the same false advertisement as an under-claim.
 #[test]
-fn other_methods_still_draw_the_405_that_names_the_served_surface() {
+fn other_methods_draw_a_405_whose_allow_header_names_the_served_surface() {
     let repo = materialize("simple");
     scan(repo.path());
     let server = serve(repo.path());
 
     for method in ["PUT", "DELETE", "OPTIONS", "PATCH"] {
-        let mut stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
-        write!(
-            stream,
-            "{method} /api/map HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
-        )
-        .unwrap();
-        let (status, _, body) = read_response(&mut stream).unwrap();
+        let (status, headers, body) = http_method(server.port, method, "/api/map");
         assert!(status.contains("405"), "{method} status: {status}");
+        assert_eq!(
+            header(&headers, "Allow"),
+            Some("GET, HEAD"),
+            "{method} /api/map: a 405 must carry Allow naming exactly the \
+             methods served at the path (RFC 9110 §15.5.6)"
+        );
         assert_eq!(
             String::from_utf8_lossy(&body),
             "only GET is served",
             "{method} must keep the refusal that names the served surface"
         );
     }
+}
+
+/// The `Allow` list reflects the registry AS CONFIGURED, flags included:
+/// POST is served at exactly one path — `/api/ask`, and only while `--ask`
+/// holds it registered — so POST appears in exactly that 405's `Allow` and
+/// no other's. A plain `serve` never advertises it at all: the flag absent
+/// means the method is not served there, and an `Allow` naming it would be
+/// the capability route's lie in header form.
+#[test]
+fn allow_names_post_exactly_where_ask_is_registered() {
+    let repo = materialize("simple");
+    scan(repo.path());
+
+    // Plain shape: no POST anywhere, the ask path included.
+    let plain = serve(repo.path());
+    let (status, headers, _) = http_method(plain.port, "PUT", "/api/ask");
+    assert!(status.contains("405"), "plain PUT /api/ask: {status}");
+    assert_eq!(
+        header(&headers, "Allow"),
+        Some("GET, HEAD"),
+        "without --ask the ask route does not exist, so its path's Allow \
+         must not name POST"
+    );
+    let (status, headers, _) = http_post(
+        plain.port,
+        "/api/ask",
+        &serde_json::json!({"question": "anything?"}).to_string(),
+    );
+    assert!(status.contains("405"), "plain POST /api/ask: {status}");
+    assert_eq!(
+        header(&headers, "Allow"),
+        Some("GET, HEAD"),
+        "the refused POST itself must draw the same honest Allow"
+    );
+
+    // The --ask shape: POST beside GET and HEAD at the ask path, and only
+    // there — the map path's Allow is unchanged by the flag.
+    let outside = tempfile::tempdir().unwrap();
+    let spec = format!("fake:{}", canned(outside.path(), "unused", &[]).display());
+    let asking = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+    let (status, headers, _) = http_method(asking.port, "PUT", "/api/ask");
+    assert!(status.contains("405"), "asking PUT /api/ask: {status}");
+    assert_eq!(
+        header(&headers, "Allow"),
+        Some("GET, HEAD, POST"),
+        "with --ask the ask path serves POST, and its 405 must say so — \
+         exactly GET, HEAD and POST, nothing else"
+    );
+    let (status, headers, _) = http_method(asking.port, "PUT", "/api/map");
+    assert!(status.contains("405"), "asking PUT /api/map: {status}");
+    assert_eq!(
+        header(&headers, "Allow"),
+        Some("GET, HEAD"),
+        "POST is served at the ask path, not at this one — Allow is per \
+         path, never per server"
+    );
 }
 
 /// Story 19's second half: a request the parser cannot make sense of draws
@@ -675,6 +748,103 @@ fn a_request_that_cannot_be_parsed_draws_a_400_instead_of_a_silent_close() {
         status.contains("200"),
         "map status after the garbage: {status}"
     );
+}
+
+/// V3 story 19's grammar half: a request line is exactly three tokens or
+/// nothing. Fewer than three has drawn a 400 since V2 (the test above);
+/// what V2 left over — its ticket 13 recorded the residual in as many
+/// words — was that `starts_with("HTTP/")` silently tolerated a FOURTH
+/// token, so `GET / HTTP/1.1 junk` was served as if the junk were not
+/// there. Tolerating what the grammar forbids is how parsers drift apart;
+/// now the whole line must parse, and the extra token is the fault the 400
+/// names.
+#[test]
+fn a_request_line_of_more_than_three_tokens_is_refused_not_tolerated() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let server = serve(repo.path());
+
+    let (status, _, body) = raw_request(
+        server.port,
+        b"GET /api/map HTTP/1.1 junk\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    )
+    .expect("a four-token request line must draw a response, not be served");
+    assert!(status.contains("400"), "four-token status: {status}");
+    assert!(
+        String::from_utf8_lossy(&body).contains("<method> <target> HTTP/<version>"),
+        "the body must show the shape a request line has: {:?}",
+        String::from_utf8_lossy(&body)
+    );
+
+    // The control: the same request without the junk is exactly three
+    // tokens, and is served — the refusal above is about the count, not
+    // the line.
+    let (status, _, _) = http_get(server.port, "/api/map");
+    assert!(status.contains("200"), "three-token control: {status}");
+}
+
+/// V3 story 19's other half, and the refusal taxonomy stated so the next
+/// reader knows which refusal means what (RFC 9110 §§9.1, 15.5.6, 15.6.2):
+///
+/// - **501 Not Implemented** — "this server does not implement the method
+///   at all": the method is not one HTTP defines, so no path here or
+///   anywhere on this server could ever serve it. No `Allow`, because
+///   there is no path where the answer would differ.
+/// - **405 Method Not Allowed** — "the method exists here, just not at
+///   this path": one of HTTP's own registered methods (GET, HEAD, POST,
+///   PUT, DELETE, CONNECT, OPTIONS, TRACE, PATCH), refused at a path that
+///   serves other methods — named in the `Allow` the 405 must carry.
+///
+/// Before this lap `FROB / HTTP/1.1` drew the 405, which claimed a
+/// method-of-this-path problem the request does not have — V2 ticket 13
+/// recorded exactly that as its residual. The recognised control alongside
+/// proves the 501 is about the method being unknown, not about this server
+/// having grown a taste for refusing everything harder.
+#[test]
+fn an_unrecognised_method_draws_501_and_a_recognised_one_stays_405() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let server = serve(repo.path());
+
+    // The method HTTP never defined: 501, on any path.
+    for path in ["/", "/api/map"] {
+        let (status, headers, body) = http_method(server.port, "FROB", path);
+        assert!(status.contains("501"), "FROB {path} status: {status}");
+        assert!(
+            String::from_utf8_lossy(&body).contains("FROB"),
+            "the refusal must name the method it does not implement: {:?}",
+            String::from_utf8_lossy(&body)
+        );
+        assert_eq!(
+            header(&headers, "Allow"),
+            None,
+            "a 501 makes no claim about this path's methods — Allow is the \
+             405's header"
+        );
+    }
+
+    // The taxonomy's other side, at the same path: methods HTTP does
+    // define, this server just does not serve here — 405, with the Allow
+    // that refusal owes. TRACE and CONNECT ride beside the everyday four
+    // because they are the registered methods most tempting to lump in
+    // with FROB: recognised is a fact about HTTP, not about this server.
+    for method in ["PUT", "DELETE", "OPTIONS", "PATCH", "TRACE", "CONNECT"] {
+        let (status, headers, _) = http_method(server.port, method, "/api/map");
+        assert!(
+            status.contains("405"),
+            "{method} is a method HTTP defines, so its refusal is \
+             405-not-at-this-path, never 501-not-implemented: {status}"
+        );
+        assert_eq!(
+            header(&headers, "Allow"),
+            Some("GET, HEAD"),
+            "{method}: the 405 keeps naming what is served"
+        );
+    }
+
+    // And the server outlives the whole taxonomy lesson.
+    let (status, _, _) = http_get(server.port, "/api/map");
+    assert!(status.contains("200"), "map status after FROB: {status}");
 }
 
 /// Seam 4 (spec, added 2026-08-11): the real binary, real HTTP/1.1 over

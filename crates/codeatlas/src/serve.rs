@@ -322,7 +322,52 @@ impl Routes {
                 && (route.endpoint != Endpoint::Source || self.source.is_some())
         })
     }
+
+    /// The `Allow` value a 405 at `path` must carry — exactly the methods
+    /// served there, which RFC 9110 §15.5.6 makes a MUST on every 405.
+    /// GET and HEAD open the list because every path answers them: GET
+    /// through the registry or the embedded-asset fallback, HEAD wherever
+    /// GET is (both above). The walk over [`REGISTRY`] then adds each
+    /// remaining method *as this server runs it*, through [`Routes::route`]
+    /// so the flag conditions apply: a route a flag left unregistered is
+    /// not served, and naming its method here would be the capability
+    /// route's lie in header form. Today that adds POST at [`ASK_ROUTE`]
+    /// exactly while `--ask` holds it registered, and nothing anywhere
+    /// else — derived, not listed, so a route added later is covered
+    /// without anyone remembering this line.
+    fn allow(&self, path: &str) -> String {
+        let mut allow = String::from("GET, HEAD");
+        for route in REGISTRY {
+            if route.path == path
+                && !matches!(route.method, "GET" | "HEAD")
+                && self.route(route.method, path).is_some()
+            {
+                allow.push_str(", ");
+                allow.push_str(route.method);
+            }
+        }
+        allow
+    }
 }
+
+/// The request methods HTTP itself defines: RFC 9110 §9.3's eight, plus
+/// PATCH (RFC 5789). The refusal taxonomy turns on this list (V3 story 19),
+/// because the two refusals answer different questions and a stranger's
+/// tooling reads them differently: a method ON this list that no route at
+/// the requested path serves draws a 405 whose `Allow` names what is
+/// served — "the method exists here, just not at this path" — while a
+/// method OFF it draws a 501, "this server does not implement the method
+/// at all", which is what RFC 9110 §9.1 prescribes for a method the server
+/// does not recognise. Before V3 a `FROB` drew the 405, claiming a
+/// method-of-this-path problem the request did not have; V2 ticket 13
+/// recorded that as its residual and this list is what retires it. HTTP's
+/// extension registries (WebDAV and kin) are deliberately not here: on a
+/// loopback dashboard that serves two methods, "recognised" means the
+/// methods HTTP's own core standards define, and anything beyond them is
+/// honestly not implemented.
+const RECOGNISED_METHODS: &[&str] = &[
+    "GET", "HEAD", "POST", "PUT", "DELETE", "CONNECT", "OPTIONS", "TRACE", "PATCH",
+];
 
 /// How long a handler thread waits on a read before giving up on the
 /// connection. Generous for a loopback client, but finite: a client that
@@ -622,14 +667,21 @@ fn handle(stream: TcpStream, routes: &Routes) -> std::io::Result<()> {
         }
     };
 
-    // The malformed lane's other half (story 19): a request line that does
-    // not parse as HTTP/1.1's own grammar — method, target, `HTTP/` version
-    // — draws a 400 naming the shape, never a silent close. Size and pace
-    // are not malformed and stay in their own lanes: the 408 and the 431s
-    // above, decided before this line is looked at.
+    // The malformed lane's other half (V2 story 19, completed by V3 story
+    // 19): a request line that does not parse as HTTP/1.1's own grammar —
+    // method, target, `HTTP/` version, and NOTHING after the version —
+    // draws a 400 naming the shape, never a silent close and never silent
+    // tolerance. The fourth `parts.next()` is the strictness V2 left as a
+    // residual: `GET / HTTP/1.1 junk` used to be served as if the junk
+    // were not there, and a grammar is three tokens or it is not that
+    // grammar. Size and pace are not malformed and stay in their own
+    // lanes: the 408 and the 431s above, decided before this line is
+    // looked at.
     let mut parts = request_line.split_whitespace();
-    let (method, target) = match (parts.next(), parts.next(), parts.next()) {
-        (Some(m), Some(t), Some(v)) if v.starts_with("HTTP/") => (m.to_string(), t.to_string()),
+    let (method, target) = match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(m), Some(t), Some(v), None) if v.starts_with("HTTP/") => {
+            (m.to_string(), t.to_string())
+        }
         _ => {
             let mut stream = reader.into_inner();
             return respond(
@@ -678,18 +730,35 @@ fn handle(stream: TcpStream, routes: &Routes) -> std::io::Result<()> {
 
     let mut stream = reader.into_inner();
     if method != "GET" && !head_only {
+        // The taxonomy's first fork ([`RECOGNISED_METHODS`]): a method HTTP
+        // itself never defined gets the 501 RFC 9110 §9.1 prescribes, not a
+        // 405 claiming the problem is this path — there is no path on this
+        // server, or any other, where `FROB` would have fared better. No
+        // `Allow` on it for the same reason: that header answers "what does
+        // this path serve", which is the 405's question below.
+        if !RECOGNISED_METHODS.contains(&method.as_str()) {
+            return respond(
+                &mut stream,
+                "501 Not Implemented",
+                "text/plain",
+                format!("{method} is not a method this server implements").as_bytes(),
+            );
+        }
         // Build-aware, because with `--ask` the flat claim is false — and a
         // reader who mistyped the question route deserves to be told the
         // right one rather than that POST is unsupported. HEAD skips this
         // lane entirely: it is a method this server *answers*, not one it
-        // refuses more politely (the ticket 13 note), and the sentences
-        // stay byte-identical because for every refused method they are
-        // still the truth about what is served.
+        // refuses more politely (the V2 ticket 13 note). The sentences are
+        // the human half; the machine half is the `Allow` header RFC 9110
+        // §15.5.6 makes a MUST on every 405, naming exactly the methods
+        // served at this path ([`Routes::allow`]) — added by V3's protocol
+        // honesties, which deliberately superseded V2 ticket 13's
+        // byte-identical-405s pin to do it.
         let served: &[u8] = match routes.ask {
             Some(_) => b"only GET, and POST /api/ask, are served",
             None => b"only GET is served",
         };
-        return respond(&mut stream, "405 Method Not Allowed", "text/plain", served);
+        return respond_method_not_allowed(&mut stream, &routes.allow(path), served);
     }
 
     // What GET would answer: status, content type, body. Built whole even
@@ -1146,7 +1215,27 @@ fn respond(
     content_type: &str,
     body: &[u8],
 ) -> std::io::Result<()> {
-    transmit(stream, status, content_type, body, true)
+    transmit(stream, status, content_type, None, body, true)
+}
+
+/// [`respond`] for the one status that owes a header beyond the shared
+/// three: every 405 MUST carry `Allow` naming the target's served methods
+/// (RFC 9110 §15.5.6), and threading it through [`transmit`] rather than a
+/// second write path is what keeps the hang-up below something a refusal
+/// cannot be written without.
+fn respond_method_not_allowed(
+    stream: &mut TcpStream,
+    allow: &str,
+    body: &[u8],
+) -> std::io::Result<()> {
+    transmit(
+        stream,
+        "405 Method Not Allowed",
+        "text/plain",
+        Some(allow),
+        body,
+        true,
+    )
 }
 
 /// [`respond`] for a HEAD: the same status line and the same headers —
@@ -1160,25 +1249,32 @@ fn respond_head(
     content_type: &str,
     body: &[u8],
 ) -> std::io::Result<()> {
-    transmit(stream, status, content_type, body, false)
+    transmit(stream, status, content_type, None, body, false)
 }
 
-/// The one wire format both responders share. `send_body` false is HEAD's
+/// The one wire format every responder shares. `send_body` false is HEAD's
 /// half: everything up to the blank line is written identically, then the
 /// body is withheld rather than recomputed, so the promised length can
-/// never be a different body's.
+/// never be a different body's. `allow` is the 405's half: `Some` exactly
+/// there, carrying the served-methods list that refusal owes (RFC 9110
+/// §15.5.6); every other response has no claim to make about methods.
 fn transmit(
     stream: &mut TcpStream,
     status: &str,
     content_type: &str,
+    allow: Option<&str>,
     body: &[u8],
     send_body: bool,
 ) -> std::io::Result<()> {
     write!(
         stream,
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n",
         body.len()
     )?;
+    if let Some(allow) = allow {
+        write!(stream, "Allow: {allow}\r\n")?;
+    }
+    write!(stream, "\r\n")?;
     if send_body {
         stream.write_all(body)?;
     }
