@@ -271,3 +271,54 @@ ticked; that rule has earned itself in this repository beyond argument.
 - Sequencing inside the lap, per the interview: open-code stories first,
   the store forward-compat story before the release ticket, the release
   ticket last, `v0.1.0` cut only after the harden walk.
+
+## Verification
+
+Walked 2026-08-16 by the harden session, against main at `5dd8152` — all
+nine tickets `done`, the release dry run green
+(github.com/Memnoc/CodeAtlas/actions/runs/31963531524). Method notes
+follow the table; execution was preferred throughout — real TCP against
+release binaries, the dry run's own downloaded artifacts, a real share
+artifact, the committed store on a repo copy. Fresh backstops this
+session: full default Rust suite (15 result blocks, 0 failures),
+dashboard 307/307, tsc clean.
+
+| # | Story | Verdict | Method |
+|---|-------|---------|--------|
+| 1 | open file source beside the map | pass | wire: live envelope watched (edit served); beside-map at the jsdom seam |
+| 2 | symbol lands scrolled and lit | pass | jsdom seam (lands lit 3–9, scrolled); wire: symbol id draws 404, file nodes only |
+| 3 | seven languages highlighted, rest plain | pass | watched on the wire: all seven named + `plain text` fallback stated; `<script>` arrives as entities |
+| 4 | past-cap file truncated with notice | pass | wire: 624,000-byte file arrives `truncated:true` AND highlighted; notice at the jsdom seam |
+| 5 | source route absent without the flag | pass | watched: flag-off response byte-identical to an unregistered miss |
+| 6 | only map nodes servable | pass | watched: on-disk-unmapped, symbol id, traversal id → 404; mapped → 200 |
+| 7 | capabilities says open code; absent in share | pass | both booleans watched in three server shapes; share absence structural (no wire chunk) + jsdom |
+| 8 | deleted file draws honest 404 | pass | watched: names the file and the remedy |
+| 9 | SECURITY.md names the route; ask sends no file contents | pass | drift gates executed 5/5 both directions; ask prompt bounds by committed tests (seam execution) |
+| 10 | share carries no source, no affordance | pass | real artifact: zero occurrences of every REGISTRY route; probe + ceiling 14/14; note: the button label rides as dead string data in the shared component — the control never renders (asserted against a lying server, zero fetches) |
+| 11 | newcomer downloads one file → served map | pass | dry-run artifact on this machine: static ELF (`ldd`: statically linked), no key in env, stranger repo mapped and served; the literal fresh machine is story 15's layer |
+| 12 | tag builds all targets, checksums, attestation | pass | seam 6 executed: the green dry run built 8 binaries + checksums, attested and verified all 9 subjects in-run |
+| 13 | CI gates + sealed probe before publish | pass | run job graph: all gates green, sealed probe green per target, publish leg skipped (tag-only by `if`) |
+| 14 | auditor verifies the sealed binary | pass | checksums OK locally; attestation fetched by the downloaded file's sha256 digest — names this repo, `refs/heads/main`, `release.yml`; full `gh attestation verify` green in-run (local gh predates the subcommand — an auditor needs gh ≥ 2.49) |
+| 15 | first tag gated by fresh-machine walk | **unverifiable** | the human layer, by design: needs Memnoc on a fresh machine, target repo (not CodeAtlas) picked at walk time; the `v0.1.0` tag waits on it |
+| 16 | release notes/README say no-key, needs-Claude, how-built | pass | the dry run's rendered notes.md read: no-key section, measured artifact sizes, verify instructions, provenance paragraph, zero unfilled slots; README claims adversarially cross-checked in ticket 08 review + provenance fix `3022fe6` |
+| 17 | released binary preserves unknown store sections | pass | seam 5 executed (preservation/tamper tests 5/5); committed store byte-identical through a plain scan on a repo copy (sha256 compared); binary↔commit lineage held by attestation |
+| 18 | every 405 carries Allow | pass | watched: `GET, HEAD` everywhere; `GET, HEAD, POST` exactly where ask is registered |
+| 19 | three tokens or nothing; unrecognised → 501 | pass | watched: `FROB` → 501, four-token line → 400, three-token control 200 |
+| 20 | citations bounded; wrong-turn 400 pinned | pass | watched: malformed turn → 400 with self-explaining error, provider unconsulted; over-count/over-length citations → 200, never refused; clamp steering pinned by wire tests in the fresh suite run |
+
+Between-the-slices checks, all watched this session: truncation composes
+with highlighting on one response (01×03); Allow composes with flag-gated
+routes — the flag-off source path is a miss, never a 405 (01×05); the
+capabilities booleans held to the routes they describe in three server
+shapes (01×05×06-ticket); HEAD mirrors GET on the source route (01×05);
+the committed store round-trips a plain scan byte-identical (07); the
+walkthrough-steps rename left dashboard suite and typecheck green (09's
+fix); the rendered release notes consume ticket 08's template with every
+slot measured (08×09).
+
+Unverifiable: story 15 only — the fresh-machine walk is the deliberate
+human gate on `v0.1.0`, exactly as V2's reader's walk was. Shipping
+therefore waits on that walk (or Memnoc's recorded acceptance in its
+place). One tooling note: local `gh` here is too old for `attestation
+verify`; the story passes on in-run verification plus a digest-level API
+check, and a stranger auditing with current gh reproduces the full check.
