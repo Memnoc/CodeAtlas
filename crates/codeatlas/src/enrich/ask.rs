@@ -17,7 +17,10 @@
 //! [`MAX_SUMMARY_CHARS`] on how large one of those nodes may be, and — since
 //! ADR-0012 let a request carry its conversation — [`MAX_TURNS`] on how many
 //! previous turns ride along, with a carried question clamped to
-//! [`MAX_QUESTION_CHARS`] and a carried answer to [`MAX_TURN_ANSWER_CHARS`].
+//! [`MAX_QUESTION_CHARS`], a carried answer to [`MAX_TURN_ANSWER_CHARS`],
+//! and a turn's citations to [`MAX_TURN_CITATIONS`] of at most
+//! [`MAX_CITATION_CHARS`] each (V3 story 20, the last carried field to gain
+//! a bound).
 //! All are hard caps rather than targets — [`select_context`] truncates on
 //! both axes and [`build`] clamps the history, so no phrasing of a question,
 //! no map, and no client bookkeeping bug can widen the slice or the prompt.
@@ -88,6 +91,29 @@ pub const MAX_TURNS: usize = 6;
 /// reader can rephrase a question, and can do nothing about what an earlier
 /// answer said.
 pub const MAX_TURN_ANSWER_CHARS: usize = 2000;
+
+/// The most citations one carried turn may bring (V3 story 20). The value
+/// is [`CONTEXT_NODES`] because that is the honest ceiling: a turn's
+/// citations are an earlier answer's, an answer's survive [`verified`] only
+/// by naming nodes the provider was shown, and it was shown at most one
+/// slice — so no history the dashboard assembled can ever feel this clamp.
+/// What does feel it is fabricated history: invented IDs fill no seats in
+/// [`select_context`], so a turn padding the bound's worth of them ahead of
+/// a real citation could otherwise make an arbitrarily long list steer the
+/// slice from arbitrarily deep. Excess dropped from the tail, never a
+/// refusal, like every carried field.
+pub const MAX_TURN_CITATIONS: usize = CONTEXT_NODES;
+
+/// The longest carried citation kept whole (V3 story 20). A citation is a
+/// node ID — `kind:path` or `kind:path:name` — and 500 characters holds any
+/// ID a real repository mints with room to spare, while denying the one
+/// unbounded string [`Turn`] still carried. Clamped by the same cut as
+/// every carried field rather than dropped, and the two read the same from
+/// outside: a cut ID names no node and selects nothing, exactly what an
+/// invented one has always selected. A repository deep enough to mint a
+/// longer ID loses citation continuity for that node and nothing else —
+/// term scoring can still select it, and the request is never refused.
+pub const MAX_CITATION_CHARS: usize = 500;
 
 /// One previous turn as the client carries it (ADR-0012): the reader's
 /// question, the answer, and the node IDs that answer cited. Deserialized
@@ -344,17 +370,25 @@ pub fn select_context(graph: &KnowledgeGraph, question: &str, turns: &[Turn]) ->
 }
 
 /// The carried conversation cut to what ADR-0012 admits: the newest
-/// [`MAX_TURNS`] turns, a carried question clamped to [`MAX_QUESTION_CHARS`]
-/// and a carried answer to [`MAX_TURN_ANSWER_CHARS`]. Clamped, never
-/// refused — over-bound history is the dashboard's bookkeeping slipping, and
-/// erroring the reader's question would punish the wrong party (story 14).
+/// [`MAX_TURNS`] turns, a carried question clamped to [`MAX_QUESTION_CHARS`],
+/// a carried answer to [`MAX_TURN_ANSWER_CHARS`], and the citations — the
+/// last carried field to gain a bound (V3 story 20) — to
+/// [`MAX_TURN_CITATIONS`] per turn, each cut at [`MAX_CITATION_CHARS`].
+/// Clamped, never refused — over-bound history is the dashboard's
+/// bookkeeping slipping, and erroring the reader's question would punish
+/// the wrong party (story 14).
 fn clamped_turns(turns: &[Turn]) -> Vec<Turn> {
     turns[turns.len().saturating_sub(MAX_TURNS)..]
         .iter()
         .map(|turn| Turn {
             question: clamp(&turn.question, MAX_QUESTION_CHARS),
             answer: clamp(&turn.answer, MAX_TURN_ANSWER_CHARS),
-            citations: turn.citations.clone(),
+            citations: turn
+                .citations
+                .iter()
+                .take(MAX_TURN_CITATIONS)
+                .map(|id| clamp(id, MAX_CITATION_CHARS))
+                .collect(),
         })
         .collect()
 }
@@ -970,6 +1004,114 @@ mod tests {
         // an over-long *current* question is still refused.
         let long = "a".repeat(MAX_QUESTION_CHARS + 1);
         assert!(build(&graph, &long, &at_bound).is_err());
+    }
+
+    /// V3 story 20: the last carried field gains its bound. Excess
+    /// citations drop from the tail — carried order is the order the answer
+    /// cited them and [`select_context`] walks them in order, so the leading
+    /// ones are the ones a follow-up's "it" means — and the boundary itself
+    /// passes whole. Never refused, like every carried field: only
+    /// fabricated history can exceed this bound, because an honest turn's
+    /// citations survived `verified` against a slice of at most
+    /// [`CONTEXT_NODES`] nodes.
+    #[test]
+    fn carried_citations_past_the_count_bound_are_dropped_not_refused() {
+        let graph = wide_graph(2);
+        let cite = |i: usize| format!("file:src/cited{i}.ts");
+        let turns = vec![Turn {
+            question: "earlier?".into(),
+            answer: "Earlier prose.".into(),
+            citations: (0..MAX_TURN_CITATIONS + 5).map(cite).collect(),
+        }];
+
+        let question = build(&graph, "what runs first?", &turns)
+            .expect("over-bound citations must never refuse the request");
+        let carried = &question.turns[0].citations;
+        assert_eq!(carried.len(), MAX_TURN_CITATIONS, "the bound is the bound");
+        assert_eq!(carried.first().cloned(), Some(cite(0)));
+        assert_eq!(
+            carried.last().cloned(),
+            Some(cite(MAX_TURN_CITATIONS - 1)),
+            "the excess must drop from the tail, keeping carried order"
+        );
+
+        // The boundary itself passes whole — the clamp is a ceiling, not a
+        // rewrite.
+        let at_bound = vec![Turn {
+            question: "earlier?".into(),
+            answer: "Earlier prose.".into(),
+            citations: (0..MAX_TURN_CITATIONS).map(cite).collect(),
+        }];
+        let question = build(&graph, "what runs first?", &at_bound).unwrap();
+        assert_eq!(question.turns[0].citations, at_bound[0].citations);
+    }
+
+    /// The citation bound's other axis: each carried citation is cut at
+    /// [`MAX_CITATION_CHARS`] by the same cut as every carried field — and
+    /// a cut ID names no node, so even one that named a *real* node selects
+    /// nothing once cut, which is the observable half. The boundary itself
+    /// passes whole.
+    #[test]
+    fn an_over_length_carried_citation_is_cut_and_names_no_node() {
+        // A graph wide enough that the fallback never selects a function,
+        // plus one real function node whose own ID outgrows the bound.
+        let mut graph = wide_graph(50);
+        let deep_path = format!("src/{}/deep.ts", "z".repeat(MAX_CITATION_CHARS));
+        graph.nodes.push(node(
+            NodeId::symbol(NodeKind::Function, &deep_path, "buried"),
+            NodeKind::Function,
+            "buried",
+            &deep_path,
+            "Function buried, lines 1-2",
+        ));
+        let deep_id = format!("function:{deep_path}:buried");
+
+        let turns = vec![Turn {
+            question: "earlier?".into(),
+            answer: "Something very deep.".into(),
+            citations: vec![deep_id.clone()],
+        }];
+        let question = build(&graph, "quantum entanglement", &turns)
+            .expect("an over-length citation must never refuse the request");
+
+        assert_eq!(
+            question.turns[0].citations,
+            vec![format!("{}…", &deep_id[..MAX_CITATION_CHARS])],
+            "cut at the bound by the same cut as every carried field"
+        );
+        assert!(
+            !question.context.iter().any(|c| c.id == deep_id),
+            "a cut ID names no node, so the real node it once named must \
+             not be selected"
+        );
+
+        // A citation at the bound passes whole and still steers: the same
+        // node, reachable only through its citation, leads the slice.
+        let at_bound_path = format!(
+            "src/{}/d.ts",
+            "z".repeat(MAX_CITATION_CHARS - "function:src//d.ts:b".len())
+        );
+        graph.nodes.push(node(
+            NodeId::symbol(NodeKind::Function, &at_bound_path, "b"),
+            NodeKind::Function,
+            "b",
+            &at_bound_path,
+            "Function b, lines 1-2",
+        ));
+        let at_bound_id = format!("function:{at_bound_path}:b");
+        assert_eq!(at_bound_id.chars().count(), MAX_CITATION_CHARS);
+        let turns = vec![Turn {
+            question: "earlier?".into(),
+            answer: "Something at the boundary.".into(),
+            citations: vec![at_bound_id.clone()],
+        }];
+        let question = build(&graph, "quantum entanglement", &turns).unwrap();
+        assert_eq!(question.turns[0].citations, vec![at_bound_id.clone()]);
+        assert_eq!(
+            question.context.first().map(|c| c.id.as_str()),
+            Some(at_bound_id.as_str()),
+            "a citation at the bound is kept whole and steers"
+        );
     }
 
     #[test]

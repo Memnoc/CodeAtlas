@@ -11,14 +11,14 @@ route already draws — gets the test it never had.
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready
+**Status:** done
 
-- [ ] Carried citations are clamped per field — count and length — the way
+- [x] Carried citations are clamped per field — count and length — the way
       every carried field already is: mechanically, excess dropped, never
       a refusal, because the history is the dashboard's bookkeeping
       (ADR-0012's reasoning); observable on the wire
-- [ ] A structurally-wrong turn (missing field, non-array citations) draws
+- [x] A structurally-wrong turn (missing field, non-array citations) draws
       the 400 it always drew, now pinned by a test proven able to fail
-- [ ] The new bound lives beside the existing five in the ask module, and
+- [x] The new bound lives beside the existing five in the ask module, and
       `docs/SECURITY.md`'s bounds list names it
-- [ ] Full suite green in all three feature configurations
+- [x] Full suite green in all three feature configurations

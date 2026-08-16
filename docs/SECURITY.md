@@ -265,7 +265,7 @@ of them). All are stated here because "per node, and nothing else" is a
 claim about the nodes and would otherwise read as a claim about the whole
 message (`crates/codeatlas/src/enrich/prompt.rs`, `ask_user_message`).
 
-Five limits bound it, all in `crates/codeatlas/src/enrich/ask.rs`:
+Six limits bound it, all in `crates/codeatlas/src/enrich/ask.rs`:
 
 - **`ask::CONTEXT_NODES`** — the most nodes that may accompany a question.
   `select_context` scores every node and then truncates unconditionally, so a
@@ -287,6 +287,23 @@ Five limits bound it, all in `crates/codeatlas/src/enrich/ask.rs`:
   bring back, clamped like a summary; a carried question is clamped to
   `MAX_QUESTION_CHARS`. The server holds no conversation state: the turns
   arrive with the request, bounded here, and are forgotten with it.
+- **`ask::MAX_TURN_CITATIONS`** — the most citations one carried turn may
+  bring, each cut at `ask::MAX_CITATION_CHARS` — the last carried field to
+  gain a bound. An honest turn can never feel either limit: its citations
+  are an earlier answer's, and an answer's citations survive verification
+  only by naming nodes the provider was shown — at most a slice's worth,
+  every one an ID the map itself minted. What feels it is fabricated
+  history: an invented ID selects nothing and fills no seat, so without
+  the count bound a turn padding invented IDs ahead of real ones could
+  steer the slice from arbitrarily deep in an arbitrarily long list, and
+  without the length bound a single citation was the one string a turn
+  still carried unbounded. Clamped rather than refused, like every carried
+  field, and a cut ID names no node — it selects exactly what an invented
+  one always has: nothing. Distinct from malformedness on purpose: a turn
+  that is over-bound is well-formed input and is clamped, while a turn
+  that is not even the documented shape — a missing field, citations that
+  are not an array — draws the 400 the route has always drawn for a body
+  it cannot read.
 
 **Enforced by**, in `crates/codeatlas/src/enrich/ask.rs`:
 `a_context_entry_carries_the_documented_fields_and_no_contents` (the field
@@ -298,6 +315,8 @@ list above, asserted as a whole value rather than field by field),
 `one_enormous_summary_cannot_inflate_the_slice`,
 `history_beyond_the_turn_bound_is_dropped_oldest_first`,
 `carried_fields_are_clamped_rather_than_refused`,
+`carried_citations_past_the_count_bound_are_dropped_not_refused`,
+`an_over_length_carried_citation_is_cut_and_names_no_node`,
 `the_provider_never_sees_more_than_the_bound` (at the provider seam, on what
 a backend was actually handed), and
 `a_blank_or_oversized_question_is_refused_before_any_provider_is_asked`.
@@ -312,7 +331,16 @@ a per-node claim cannot see a third thing added beside them — and
 (`crates/codeatlas/tests/serve.rs`) carry the same claims end to end, from
 an HTTP request to the argv a real child received;
 `two_conversations_interleaved_on_one_server_never_see_each_other` (same
-file) holds the no-conversation-state sentence above on the wire.
+file) holds the no-conversation-state sentence above on the wire. The
+citation bounds are held on the wire too, in the same file, by
+`a_citation_past_the_per_turn_bound_stops_steering_the_slice` and
+`an_over_length_citation_is_cut_and_steers_nothing` — each observed in what
+the scripted backend was provably shown, since a canned citation survives
+the response exactly when the carried turn put its node in the slice — and
+the clamp-versus-refuse line is pinned from the refusal side by
+`a_structurally_wrong_turn_draws_the_400_the_route_always_drew`, which
+requires a turn that is not the documented shape to keep drawing its 400
+before any provider is consulted.
 
 ### 3. The sealed build has neither route — reaching a model is a compile error
 

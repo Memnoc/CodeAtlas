@@ -385,6 +385,221 @@ fn a_carried_turn_steers_the_slice_the_next_answer_is_drawn_from() {
     );
 }
 
+/// V3 story 20: carried citations are bounded per turn, and the bound is a
+/// clamp — excess dropped from the tail, never a refusal — like every
+/// carried field (ADR-0012: the history is the dashboard's bookkeeping).
+/// Observable exactly as the steering test above is: the fake backend's
+/// canned citation of [`TARGET`] survives `verified` only if the carried
+/// turn put that node in the slice. Only fabricated history can feel this
+/// bound — an honest turn's citations came from an answer, which cited at
+/// most the slice it was shown — but invented IDs fill no seats in the
+/// selection, so without the clamp a turn padding the bound's worth of
+/// them ahead of a real ID would steer the slice from past the bound.
+#[test]
+fn a_citation_past_the_per_turn_bound_stops_steering_the_slice() {
+    use codeatlas::enrich::ask::MAX_TURN_CITATIONS;
+
+    let repo = wide_repo();
+    scan(repo.path());
+    let outside = tempfile::tempdir().unwrap();
+    let spec = format!(
+        "fake:{}",
+        canned(outside.path(), "The target does the work.", &[TARGET]).display()
+    );
+    let server = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+
+    let invented =
+        |n: usize| -> Vec<String> { (0..n).map(|i| format!("file:src/invented{i}.ts")).collect() };
+    let carrying = |citations: Vec<String>| {
+        serde_json::json!([{
+            "question": "what is the target?",
+            "answer": "src/zzz/target.ts is.",
+            "citations": citations,
+        }])
+    };
+
+    // The boundary control first: [`TARGET`] in the bound's last seat still
+    // steers, so the clamp is a bound and not an off-by-one — and the
+    // citation channel is proven live before the refusal below leans on it.
+    let mut at_bound = invented(MAX_TURN_CITATIONS - 1);
+    at_bound.push(TARGET.into());
+    let (status, body) = ask_carrying(server.port, NO_MATCH_QUESTION, carrying(at_bound));
+    assert!(status.contains("200"), "at-bound ask: {status} {body}");
+    assert_eq!(
+        body["citations"],
+        serde_json::json!([TARGET]),
+        "a citation within the bound must steer the slice: {body}"
+    );
+
+    // One seat past the bound: the request still succeeds — clamped, never
+    // refused — and the smuggled citation no longer reaches the provider,
+    // so the canned citation of it is dropped as unshown.
+    let mut past_bound = invented(MAX_TURN_CITATIONS);
+    past_bound.push(TARGET.into());
+    let (status, body) = ask_carrying(server.port, NO_MATCH_QUESTION, carrying(past_bound));
+    assert!(status.contains("200"), "past-bound ask: {status} {body}");
+    assert_eq!(body["answer"], "The target does the work.");
+    assert_eq!(
+        body["citations"],
+        serde_json::json!([]),
+        "a citation past the per-turn bound must stop steering the slice: {body}"
+    );
+}
+
+/// The other axis of story 20's citation bound: each carried citation is
+/// cut at [`ask::MAX_CITATION_CHARS`] like every carried field, and a cut
+/// ID names no node, so an over-length citation selects nothing — while
+/// the request it rode in on succeeds untouched. The probe is what no
+/// fixture had: a real node whose own ID outgrows the bound, minted here
+/// from a path deep enough to exceed it — which is what makes the clamp
+/// falsifiable, because without it that citation is real and steers.
+#[test]
+fn an_over_length_citation_is_cut_and_steers_nothing() {
+    use codeatlas::enrich::ask::MAX_CITATION_CHARS;
+
+    let repo = wide_repo();
+    // Five directory levels of 120 characters under `src/zzz/`, so the file
+    // sorts after the sixty gadgets — outside the fallback top-40, like
+    // [`TARGET`] — and its ID passes the bound with room to spare.
+    let level = "z".repeat(120);
+    let deep_rel = format!("src/zzz/{}", [level.as_str(); 5].join("/"));
+    fs::create_dir_all(repo.path().join(&deep_rel)).unwrap();
+    fs::write(
+        repo.path().join(&deep_rel).join("deep.ts"),
+        "export const deep = 1;\n",
+    )
+    .unwrap();
+    let deep_id = format!("file:{deep_rel}/deep.ts");
+    assert!(
+        deep_id.chars().count() > MAX_CITATION_CHARS,
+        "this test is only meaningful when the real ID exceeds the bound: \
+         {} chars",
+        deep_id.chars().count()
+    );
+    scan(repo.path());
+
+    let outside = tempfile::tempdir().unwrap();
+    let spec = format!(
+        "fake:{}",
+        canned(
+            outside.path(),
+            "The target does the work.",
+            &[TARGET, &deep_id],
+        )
+        .display()
+    );
+    let server = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+
+    // The premise: the deep file really is a node in the map, so its
+    // absence below is the clamp's doing and never the scanner's.
+    let (_, _, raw) = http_get(server.port, "/api/map");
+    let map: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    assert!(
+        map["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["id"] == deep_id.as_str()),
+        "the deep file must be a node in the map for this test to mean anything"
+    );
+
+    // One turn citing both: the short citation is the live control — it
+    // must steer — and the over-length one, though it names a real node,
+    // arrives cut into an ID that names nothing.
+    let turns = serde_json::json!([{
+        "question": "what is the target?",
+        "answer": "The target, and something very deep.",
+        "citations": [TARGET, deep_id],
+    }]);
+    let (status, body) = ask_carrying(server.port, NO_MATCH_QUESTION, turns);
+    assert!(status.contains("200"), "carried ask: {status} {body}");
+    assert_eq!(body["answer"], "The target does the work.");
+    assert_eq!(
+        body["citations"],
+        serde_json::json!([TARGET]),
+        "the over-length citation must be cut and steer nothing, while the \
+         one within the bound steers: {body}"
+    );
+}
+
+/// V3 story 20's second half: a structurally-wrong turn — a turn missing a
+/// field, citations that are not an array, turns that are not a list — draws
+/// the 400 the route has drawn since ticket 08 grew the body, pinned now so
+/// tolerating a malformed turn becomes a test failure instead of a
+/// discovery. The refusal is the JSON parse's, decided before any provider
+/// is consulted, so the scripted answer must never appear in it. Distinct
+/// from clamping on purpose: an over-*bound* turn is well-formed input the
+/// dashboard assembled and is clamped (ADR-0012), while a turn that is not
+/// even the documented shape came from no version of the dashboard at all.
+#[test]
+fn a_structurally_wrong_turn_draws_the_400_the_route_always_drew() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let outside = tempfile::tempdir().unwrap();
+    let spec = format!(
+        "fake:{}",
+        canned(
+            outside.path(),
+            "Only a well-formed request reaches me.",
+            &[]
+        )
+        .display()
+    );
+    let server = serve_with(repo.path(), &["--ask", "--provider", &spec]);
+
+    for (label, body) in [
+        (
+            "a turn missing its answer",
+            serde_json::json!({"question": "q?", "turns": [
+                {"question": "earlier?", "citations": []}
+            ]}),
+        ),
+        (
+            "a turn missing its question",
+            serde_json::json!({"question": "q?", "turns": [
+                {"answer": "Earlier prose.", "citations": []}
+            ]}),
+        ),
+        (
+            "citations that are not an array",
+            serde_json::json!({"question": "q?", "turns": [
+                {"question": "earlier?", "answer": "a.", "citations": "file:src/main.ts"}
+            ]}),
+        ),
+        (
+            "turns that are not a list",
+            serde_json::json!({"question": "q?", "turns":
+                {"question": "earlier?", "answer": "a.", "citations": []}
+            }),
+        ),
+    ] {
+        let (status, _, raw) = http_post(server.port, "/api/ask", &body.to_string());
+        let text = String::from_utf8_lossy(&raw);
+        assert!(
+            status.contains("400"),
+            "{label} must draw a 400: {status} {text}"
+        );
+        assert!(
+            !text.contains("Only a well-formed request reaches me."),
+            "{label} reached the backend anyway: {text}"
+        );
+        assert!(
+            text.contains("turns"),
+            "{label}'s refusal must describe the accepted shape: {text}"
+        );
+    }
+
+    // The live control: the same server answers a well-formed carrying
+    // request, so the refusals above are the parse's judgement rather than
+    // a server that refuses everything.
+    let turns = serde_json::json!([
+        {"question": "earlier?", "answer": "Earlier prose.", "citations": []}
+    ]);
+    let (status, body) = ask_carrying(server.port, "what does this project do?", turns);
+    assert!(status.contains("200"), "the control ask: {status} {body}");
+    assert_eq!(body["answer"], "Only a well-formed request reaches me.");
+}
+
 fn header<'a>(headers: &'a [String], name: &str) -> Option<&'a str> {
     headers.iter().find_map(|h| {
         let (key, value) = h.split_once(':')?;
