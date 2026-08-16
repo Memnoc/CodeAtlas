@@ -1,3 +1,10 @@
+// Named `walkthrough-steps` and not `walkthrough`, because `Walkthrough.tsx`
+// sits in the same directory: on a case-insensitive filesystem (macOS, where
+// the release workflow builds) `./Walkthrough.js` case-folds onto a file
+// called `walkthrough.ts` and the component's exports vanish — the V3
+// release dry run caught exactly that. The two names must never collide
+// case-insensitively again.
+//
 // The walkthrough of the *application* (spec story 20) — which is not the
 // codebase tour of story 6, and is never called a tour anywhere a reader can
 // see. The codebase tour walks the map's own files in the order the CLI chose;

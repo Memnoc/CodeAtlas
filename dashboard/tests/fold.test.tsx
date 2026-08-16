@@ -17,7 +17,7 @@ import type { KnowledgeGraph } from "../src/index.js";
 import { MapExplorer } from "../src/app/MapExplorer.js";
 import { CHROME_KEY, readChrome } from "../src/app/chrome.js";
 import type { DiffOverlay } from "../src/app/overlay.js";
-import { WALKTHROUGH_MARKER } from "../src/app/walkthrough.js";
+import { WALKTHROUGH_MARKER } from "../src/app/walkthrough-steps.js";
 import smallMap from "../tests/fixtures/small-map.json";
 import smallOverlay from "../tests/fixtures/small-overlay.json";
 

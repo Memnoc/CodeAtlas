@@ -76,7 +76,7 @@ import { Walkthrough } from "./Walkthrough.js";
 import {
   resolveWalkthroughSteps,
   type WalkthroughStep,
-} from "./walkthrough.js";
+} from "./walkthrough-steps.js";
 import "@xyflow/react/dist/style.css";
 import "./styles.css";
 

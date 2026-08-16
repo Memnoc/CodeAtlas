@@ -12,7 +12,7 @@ import {
   WALKTHROUGH_LIT,
   WALKTHROUGH_MARKER,
   WALKTHROUGH_STEPS,
-} from "../src/app/walkthrough.js";
+} from "../src/app/walkthrough-steps.js";
 import { openLearn, openRegion } from "./drive.js";
 import smallMap from "./fixtures/small-map.json";
 

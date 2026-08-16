@@ -26,7 +26,7 @@ import {
   WALKTHROUGH_SEEN_KEY,
   WALKTHROUGH_STEPS,
   WALKTHROUGH_TRANSIENT,
-} from "../src/app/walkthrough.js";
+} from "../src/app/walkthrough-steps.js";
 import type { DiffOverlay } from "../src/app/overlay.js";
 import { openLearn } from "./drive.js";
 import tourMap from "./fixtures/tour-map.json";

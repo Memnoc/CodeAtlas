@@ -24,7 +24,7 @@ import {
   WALKTHROUGH_LIT,
   walkthroughTarget,
   type WalkthroughStep,
-} from "./walkthrough.js";
+} from "./walkthrough-steps.js";
 
 /** Everything focusable inside the card, in document order. The trap below
  * cycles through exactly this, which is what makes "the rest of the page is
