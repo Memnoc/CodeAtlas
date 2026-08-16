@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import type { KnowledgeGraph } from "../index.js";
 import { askServer, type Capabilities, readCapabilities } from "./ask.js";
 import { MapExplorer } from "./MapExplorer.js";
+import { fetchSource } from "./source.js";
 import type { DiffOverlay } from "./overlay.js";
 import { ShareBanner } from "./ShareBanner.js";
 import { readSharePayload } from "./share.js";
@@ -98,6 +99,12 @@ export function App() {
           // same as an absent optional field, and absent is what "this
           // server cannot answer questions" has to be.
           {...(state.capabilities.ask ? { onAsk: askServer } : {})}
+          // Same rule for source (ticket 02, ADR-0013): the affordance is
+          // handed in only when the binary said `--open-code` was given, so
+          // everywhere else it is absent rather than broken.
+          {...(state.capabilities.open_code
+            ? { onOpenSource: fetchSource }
+            : {})}
         />
       );
   }

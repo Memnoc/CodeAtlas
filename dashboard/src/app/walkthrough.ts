@@ -53,12 +53,13 @@ export type WalkthroughStep = {
 /** Bands that are marked so the controls inside them are accounted for, and
  * that deliberately carry no step.
  *
- * The answer to a question is the only one, and the reason is the reason a
- * marker and a step are two different things: the conversation column exists
- * only after the reader has asked something, so a step about it would
- * spotlight an absent element on every walk that did not happen to follow a
- * question. The band it is reached *from* — the search row — is explained
- * instead.
+ * Both are reading columns that exist only after the reader has done
+ * something, which is the reason a marker and a step are two different
+ * things: the conversation column appears only after a question is asked,
+ * the source column (ticket 02 of V3) only after a selected node's code is
+ * opened, and a step about either would spotlight an absent element on
+ * every walk that did not happen to follow that gesture. The bands they are
+ * reached *from* — the search row, the side panel — are explained instead.
  *
  * Written down rather than left implicit because the alternative is an
  * invariant that reads stronger than the component: "every control sits in a
@@ -66,7 +67,7 @@ export type WalkthroughStep = {
  * everything but these. Both guards in `tests/walkthrough.test.tsx` are stated
  * against this list, and the second requires every id in it to actually be on
  * screen — so an entry that stops naming a real band fails too. */
-export const WALKTHROUGH_TRANSIENT: readonly string[] = ["answer"];
+export const WALKTHROUGH_TRANSIENT: readonly string[] = ["answer", "source"];
 
 /** Every step there is, in reading order — top bar first, then the search
  * band, the regions, the canvas and its panel, and last the things that take

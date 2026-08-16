@@ -44,11 +44,26 @@ const answersOnce = async () => ({
   citations: ["file:src/main.ts"],
 });
 
+/** A source backend that serves one honest line (ticket 02 of V3), so the
+ * source column can render with the close control it carries. Nothing calls
+ * it unless a test opens something: its mere presence is what puts the Open
+ * code affordance on screen. */
+const opensSource = async () => ({
+  source: "export function main() {}",
+  path: "src/main.ts",
+  truncated: false,
+});
+
 /** The whole interface, every optional control present — the render the two
  * drift guards below measure the step list against. */
 function renderEverything() {
   return render(
-    <MapExplorer map={map} overlay={overlay} onAsk={answersOnce} />,
+    <MapExplorer
+      map={map}
+      overlay={overlay}
+      onAsk={answersOnce}
+      onOpenSource={opensSource}
+    />,
   );
 }
 
@@ -68,6 +83,21 @@ async function askAQuestion(user: ReturnType<typeof userEvent.setup>) {
   );
   await user.click(screen.getByRole("button", { name: "Ask" }));
   return within(await screen.findByLabelText("Answer"));
+}
+
+/** Selects a node and opens its code, because the source column (ticket 02
+ * of V3) is the other part of `.explorer` that exists only after a reader's
+ * gesture — and it carries a control of its own. Same reasoning as
+ * `askAQuestion`, one band later. */
+async function openSomeCode(user: ReturnType<typeof userEvent.setup>) {
+  const search = screen.getByLabelText("Search nodes");
+  await user.clear(search);
+  await user.type(search, "main.ts");
+  await user.click(
+    within(screen.getByLabelText("Search results")).getByText("main.ts"),
+  );
+  await user.click(screen.getByRole("button", { name: "Open code" }));
+  return within(await screen.findByLabelText("Source"));
 }
 
 const walkthrough = () =>
@@ -490,11 +520,12 @@ describe("the step list against the interface it describes", () => {
     // the chrome tomorrow belongs to no marked band, and this fails until
     // somebody decides which band it is in — or gives it a step of its own.
     //
-    // A question is asked first, and that is the whole difference between an
-    // invariant and a sentence. The conversation column renders inside the
-    // workspace with a dismissal and one button per citation, and it is the
-    // one marked part with no step of its own; a fixture that never asked
-    // could not produce it, so the guard would have claimed something of the
+    // A question is asked and a file is opened first, and that is the whole
+    // difference between an invariant and a sentence. The conversation and
+    // source columns render inside the workspace with controls of their own
+    // — a dismissal and one button per citation, a close — and they are the
+    // marked parts with no step; a fixture that never asked or opened could
+    // not produce them, so the guard would have claimed something of the
     // component that the component does not do.
     const user = userEvent.setup();
     renderEverything();
@@ -503,6 +534,10 @@ describe("the step list against the interface it describes", () => {
       answer.getByRole("button", { name: "Dismiss conversation" }),
     ).toBeVisible();
     expect(answer.getAllByRole("button").length).toBeGreaterThan(1);
+    const source = await openSomeCode(user);
+    expect(
+      source.getByRole("button", { name: "Close the source" }),
+    ).toBeVisible();
 
     const explorer = document.querySelector(".explorer");
     if (explorer === null) {
@@ -534,29 +569,32 @@ describe("the step list against the interface it describes", () => {
     const user = userEvent.setup();
     renderEverything();
     await askAQuestion(user);
+    await openSomeCode(user);
 
     expect([...markersOnScreen()].sort()).toEqual(
       [...WALKTHROUGH_STEPS.map((s) => s.id), ...WALKTHROUGH_TRANSIENT].sort(),
     );
   });
 
-  it("marks the answer band and deliberately does not walk it", async () => {
+  it("marks the transient bands and deliberately walks neither", async () => {
     // The rule that reconciles the two guards above, asserted rather than
-    // implied. The answer to a question is marked so the controls inside it
-    // are accounted for, and it carries no step because it is absent until a
-    // question has been asked — a step about it would spotlight nothing on
-    // every walk that did not follow one.
+    // implied. The answer to a question and the opened source are marked so
+    // the controls inside them are accounted for, and each carries no step
+    // because it is absent until the reader's own gesture — a step about
+    // either would spotlight nothing on every walk that did not follow one.
     const user = userEvent.setup();
     renderEverything();
     await askAQuestion(user);
+    await openSomeCode(user);
     expect(markersOnScreen()).toContain("answer");
+    expect(markersOnScreen()).toContain("source");
 
     const declared = WALKTHROUGH_STEPS.map((s) => s.id);
     for (const id of WALKTHROUGH_TRANSIENT) {
       expect(declared).not.toContain(id);
     }
 
-    // On screen, and the walk is exactly as long as it is without it: a
+    // On screen, and the walk is exactly as long as it is without them: a
     // marked band is walked only where the declaration names it.
     await startWalkthrough(user);
     expect(
@@ -564,7 +602,7 @@ describe("the step list against the interface it describes", () => {
         `Step 1 of ${WALKTHROUGH_STEPS.length}`,
       ),
     ).toBeInTheDocument();
-    expect(litId()).not.toBe("answer");
+    expect(WALKTHROUGH_TRANSIENT).not.toContain(litId());
   });
 
   it("walks only the controls this particular page has", async () => {

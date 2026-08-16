@@ -69,8 +69,15 @@ export type CompletedTurn = { question: string; answer: Answer };
 export type AskFn = (question: string, turns?: Turn[]) => Promise<Answer>;
 
 /** What the serving binary said it can do. Absent, unreachable, or older
- * than this route all read the same way: no questions. */
-export type Capabilities = { ask: boolean };
+ * than this route all read the same way: no questions, no source —
+ * `open_code` (ticket 02, ADR-0013) is read exactly as `ask` is, and its
+ * absence from an older binary's answer honestly means the route is not
+ * there to call. */
+export type Capabilities = { ask: boolean; open_code: boolean };
+
+/** Every capability off: what unreachable, refused and pre-capabilities
+ * servers all mean, written once so the three cannot drift. */
+const NO_CAPABILITIES: Capabilities = { ask: false, open_code: false };
 
 /**
  * Asks the local server what it offers. Never rejects — an old binary, the
@@ -81,12 +88,12 @@ export async function readCapabilities(): Promise<Capabilities> {
   try {
     const res = await fetch(CAPABILITIES_ROUTE);
     if (!res.ok) {
-      return { ask: false };
+      return NO_CAPABILITIES;
     }
-    const body = (await res.json()) as { ask?: unknown };
-    return { ask: body?.ask === true };
+    const body = (await res.json()) as { ask?: unknown; open_code?: unknown };
+    return { ask: body?.ask === true, open_code: body?.open_code === true };
   } catch {
-    return { ask: false };
+    return NO_CAPABILITIES;
   }
 }
 

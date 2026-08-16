@@ -588,6 +588,131 @@ body {
   background: color-mix(in srgb, var(--accent) 6%, var(--panel));
 }
 
+/* The opened file, docked beside the canvas exactly as the conversation is
+   (ticket 02 of V3, ADR-0013) and for the same reason: the code and the map
+   that named it stay on screen together. Normal flow, no z-index, no
+   position — the export menu and the walkthrough keep painting over it
+   through the stacking order that already exists.
+
+   Why 460px: code, not prose. The conversation column's 380px holds a
+   readable measure of 13px sentences; source lines are indented and longer,
+   and 460 holds ~80 characters of the 12px monospace below before the
+   horizontal scroll steps in — while the 40vw arm keeps a narrow viewport's
+   canvas from being squeezed out, same guard as `.answer`'s. */
+.source {
+  --source-column: 460px;
+  width: min(var(--source-column), 40vw);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 12px 16px;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.source-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.source-path {
+  flex: 1;
+  margin: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.source-lit-note {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.source-dismiss {
+  flex: none;
+  padding: 0 6px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.source-dismiss:hover {
+  color: var(--text);
+}
+
+.source-status,
+.source-error,
+.source-truncated {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.source-status {
+  color: var(--muted);
+}
+
+.source-error {
+  color: var(--changed);
+}
+
+/* The cut, announced where the reader will meet it — above the text, so a
+   file read from the top is known to be a beginning before it is read. */
+.source-truncated {
+  padding: 6px 10px;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--bg);
+}
+
+/* The lines themselves. Long lines scroll inside the pre rather than
+   wrapping: wrapped code lies about where its lines start, and the lit
+   range below is a statement about lines. */
+.source-code {
+  flex: 1;
+  margin: 8px 0 0;
+  overflow-x: auto;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  tab-size: 4;
+}
+
+.source-line {
+  display: block;
+  white-space: pre;
+}
+
+/* Line numbers from the markup's own `data-line`, painted rather than
+   copied: a selection drags the code out clean, numbers stay behind. */
+.source-line::before {
+  content: attr(data-line);
+  display: inline-block;
+  width: 4ch;
+  margin-right: 1.5ch;
+  text-align: right;
+  color: var(--muted);
+  user-select: none;
+}
+
+/* The symbol's own range (the contract's 1-based inclusive lines), lit the
+   way the reader arrived: this is what they came to read. */
+.source-line-lit {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.source-line-lit::before {
+  color: var(--accent);
+}
+
 .answer-head {
   display: flex;
   align-items: baseline;
@@ -826,24 +951,28 @@ body {
 
 /* ── Workspace ────────────────────────────────────────────────────────── */
 
-/* Panel on the left, canvas filling the rest, and — only while a question
- * has been asked — the conversation docked on the right (ticket 17). The
- * panel is where a reader starts — the tour, the rankings, the detail of
- * whatever they just clicked — and a left-to-right reader starts at the
- * left. The DOM is in the same order, so tabbing follows the eye.
+/* Panel on the left, canvas filling the rest, and — only while opened —
+ * the two reading columns docked on the right: the source (ticket 02 of
+ * V3, ADR-0013) and then the conversation (ticket 17). The panel is where
+ * a reader starts — the tour, the rankings, the detail of whatever they
+ * just clicked — and a left-to-right reader starts at the left. The DOM is
+ * in the same order, so tabbing follows the eye; the source sits nearer
+ * the canvas because it is the canvas's own content, the conversation a
+ * commentary on it.
  *
- * The third track is `auto`, not a width: the column sizes itself (see
- * `.answer`), and an absent column — no question asked — collapses the
- * track to nothing rather than parking an empty gutter on the map. */
+ * The trailing tracks are `auto`, not widths: each column sizes itself
+ * (see `.source` and `.answer`), and an absent column — nothing opened, no
+ * question asked — collapses its track to nothing rather than parking an
+ * empty gutter on the map. */
 .workspace {
   display: grid;
-  grid-template-columns: 360px minmax(0, 1fr) auto;
+  grid-template-columns: 360px minmax(0, 1fr) auto auto;
   min-height: 0;
 }
 
 /* Folded: the 360px becomes a rail just wide enough for the way back. */
 .workspace-folded {
-  grid-template-columns: 30px minmax(0, 1fr) auto;
+  grid-template-columns: 30px minmax(0, 1fr) auto auto;
 }
 
 .panelrail {

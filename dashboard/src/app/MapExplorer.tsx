@@ -18,7 +18,14 @@ import {
   type Edge as FlowEdge,
   type ReactFlowInstance,
 } from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { createPortal } from "react-dom";
 import type { KnowledgeGraph, Node as MapNode } from "../index.js";
 import { AnswerPanel } from "./AnswerPanel.js";
@@ -61,6 +68,8 @@ import {
   type RegionKind,
 } from "./regions.js";
 import { shortestPath } from "./paths.js";
+import { type OpenSourceFn, useSource } from "./source.js";
+import { SourcePanel } from "./SourcePanel.js";
 import { Narrative, TourPanel } from "./TourPanel.js";
 import { motionDuration } from "./motion.js";
 import { Walkthrough } from "./Walkthrough.js";
@@ -82,6 +91,7 @@ export function MapExplorer({
   overlay,
   shared = false,
   onAsk,
+  onOpenSource,
 }: {
   map: KnowledgeGraph;
   /** Diff impact overlay, when `codeatlas diff` produced one. */
@@ -95,6 +105,10 @@ export function MapExplorer({
    * search bar takes names only — which is every share artifact, and every
    * `serve` without the flag. */
   onAsk?: AskFn;
+  /** How to read a mapped file's source, when the binary was started with
+   * `--open-code` (ADR-0013). Absent means no open affordance anywhere —
+   * which is every share artifact, and every `serve` without the flag. */
+  onOpenSource?: OpenSourceFn;
 }) {
   const [mode, setMode] = useState<Mode>("overview");
   const [grouping, setGrouping] = useState<RegionKind>("structural");
@@ -332,6 +346,38 @@ export function MapExplorer({
     asking.submit(query);
   };
 
+  // The one opened file (ticket 02, ADR-0013). Selection is untouched by
+  // opening: the panel is a reading column beside the map, not a navigation
+  // step, so nothing has to be restored when it closes.
+  const source = useSource(onOpenSource);
+  // The focus-return discipline (ticket 17): closing the source column can
+  // take focus with it — the close control is inside — and the Open code
+  // button it was opened from is where the keyboard goes back to.
+  const sourceReturn = useFocusReturn<HTMLButtonElement>(
+    source.state.phase !== "closed",
+  );
+  // What the Open code affordance does: resolve the pointed-at node to the
+  // file that contains it — the wire speaks file nodes only (ADR-0013), so
+  // a symbol is opened through its file, client-side, with its own `range`
+  // carried along to land on. The same roll-up the canvas marking makes.
+  const openCode = useCallback(
+    (id: string) => {
+      const node = byId.get(id);
+      const fileId = fileIdOf(id);
+      if (node === undefined || fileId === undefined) {
+        return;
+      }
+      source.open(
+        fileId,
+        node.path,
+        node.kind === "file" ? null : (node.range ?? null),
+      );
+    },
+    // `source.open` rather than `source`: the hook's return object is fresh
+    // per render, but `open` itself is stable, and it is all this uses.
+    [byId, fileIdOf, source.open],
+  );
+
   // Starting the walkthrough is also a tidying-up. Two things follow from it
   // being modal: nothing else may be left open underneath — the cascade has
   // one order, and two layers both claiming to be innermost is how ticket
@@ -431,6 +477,15 @@ export function MapExplorer({
       }
       if (asking.state.phase !== "idle") {
         asking.dismiss();
+        return;
+      }
+      // The source column sits between the conversation and the navigation
+      // stack: both columns close before the canvas moves — a panel is a
+      // smaller undo than a step back — and the conversation goes first
+      // because it was asked *over* the reading, while the opened source is
+      // the reading itself.
+      if (source.state.phase !== "closed") {
+        source.dismiss();
         return;
       }
       backStep?.go();
@@ -920,7 +975,18 @@ export function MapExplorer({
           )}
 
           {selected && (
-            <DetailPanel map={map} node={selected} onSelect={reveal} />
+            <DetailPanel
+              map={map}
+              node={selected}
+              onSelect={reveal}
+              // Spread-in rather than assigned: absent is what "this server
+              // cannot serve source" has to be, exactly as `onAsk` is
+              // absent, so the affordance does not exist rather than
+              // existing and failing (ADR-0013).
+              {...(onOpenSource === undefined
+                ? {}
+                : { onOpenCode: openCode, openCodeRef: sourceReturn })}
+            />
           )}
 
           {/* The two header switches each do one job, and this is where that
@@ -1103,6 +1169,15 @@ export function MapExplorer({
           </ReactFlow>
         </main>
 
+        {/* The opened source, docked beside the map it was opened from
+            (ticket 02, ADR-0013): the same bounded-column shape as the
+            conversation below, for the same reason — the code and the map
+            that named it stay on screen together, and the selection that
+            opened it is still lit on the canvas. Renders nothing until
+            something is opened, and the workspace's `auto` track collapses
+            with it. */}
+        <SourcePanel state={source.state} onDismiss={source.dismiss} />
+
         {/* The conversation, docked beside the map it is about (ticket 17):
             a bounded column, so the thread scrolls internally while the
             canvas keeps the remainder — and a citation click lights a card
@@ -1133,10 +1208,21 @@ function DetailPanel({
   map,
   node,
   onSelect,
+  onOpenCode,
+  openCodeRef,
 }: {
   map: KnowledgeGraph;
   node: MapNode;
   onSelect: (id: string) => void;
+  /** Opens this node's source beside the map — present exactly when the
+   * serving binary offers open code (ADR-0013), so without it the
+   * affordance does not exist rather than existing and failing. The detail
+   * panel is where every selection surfaces — drill view, magnify, the
+   * panels — which is what makes this the one place the offer lives. */
+  onOpenCode?: (id: string) => void;
+  /** Where focus returns when the source column closes (ticket 17's
+   * discipline): the control that opened it. */
+  openCodeRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const byId = useMemo(() => nodesById(map), [map]);
   const touching = map.edges.filter(
@@ -1155,6 +1241,21 @@ function DetailPanel({
         <p className="detail-range">
           lines {node.range.start_line}–{node.range.end_line}
         </p>
+      )}
+      {onOpenCode !== undefined && (
+        <button
+          type="button"
+          className="open-code"
+          ref={openCodeRef}
+          title={
+            node.kind === "file"
+              ? "Read this file's source beside the map"
+              : "Read this symbol's source beside the map, lit at its own lines"
+          }
+          onClick={() => onOpenCode(node.id)}
+        >
+          Open code
+        </button>
       )}
       <p className="detail-summary">{node.summary}</p>
       {/* What the summary cannot say without enrichment: where this sits and

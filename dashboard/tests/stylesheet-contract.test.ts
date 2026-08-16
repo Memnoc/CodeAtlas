@@ -169,17 +169,21 @@ describe("story 26 — the conversation is a bounded column beside the canvas", 
     expect(answer()?.body).toMatch(/overflow-y:\s*auto/);
   });
 
-  it("gives the column its own workspace track and the canvas the rest", () => {
-    // `auto` and not a fixed track: an absent column (no question asked)
-    // must cost the canvas nothing, and the 1fr canvas track — already
-    // pinned by story 22's guard above — keeps the remainder while it is
-    // present.
+  it("gives each reading column its own workspace track and the canvas the rest", () => {
+    // `auto` and not fixed tracks: an absent column (no question asked,
+    // nothing opened) must cost the canvas nothing, and the 1fr canvas
+    // track — already pinned by story 22's guard above — keeps the
+    // remainder while either is present. Two trailing autos since V3
+    // ticket 02: the opened source docks between the canvas and the
+    // conversation, each column collapsing its own track independently —
+    // this deliberately supersedes the single-auto shape ticket 17 pinned,
+    // because the lap adds a second column on purpose.
     for (const selector of [".workspace", ".workspace-folded"]) {
       const b = blocks().find((x) => x.selector === selector);
       expect(
         b?.body,
-        `${selector} must end its columns with an auto track for the conversation`,
-      ).toMatch(/grid-template-columns:[^;]*1fr\)\s+auto\s*;/);
+        `${selector} must end its columns with auto tracks for the source and the conversation`,
+      ).toMatch(/grid-template-columns:[^;]*1fr\)\s+auto\s+auto\s*;/);
     }
   });
 
@@ -190,5 +194,46 @@ describe("story 26 — the conversation is a bounded column beside the canvas", 
     // of its own.
     expect(answer()?.body).not.toMatch(/z-index/);
     expect(answer()?.body).not.toMatch(/position:/);
+  });
+});
+
+describe("V3 ticket 02 — the source is a bounded column beside the canvas", () => {
+  // The jsdom half (`open-code.test.tsx`) proves opening docks the source
+  // in the workspace next to the canvas; this half proves the column means
+  // what the docking claims — the same pass³ split the conversation column
+  // cut, because the failure it heads off is the same: a column that grows
+  // with its content pushes the map off the screen exactly when the reader
+  // has both open.
+  const source = () => blocks().find((b) => b.selector === ".source");
+
+  it("bounds the column as one named constant, never wider than its share", () => {
+    // A named constant so the width and its reason live in one place; the
+    // vw arm so a narrow viewport's canvas is never squeezed out. A literal
+    // in the width rule would satisfy a looser match and drift silently.
+    const b = source();
+    expect(b, ".source must be styled here").toBeDefined();
+    expect(
+      b?.body,
+      ".source must state its bound as --source-column: <N>px",
+    ).toMatch(/--source-column:\s*\d+px/);
+    expect(b?.body).toMatch(/width:\s*min\(var\(--source-column\)/);
+  });
+
+  it("scrolls the file inside the column, both axes", () => {
+    // Vertically the column, so a thousand-line file scrolls while the
+    // canvas keeps its size; horizontally the pre, so a long line scrolls
+    // under the code instead of widening the column it is bounded by.
+    expect(source()?.body).toMatch(/overflow-y:\s*auto/);
+    const code = blocks().find((b) => b.selector === ".source-code");
+    expect(code, ".source-code must be styled here").toBeDefined();
+    expect(code?.body).toMatch(/overflow-x:\s*auto/);
+  });
+
+  it("invents no stacking context for the column", () => {
+    // Same invariant as the conversation column above, same reason: the
+    // export menu and the walkthrough must keep painting over it through
+    // the order that already exists.
+    expect(source()?.body).not.toMatch(/z-index/);
+    expect(source()?.body).not.toMatch(/position:/);
   });
 });
