@@ -17,9 +17,16 @@
 //   holds arrives as the server's own 404 message, shown as prose — a
 //   deleted file is news, not a blank column.
 //
-// Plain text this lap: the envelope's `source` is rendered as lines, one
-// element per line so a range can be lit and landed on. Ticket 03 replaces
-// the text with server-highlighted spans; the line/lit mechanics stay.
+// The lines are the server's highlighted HTML (ticket 03): token spans with
+// `hl-…` classes the stylesheet colours, entities for anything that was
+// markup in the source. Injecting it is safe by the same trust that runs
+// the dashboard at all — this HTML comes from the binary that served the
+// page itself, and its escaping is proven on its side of the wire (a
+// `<script>` in source arrives as entities, `src/highlight.rs`). The server
+// closes every span before each newline, so splitting on `\n` still yields
+// one self-contained element per line — the lit/landing mechanics of
+// ticket 02 carry over unchanged. No highlight library, no parsing here:
+// the dashboard's whole contribution is its stylesheet (ADR-0013).
 import { useEffect, useRef } from "react";
 import { scrollBehaviour } from "./motion.js";
 import type { SourceState } from "./source.js";
@@ -69,6 +76,12 @@ export function SourcePanel({
             </span>
           )}
         </p>
+        {state.phase === "open" && (
+          // What the server highlighted as — or its stated "plain text"
+          // fallback, which is how a reader tells "uncovered" from
+          // "broken" without opening the network tab.
+          <span className="source-language">{state.envelope.language}</span>
+        )}
         <button
           type="button"
           className="source-dismiss"
@@ -102,7 +115,7 @@ export function SourcePanel({
           )}
           <pre className="source-code">
             <code>
-              {state.envelope.source.split("\n").map((text, i) => {
+              {state.envelope.html.split("\n").map((markup, i) => {
                 const line = i + 1;
                 const isLit =
                   lit !== null &&
@@ -115,6 +128,10 @@ export function SourcePanel({
                       isLit ? "source-line source-line-lit" : "source-line"
                     }
                     data-line={line}
+                    // The trailing newline stands in for the one split off,
+                    // so a copied selection keeps its line breaks — exactly
+                    // the `{"\n"}` the plain-text lap appended as a child.
+                    dangerouslySetInnerHTML={{ __html: `${markup}\n` }}
                     {...(isLit && line === lit.start_line
                       ? {
                           ref: (el: HTMLElement | null) => {
@@ -122,10 +139,7 @@ export function SourcePanel({
                           },
                         }
                       : {})}
-                  >
-                    {text}
-                    {"\n"}
-                  </span>
+                  />
                 );
               })}
             </code>

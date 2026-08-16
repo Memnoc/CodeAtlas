@@ -24,13 +24,20 @@ import type { Range } from "../index.js";
  * only. */
 export const SOURCE_ROUTE = "/api/source";
 
-/** What the route answers with (ticket 01's envelope): the file's text —
- * plain this lap; highlighting and a language field are ticket 03's — its
- * repo-relative path, and whether the server cut it at the size cap. A cut
- * is disclosed, never refused (ADR-0013), so `truncated` is what the panel
- * turns into a visible notice. */
+/** What the route answers with (ticket 01's envelope, carrying ticket 03's
+ * highlighting): the file as HTML — token spans (`hl-…` classes, styled by
+ * the dashboard's own stylesheet) for the seven grammar-covered languages,
+ * escaped plain text for everything else — the language that says which
+ * (`"plain text"` states the fallback), the repo-relative path, and whether
+ * the server cut the file at its size cap. A cut is disclosed, never
+ * refused (ADR-0013), so `truncated` is what the panel turns into a visible
+ * notice; the server clips before it highlights, so the spans are about
+ * exactly the text that arrived. The server escapes all source content
+ * (proven on its side of the wire), and every span is closed before each
+ * newline, so lines can be rendered one by one. */
 export type SourceEnvelope = {
-  source: string;
+  html: string;
+  language: string;
   path: string;
   truncated: boolean;
 };
@@ -55,7 +62,8 @@ export type OpenSourceFn = (fileId: string) => Promise<SourceEnvelope>;
 export async function fetchSource(fileId: string): Promise<SourceEnvelope> {
   const res = await fetch(`${SOURCE_ROUTE}?id=${encodeURIComponent(fileId)}`);
   const body = (await res.json().catch(() => null)) as {
-    source?: unknown;
+    html?: unknown;
+    language?: unknown;
     path?: unknown;
     truncated?: unknown;
     error?: unknown;
@@ -67,11 +75,15 @@ export async function fetchSource(fileId: string): Promise<SourceEnvelope> {
         : `the server answered ${res.status}`,
     );
   }
-  if (typeof body?.source !== "string" || typeof body?.path !== "string") {
+  if (typeof body?.html !== "string" || typeof body?.path !== "string") {
     throw new Error("the server's reply carried no source");
   }
   return {
-    source: body.source,
+    html: body.html,
+    // The one field the panel can survive missing: language is a statement
+    // to the reader, not a rendering input, and the fallback's own name is
+    // the honest default for an envelope that failed to make it.
+    language: typeof body.language === "string" ? body.language : "plain text",
     path: body.path,
     truncated: body.truncated === true,
   };

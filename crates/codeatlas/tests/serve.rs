@@ -1055,12 +1055,51 @@ fn the_source_route_exists_exactly_when_open_code_was_given() {
     let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(envelope["path"], serde_json::json!("src/main.ts"));
     assert_eq!(envelope["truncated"], serde_json::json!(false));
+    assert_eq!(
+        envelope["language"],
+        serde_json::json!("TypeScript"),
+        "the envelope must name the language it highlighted as"
+    );
     let disk = fs::read_to_string(repo.path().join("src/main.ts")).unwrap();
     assert_eq!(
-        envelope["source"],
-        serde_json::json!(disk),
-        "the source must be the file's own bytes"
+        source_text(&envelope),
+        disk,
+        "under the markup, the source must be the file's own bytes"
     );
+    assert!(
+        envelope["html"]
+            .as_str()
+            .unwrap()
+            .contains("<span class=\"hl-"),
+        "a grammar-covered file must arrive with token spans: {}",
+        envelope["html"]
+    );
+}
+
+/// The text a browser would show for the envelope's `html` — tags stripped,
+/// the renderer's five entities decoded, `&amp;` last so an escaped
+/// ampersand cannot cascade. Literal `<` in source arrives as `&lt;`, so
+/// every raw `<…>` in the HTML is markup and stripping it is exact. Written
+/// here independently of the server's own escaping, the same way the cap
+/// test states the cap: a helper imported from the crate could not catch
+/// the crate lying.
+fn source_text(envelope: &serde_json::Value) -> String {
+    let html = envelope["html"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the envelope must carry html: {envelope}"));
+    let mut text = String::new();
+    let mut rest = html;
+    while let Some(open) = rest.find('<') {
+        text.push_str(&rest[..open]);
+        let close = rest[open..].find('>').expect("markup closes its tags");
+        rest = &rest[open + close + 1..];
+    }
+    text.push_str(rest);
+    text.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
 }
 
 /// A source URL for one node id, percent-encoded the way a browser's
@@ -1157,7 +1196,7 @@ fn source_is_read_live_so_an_edit_shows_and_a_deletion_says_so() {
     assert!(status.contains("200"), "before the edit: {status}");
     let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let scanned = fs::read_to_string(repo.path().join("src/util.ts")).unwrap();
-    assert_eq!(envelope["source"], serde_json::json!(scanned));
+    assert_eq!(source_text(&envelope), scanned);
 
     // Edited after the scan — no re-scan, and the wire serves the edit.
     let edited = "// rewritten after the scan\nexport const shape = 42;\n";
@@ -1166,8 +1205,8 @@ fn source_is_read_live_so_an_edit_shows_and_a_deletion_says_so() {
     assert!(status.contains("200"), "after the edit: {status}");
     let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(
-        envelope["source"],
-        serde_json::json!(edited),
+        source_text(&envelope),
+        edited,
         "an edited file must serve its current contents, never the scan's"
     );
 
@@ -1221,9 +1260,20 @@ fn source_past_the_named_cap_arrives_truncated_and_says_so() {
         "content past the cap must say it was cut: {status}"
     );
     assert_eq!(
-        envelope["source"],
-        serde_json::json!(&content[..CAP]),
-        "the served source must be exactly the file's first {CAP} bytes"
+        source_text(&envelope),
+        content[..CAP],
+        "the served source must be exactly the file's first {CAP} bytes — \
+         the clip runs first and highlighting runs on the clipped bytes, \
+         so no character (a tidy trailing newline included) is invented"
+    );
+    // And cut is not stripped: what was served arrives highlighted, notice
+    // intact — the fixture is comment lines, so the spans are comment spans.
+    assert!(
+        envelope["html"]
+            .as_str()
+            .unwrap()
+            .contains("<span class=\"hl-"),
+        "a truncated file must still highlight what is served"
     );
 
     // The control that makes the flag meaningful: an under-cap file arrives
@@ -1234,9 +1284,63 @@ fn source_past_the_named_cap_arrives_truncated_and_says_so() {
     let disk = fs::read_to_string(repo.path().join("src/main.ts")).unwrap();
     assert_eq!(envelope["truncated"], serde_json::json!(false));
     assert_eq!(
-        envelope["source"],
-        serde_json::json!(disk),
+        source_text(&envelope),
+        disk,
         "an under-cap file must arrive whole"
+    );
+}
+
+/// Ticket 03's half of the envelope (ADR-0013): the language is named, an
+/// uncovered language arrives as readable plain text that says so, and
+/// source content cannot smuggle markup to the dashboard — the module tests
+/// in `src/highlight.rs` prove the rule, this proves the plumbing carries
+/// it to the wire unbroken.
+#[test]
+fn the_envelope_names_its_language_and_uncovered_files_arrive_plain_and_escaped() {
+    let repo = materialize("simple");
+    // A file whose whole point is markup in source: if the escaping ever
+    // breaks, this is the payload that would execute in the dashboard.
+    fs::write(
+        repo.path().join("src/tricky.ts"),
+        "export const sneaky = \"<script>alert('pwned')</script>\";\n",
+    )
+    .unwrap();
+    scan(repo.path());
+    let server = serve_with(repo.path(), &["--open-code"]);
+
+    // The uncovered language the map really holds: Markdown has a parser
+    // but no vendored highlight grammar, so it falls back — readable, no
+    // spans, and the fallback stated rather than left to be inferred.
+    let (status, _, body) = http_get(server.port, &source_url("file:README.md"));
+    assert!(status.contains("200"), "markdown status: {status}");
+    let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        envelope["language"],
+        serde_json::json!("plain text"),
+        "an uncovered language must state its fallback: {envelope}"
+    );
+    assert!(
+        !envelope["html"].as_str().unwrap().contains("<span"),
+        "plain text carries no token spans: {}",
+        envelope["html"]
+    );
+    let disk = fs::read_to_string(repo.path().join("README.md")).unwrap();
+    assert_eq!(source_text(&envelope), disk, "plain text is still whole");
+
+    // The escaping, observed on the wire: the payload arrives as entities,
+    // under a language that was genuinely highlighted.
+    let (status, _, body) = http_get(server.port, &source_url("file:src/tricky.ts"));
+    assert!(status.contains("200"), "tricky status: {status}");
+    let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(envelope["language"], serde_json::json!("TypeScript"));
+    let html = envelope["html"].as_str().unwrap();
+    assert!(
+        !html.contains("<script"),
+        "markup in source must never reach the dashboard as markup: {html}"
+    );
+    assert!(
+        html.contains("&lt;script&gt;"),
+        "the payload must arrive as entities: {html}"
     );
 }
 

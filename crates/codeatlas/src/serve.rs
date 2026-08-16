@@ -1054,10 +1054,16 @@ fn source_envelope(
         }
     };
     let truncated = bytes.len() > MAX_SOURCE_BYTES;
+    // The clip runs first and highlighting runs on the clipped text, so a
+    // truncated file arrives highlighted exactly as served — the notice
+    // (`truncated`) is about the same bytes the spans are.
+    let served = String::from_utf8_lossy(clip(&bytes));
+    let highlighted = crate::highlight::highlight(&node.path, &served);
     json(
         "200 OK",
         serde_json::json!({
-            "source": String::from_utf8_lossy(clip(&bytes)),
+            "html": highlighted.html,
+            "language": highlighted.language,
             "path": node.path,
             "truncated": truncated,
         }),

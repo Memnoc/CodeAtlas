@@ -1,5 +1,6 @@
 pub mod diff;
 pub mod enrich;
+pub mod highlight;
 pub mod map;
 pub mod parsers;
 pub mod scan;

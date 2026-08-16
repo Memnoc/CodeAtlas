@@ -76,6 +76,21 @@
      told apart by opacity, because a second, darker gold would be a colour
      this palette does not have. */
   --link: #ea9d34;
+
+  /* Code tokens (ticket 03 of V3, ADR-0013): the server's `hl-…` spans,
+     coloured here because the dashboard owns the styles — no highlight
+     library rides the bundle. Rosé Pine's own syntax roles: pine keywords,
+     rose functions, foam types, gold literals, iris properties, muted
+     comments — every value from the palette above, so the code column
+     stays in the same room as the map. */
+  --code-keyword: #286983;
+  --code-function: #d7827e;
+  --code-type: #56949f;
+  --code-string: #ea9d34;
+  --code-constant: #b4637a;
+  --code-comment: #9893a5;
+  --code-property: #907aa9;
+  --code-punctuation: #797593;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -98,6 +113,15 @@
     --kind-class: #ea9a97;
 
     --link: #f6c177;
+
+    --code-keyword: #3e8fb0;
+    --code-function: #ea9a97;
+    --code-type: #9ccfd8;
+    --code-string: #f6c177;
+    --code-constant: #eb6f92;
+    --code-comment: #6e6a86;
+    --code-property: #c4a7e7;
+    --code-punctuation: #908caa;
   }
 }
 
@@ -121,6 +145,15 @@
   --kind-class: #ea9a97;
 
   --link: #f6c177;
+
+  --code-keyword: #3e8fb0;
+  --code-function: #ea9a97;
+  --code-type: #9ccfd8;
+  --code-string: #f6c177;
+  --code-constant: #eb6f92;
+  --code-comment: #6e6a86;
+  --code-property: #c4a7e7;
+  --code-punctuation: #908caa;
 }
 
 /* Region identity: the six accents again, in a fixed rotation so a region
@@ -631,6 +664,19 @@ body {
   letter-spacing: normal;
 }
 
+/* The language the server highlighted as — or its stated "plain text"
+   fallback, which is how a reader knows an unhighlighted file is uncovered
+   rather than broken (ADR-0013). */
+.source-language {
+  flex: none;
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
 .source-dismiss {
   flex: none;
   padding: 0 6px;
@@ -711,6 +757,51 @@ body {
 
 .source-line-lit::before {
   color: var(--accent);
+}
+
+/* The server's token spans (`highlight.rs`'s HIGHLIGHT_NAMES, class-for-
+   class — its drift test reads this file). Every class binds a `--code-*`
+   token defined in all three theme blocks above, which is what "legible in
+   both themes" means mechanically; the stylesheet contract test holds it.
+   Unlisted captures arrive as bare text and inherit `--text`, already
+   theme-correct. */
+.hl-keyword {
+  color: var(--code-keyword);
+}
+
+.hl-function,
+.hl-constructor {
+  color: var(--code-function);
+}
+
+.hl-type,
+.hl-tag {
+  color: var(--code-type);
+}
+
+.hl-string {
+  color: var(--code-string);
+}
+
+.hl-number,
+.hl-constant {
+  color: var(--code-constant);
+}
+
+.hl-comment {
+  color: var(--code-comment);
+  font-style: italic;
+}
+
+.hl-property,
+.hl-attribute,
+.hl-label {
+  color: var(--code-property);
+}
+
+.hl-operator,
+.hl-punctuation {
+  color: var(--code-punctuation);
 }
 
 .answer-head {

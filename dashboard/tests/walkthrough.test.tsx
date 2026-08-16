@@ -49,7 +49,8 @@ const answersOnce = async () => ({
  * it unless a test opens something: its mere presence is what puts the Open
  * code affordance on screen. */
 const opensSource = async () => ({
-  source: "export function main() {}",
+  html: "export function main() {}",
+  language: "plain text",
   path: "src/main.ts",
   truncated: false,
 });

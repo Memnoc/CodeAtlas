@@ -34,7 +34,9 @@ function response(status: number, body: unknown): Response {
 
 type Reply = { status: number; body: unknown };
 
-/** Twelve honest lines, so a lit range has unlit lines on both sides. */
+/** Twelve honest lines, so a lit range has unlit lines on both sides.
+ * Escape-free text, so it is exactly what a server's plain-text fallback
+ * would send as `html`. */
 const TWELVE_LINES = Array.from(
   { length: 12 },
   (_, i) => `line ${i + 1} of main.ts`,
@@ -42,7 +44,8 @@ const TWELVE_LINES = Array.from(
 
 /** A stand-in for `codeatlas serve`: the map, no diff overlay, a capability
  * answer for both flags, and — when the test scripts one — the source route
- * itself. */
+ * itself. The default envelope is ticket 03's shape: highlighted (here:
+ * fallback plain) HTML plus the language that says which. */
 function servedBy(options: {
   open_code: boolean;
   source?: (id: string) => Reply;
@@ -64,7 +67,8 @@ function servedBy(options: {
         (() => ({
           status: 200,
           body: {
-            source: TWELVE_LINES,
+            html: TWELVE_LINES,
+            language: "plain text",
             path: "src/main.ts",
             truncated: false,
           } satisfies SourceEnvelope,
@@ -278,7 +282,8 @@ describe("the envelope's two disclosures", () => {
       source: () => ({
         status: 200,
         body: {
-          source: "the beginning of something much larger",
+          html: "the beginning of something much larger",
+          language: "plain text",
           path: "src/main.ts",
           truncated: true,
         },
@@ -326,6 +331,105 @@ describe("the envelope's two disclosures", () => {
     expect(
       column.getByRole("button", { name: "Close the source" }),
     ).toBeVisible();
+  });
+});
+
+describe("the server's spans, the dashboard's styles (ticket 03)", () => {
+  /** Twelve lines again, but highlighted the way the wire now speaks: the
+   * server's `hl-…` token spans, entities for what was markup in the
+   * source. Line 3 carries the canonical payload — if the panel ever
+   * mistakes this HTML for text, or this text for HTML, a test below
+   * reads it. */
+  const HIGHLIGHTED = [
+    '<span class="hl-keyword">import</span> x;',
+    '<span class="hl-comment">// plain enough</span>',
+    '<span class="hl-keyword">const</span> s = <span class="hl-string">&quot;&lt;script&gt;alert(1)&lt;/script&gt;&quot;</span>;',
+    ...Array.from({ length: 9 }, (_, i) => `line ${i + 4} of main.ts`),
+  ].join("\n");
+
+  function servedHighlighted() {
+    servedBy({
+      open_code: true,
+      source: () => ({
+        status: 200,
+        body: {
+          html: HIGHLIGHTED,
+          language: "TypeScript",
+          path: "src/main.ts",
+          truncated: false,
+        } satisfies SourceEnvelope,
+      }),
+    });
+  }
+
+  it("renders the spans as markup, entities as text, classes intact", async () => {
+    // The server highlights; the dashboard only styles (ADR-0013: no
+    // client-side highlight library). So the envelope's spans must become
+    // elements carrying the `hl-…` classes the stylesheet binds — and the
+    // escaped entities must come back to the reader as the characters they
+    // stand for, as text, never as live markup.
+    const user = userEvent.setup();
+    servedHighlighted();
+    await servedDashboard();
+    await selectViaSearch(user, "main.ts");
+
+    await user.click(openControl());
+    const column = await screen.findByLabelText("Source");
+
+    const keyword = column.querySelector(".hl-keyword");
+    expect(keyword).not.toBeNull();
+    expect(keyword).toHaveTextContent("import");
+    expect(column.querySelector(".hl-string")).toHaveTextContent(
+      '"<script>alert(1)</script>"',
+    );
+    // The entities arrived as text: nothing was injected as an element…
+    expect(column.querySelector("script")).toBeNull();
+    // …and the markup arrived as markup: no literal `<span` for the reader.
+    expect(column.textContent).not.toContain("<span");
+  });
+
+  it("keeps line identity: every line is one element, lit range included", async () => {
+    // Ticket 02's mechanics survive the markup: the panel still splits on
+    // newlines (the server closes every span before each one), so
+    // data-line, the lit range and the landing all keep working on
+    // highlighted lines.
+    const user = userEvent.setup();
+    servedHighlighted();
+    await servedDashboard();
+    await selectViaSearch(user, "main");
+
+    await user.click(openControl());
+    await screen.findByLabelText("Source");
+
+    expect(document.querySelectorAll(".source-line").length).toBe(12);
+    const lit = [...document.querySelectorAll(".source-line-lit")].map((el) =>
+      el.getAttribute("data-line"),
+    );
+    expect(lit).toEqual(["3", "4", "5", "6", "7", "8", "9"]);
+    // The lit line is a highlighted one: token spans inside a lit line.
+    expect(
+      document.querySelector('.source-line-lit[data-line="3"] .hl-string'),
+    ).not.toBeNull();
+  });
+
+  it("states the language the server decided on, fallback included", async () => {
+    // The envelope names the language so the reader can tell "highlighted
+    // as TypeScript" from "uncovered, shown plain" — the panel's job is to
+    // say it, not infer it.
+    const user = userEvent.setup();
+    servedHighlighted();
+    await servedDashboard();
+    await selectViaSearch(user, "main.ts");
+    await user.click(openControl());
+    let column = await screen.findByLabelText("Source");
+    expect(within(column).getByText("TypeScript")).toBeVisible();
+
+    // And the stated fallback, on the default plain-text stub.
+    await user.click(screen.getByRole("button", { name: "Close the source" }));
+    servedBy({ open_code: true });
+    await user.click(openControl());
+    column = await screen.findByLabelText("Source");
+    expect(within(column).getByText("plain text")).toBeVisible();
   });
 });
 

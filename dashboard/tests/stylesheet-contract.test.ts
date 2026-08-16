@@ -237,3 +237,77 @@ describe("V3 ticket 02 — the source is a bounded column beside the canvas", ()
     expect(source()?.body).not.toMatch(/position:/);
   });
 });
+
+describe("V3 ticket 03 — the server's token spans are legible in both themes", () => {
+  // The server emits `hl-…` classes (`highlight.rs`'s HIGHLIGHT_NAMES — a
+  // drift test on that side reads this file, so the list here mirroring it
+  // is itself guarded); the dashboard's whole contribution to highlighting
+  // is this stylesheet (ADR-0013: no client-side library). "Legible in both
+  // themes" is therefore a stylesheet property, and mechanically it means:
+  // every token class takes its colour from a `--code-*` variable, and
+  // every such variable is defined in all three theme blocks — Dawn's bare
+  // `:root`, the OS-dark media block, and the explicit Moon override. A
+  // class coloured by literal or a variable missing from one block would be
+  // a token readable in one theme and invisible in the other — precisely
+  // the class of bug jsdom can never see.
+  const HL_CLASSES = [
+    "hl-attribute",
+    "hl-comment",
+    "hl-constant",
+    "hl-constructor",
+    "hl-function",
+    "hl-keyword",
+    "hl-label",
+    "hl-number",
+    "hl-operator",
+    "hl-property",
+    "hl-punctuation",
+    "hl-string",
+    "hl-tag",
+    "hl-type",
+  ];
+  const THEME_BLOCKS = [
+    ":root",
+    ':root:not([data-theme="dawn"])',
+    ':root[data-theme="moon"]',
+  ];
+
+  /** The `--code-*` variable a token class's color rule references. */
+  function codeVariableOf(hlClass: string): string {
+    const rule = blocks().find((b) =>
+      b.selector
+        .split(",")
+        .map((s) => s.trim())
+        .includes(`.${hlClass}`),
+    );
+    expect(rule, `.${hlClass} must be styled in styles.css`).toBeDefined();
+    const m = rule?.body.match(/color:\s*var\((--code-[a-z-]+)\)/);
+    expect(
+      m,
+      `.${hlClass} must take its color from a --code-* variable, not a ` +
+        "literal — a literal cannot follow the theme",
+    ).not.toBeNull();
+    return (m as RegExpMatchArray)[1] as string;
+  }
+
+  it("colors every class the server can emit through a --code-* variable", () => {
+    for (const hlClass of HL_CLASSES) {
+      codeVariableOf(hlClass);
+    }
+  });
+
+  it("defines every referenced --code-* variable in all three theme blocks", () => {
+    const referenced = new Set(HL_CLASSES.map(codeVariableOf));
+    for (const themeBlock of THEME_BLOCKS) {
+      const definition = blocks().find((b) => b.selector === themeBlock);
+      expect(definition, `${themeBlock} must exist`).toBeDefined();
+      for (const variable of referenced) {
+        expect(
+          definition?.body,
+          `${variable} must be defined in ${themeBlock} — a token coloured ` +
+            "in one theme and transparent in the other is the bug this holds",
+        ).toMatch(new RegExp(`${variable}:\\s*#[0-9a-f]{6}`));
+      }
+    }
+  });
+});
