@@ -385,9 +385,10 @@ is built AI-assisted, under the Northstar engineering pipeline — specs,
 tickets, test-first slices, cross-checked reviews — with every decision a
 human's, recorded in those ADRs. The same disclosure runs through the
 artifact itself: prose a model wrote inside a map always says so — the
-annotation store records the provider, the model and the date that
-produced it, the dashboard badges enriched prose where it renders it, and
-`share` redacts it.
+annotation store carries one record naming the provider, the model and
+the UTC date of the last run that wrote it, and prose bought by earlier
+runs rides beneath that latest record; the dashboard badges enriched
+prose where it renders it, and `share` redacts it.
 
 ## Status
 

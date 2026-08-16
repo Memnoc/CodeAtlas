@@ -72,8 +72,10 @@ every change arrives as a spec'd, ticketed slice, is built test-first, and
 is cross-checked against the spec and the house standards before it lands.
 The decisions are a human's, recorded as ADRs in `docs/adr/`. The same
 disclosure runs through the artifact: prose a model wrote inside a map
-always says so — the annotation store records the provider, the model and
-the UTC date that produced each piece, the dashboard badges enriched prose
-where it renders it, and `share` redacts it from the exported file. The
-security posture — what can reach a model, what it receives, and the
-committed test behind each claim — is `docs/SECURITY.md`.
+always says so — the annotation store carries one record naming the
+provider, the model and the UTC date of the last run that wrote it, and
+prose bought by earlier runs rides beneath that latest record; the
+dashboard badges enriched prose where it renders it, and `share` redacts
+it from the exported file. The security posture — what can reach a model,
+what it receives, and the committed test behind each claim — is
+`docs/SECURITY.md`.
