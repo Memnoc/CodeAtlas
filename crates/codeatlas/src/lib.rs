@@ -110,6 +110,14 @@ enum Command {
         /// loopback and local disk.
         #[arg(long, id = "backend", long_help = enrich::ask_help())]
         ask: bool,
+        /// Serve a mapped file's source at GET /api/source (ADR-0013).
+        /// Off by default: without it the source route does not exist,
+        /// and this server still never serves your code — a real line on
+        /// shared machines, where any local user can read a loopback
+        /// port but not your files. Only files that are nodes in the map
+        /// are served; nothing leaves the host either way.
+        #[arg(long)]
+        open_code: bool,
         #[command(flatten)]
         backend: BackendArgs,
     },
@@ -204,12 +212,14 @@ pub fn run() -> ExitCode {
             path,
             port,
             ask,
+            open_code,
             backend,
         } => {
             let root = path.unwrap_or_else(|| PathBuf::from("."));
             let options = serve::ServeOptions {
                 port,
                 ask: ask.then(|| backend.choice()),
+                open_code,
             };
             match serve::serve(&root, options) {
                 Ok(()) => ExitCode::SUCCESS,

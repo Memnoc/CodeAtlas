@@ -1015,6 +1015,319 @@ fn the_capability_route_states_whether_questions_can_be_asked() {
     );
 }
 
+/// ADR-0013's gate, proven on the wire: the source route is registered
+/// exactly when `--open-code` was given. Without the flag the route does not
+/// exist — the `--ask` pattern — so asking for source draws the very refusal
+/// any unregistered GET draws: the asset fallback's 404, indistinguishable
+/// from a path nobody ever served. A 403 here would be a route that exists
+/// and refuses, which is the shape ADR-0013 rejects.
+#[test]
+fn the_source_route_exists_exactly_when_open_code_was_given() {
+    let repo = materialize("simple");
+    scan(repo.path());
+
+    let plain = serve(repo.path());
+    let (miss_status, miss_headers, miss_body) = http_get(plain.port, "/no-such-asset.js");
+    let (status, headers, body) = http_get(plain.port, "/api/source?id=file%3Asrc%2Fmain.ts");
+    assert!(
+        status.contains("404"),
+        "plain serve source status: {status}"
+    );
+    assert_eq!(
+        (
+            status.as_str(),
+            header(&headers, "Content-Type"),
+            body.clone()
+        ),
+        (
+            miss_status.as_str(),
+            header(&miss_headers, "Content-Type"),
+            miss_body
+        ),
+        "without the flag the source route must not exist: the refusal must \
+         be the unregistered-route refusal, never a route of its own"
+    );
+
+    let open = serve_with(repo.path(), &["--open-code"]);
+    let (status, headers, body) = http_get(open.port, "/api/source?id=file%3Asrc%2Fmain.ts");
+    assert!(status.contains("200"), "open-code source status: {status}");
+    assert_eq!(header(&headers, "Content-Type"), Some("application/json"));
+    let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(envelope["path"], serde_json::json!("src/main.ts"));
+    assert_eq!(envelope["truncated"], serde_json::json!(false));
+    let disk = fs::read_to_string(repo.path().join("src/main.ts")).unwrap();
+    assert_eq!(
+        envelope["source"],
+        serde_json::json!(disk),
+        "the source must be the file's own bytes"
+    );
+}
+
+/// A source URL for one node id, percent-encoded the way a browser's
+/// `encodeURIComponent` sends it — `:` and `/` escaped — so these tests
+/// speak the encoding the dashboard will.
+fn source_url(id: &str) -> String {
+    let encoded: String = id
+        .chars()
+        .map(|c| match c {
+            ':' => "%3A".to_string(),
+            '/' => "%2F".to_string(),
+            other => other.to_string(),
+        })
+        .collect();
+    format!("/api/source?id={encoded}")
+}
+
+/// Map membership is the allowlist, proven where it bites: existence on
+/// disk buys a request nothing. An unmapped path that really exists inside
+/// the root, a symbol id the map really holds, and a traversal-shaped id
+/// pointing at a real file outside the root each draw the same 404 for the
+/// same stated reason — a lookup that consulted the filesystem would have
+/// found all three, so the sameness is what shows the request never
+/// reached it. The mapped control alongside proves the 404s are about the
+/// ids, not a route that cannot answer.
+#[test]
+fn only_file_nodes_in_the_map_resolve_and_disk_existence_buys_nothing() {
+    // The repo sits one level down so a `../` id has a real target: the
+    // secret beside the root exists, and must still be unreachable.
+    let outer = tempfile::tempdir().unwrap();
+    let repo = outer.path().join("repo");
+    common::copy_tree(&common::fixture_dir("simple"), &repo);
+    let inert = repo.join("_gitignore");
+    if inert.exists() {
+        fs::rename(inert, repo.join(".gitignore")).unwrap();
+    }
+    fs::write(outer.path().join("beside-the-root.txt"), "not yours").unwrap();
+    scan(&repo);
+    // On disk inside the root, but born after the scan — not in the map.
+    fs::write(repo.join("unmapped-after-scan.txt"), "also not yours").unwrap();
+    let server = serve_with(&repo, &["--open-code"]);
+
+    // A symbol id the map really holds: file-level is the only granularity
+    // the wire speaks (ADR-0013; symbols open client-side via `range`).
+    let (_, _, raw) = http_get(server.port, "/api/map");
+    let map: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    let symbol = map["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["kind"] != "file")
+        .expect("the fixture maps symbols")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    for id in [
+        "file:unmapped-after-scan.txt",
+        symbol.as_str(),
+        "file:../beside-the-root.txt",
+    ] {
+        let (status, _, body) = http_get(server.port, &source_url(id));
+        assert!(status.contains("404"), "{id}: {status}");
+        let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            error["error"]
+                .as_str()
+                .unwrap()
+                .contains("not a file node in the map"),
+            "{id} must draw the allowlist's own refusal: {error}"
+        );
+    }
+    // The two real files were readable the whole time; only the map said no.
+    assert!(repo.join("unmapped-after-scan.txt").exists());
+    assert!(outer.path().join("beside-the-root.txt").exists());
+
+    // The control: a mapped file node still answers.
+    let (status, _, _) = http_get(server.port, &source_url("file:src/main.ts"));
+    assert!(status.contains("200"), "mapped control: {status}");
+}
+
+/// Source is read live from disk per request, exactly as the map and the
+/// overlay are: an edit after the scan is served as it now stands, and a
+/// deletion draws a 404 naming the honest reason — a stale map never
+/// fabricates source (ADR-0013, spec story 8).
+#[test]
+fn source_is_read_live_so_an_edit_shows_and_a_deletion_says_so() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let server = serve_with(repo.path(), &["--open-code"]);
+    let url = source_url("file:src/util.ts");
+
+    let (status, _, body) = http_get(server.port, &url);
+    assert!(status.contains("200"), "before the edit: {status}");
+    let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let scanned = fs::read_to_string(repo.path().join("src/util.ts")).unwrap();
+    assert_eq!(envelope["source"], serde_json::json!(scanned));
+
+    // Edited after the scan — no re-scan, and the wire serves the edit.
+    let edited = "// rewritten after the scan\nexport const shape = 42;\n";
+    fs::write(repo.path().join("src/util.ts"), edited).unwrap();
+    let (status, _, body) = http_get(server.port, &url);
+    assert!(status.contains("200"), "after the edit: {status}");
+    let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        envelope["source"],
+        serde_json::json!(edited),
+        "an edited file must serve its current contents, never the scan's"
+    );
+
+    // Deleted after the scan: an honest 404, not an empty 200 and not the
+    // allowlist's sentence — the node is in the map, the file is gone.
+    fs::remove_file(repo.path().join("src/util.ts")).unwrap();
+    let (status, _, body) = http_get(server.port, &url);
+    assert!(status.contains("404"), "after the deletion: {status}");
+    let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let reason = error["error"].as_str().unwrap();
+    assert!(
+        reason.contains("no longer on disk"),
+        "the refusal must name the honest reason: {reason:?}"
+    );
+    assert!(
+        reason.contains("src/util.ts"),
+        "the refusal must name the file: {reason:?}"
+    );
+
+    // And the server outlives the stale entry.
+    let (status, _, _) = http_get(server.port, "/api/map");
+    assert!(status.contains("200"), "map status after the 404: {status}");
+}
+
+/// The envelope and its cap: source, path and a truncation flag; content
+/// past the named cap arrives cut at it with the flag set, disclosed
+/// rather than refused (ADR-0013). The cap is stated here as its own
+/// literal — the server's `MAX_SOURCE_BYTES`, written independently so a
+/// moved cap is a tripped test, never a silently moved test.
+#[test]
+fn source_past_the_named_cap_arrives_truncated_and_says_so() {
+    /// The server's cap, as an independent literal (see above).
+    const CAP: usize = 512 * 1024;
+
+    let repo = materialize("simple");
+    // Comment lines, so half a mebibyte of fixture parses as one file node
+    // rather than thousands of identically-named symbols.
+    let content = "// pad\n".repeat((CAP + 4096) / 7 + 1);
+    assert!(content.len() > CAP, "the fixture must exceed the cap");
+    fs::write(repo.path().join("src/huge.ts"), &content).unwrap();
+    scan(repo.path());
+    let server = serve_with(repo.path(), &["--open-code"]);
+
+    let (status, _, body) = http_get(server.port, &source_url("file:src/huge.ts"));
+    assert!(status.contains("200"), "over-cap status: {status}");
+    let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(envelope["path"], serde_json::json!("src/huge.ts"));
+    assert_eq!(
+        envelope["truncated"],
+        serde_json::json!(true),
+        "content past the cap must say it was cut: {status}"
+    );
+    assert_eq!(
+        envelope["source"],
+        serde_json::json!(&content[..CAP]),
+        "the served source must be exactly the file's first {CAP} bytes"
+    );
+
+    // The control that makes the flag meaningful: an under-cap file arrives
+    // whole, byte for byte, and unflagged.
+    let (status, _, body) = http_get(server.port, &source_url("file:src/main.ts"));
+    assert!(status.contains("200"), "under-cap status: {status}");
+    let envelope: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let disk = fs::read_to_string(repo.path().join("src/main.ts")).unwrap();
+    assert_eq!(envelope["truncated"], serde_json::json!(false));
+    assert_eq!(
+        envelope["source"],
+        serde_json::json!(disk),
+        "an under-cap file must arrive whole"
+    );
+}
+
+/// The capabilities route carries the open-code boolean beside `ask`
+/// (ADR-0013, spec story 7), and each answer is held to the route it
+/// describes, exactly as the ask boolean is: a capability answer nothing
+/// checks against reality is the kind of fact that drifts silently.
+#[test]
+fn the_capability_route_states_whether_source_can_be_fetched() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let url = source_url("file:src/main.ts");
+
+    let plain = serve(repo.path());
+    let (status, _, body) = http_get(plain.port, "/api/capabilities");
+    assert!(status.contains("200"), "capabilities status: {status}");
+    let said: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(said["open_code"], serde_json::json!(false), "{said}");
+    assert_eq!(
+        said["ask"],
+        serde_json::json!(false),
+        "the ask boolean must keep riding beside it: {said}"
+    );
+    // Held to reality: the route it said is absent really is — the
+    // unregistered-route 404, even for a mapped id.
+    let (status, _, body) = http_get(plain.port, &url);
+    assert!(status.contains("404"), "said no source, then: {status}");
+    assert_eq!(
+        String::from_utf8_lossy(&body),
+        "not found",
+        "the absent route must refuse as any unregistered path does"
+    );
+
+    let open = serve_with(repo.path(), &["--open-code"]);
+    let (status, _, body) = http_get(open.port, "/api/capabilities");
+    assert!(status.contains("200"), "capabilities status: {status}");
+    let said: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(said["open_code"], serde_json::json!(true), "{said}");
+    assert_eq!(
+        said["ask"],
+        serde_json::json!(false),
+        "open code must not claim questions: {said}"
+    );
+    let (status, _, _) = http_get(open.port, &url);
+    assert!(
+        status.contains("200"),
+        "said it serves source, then did not: {status}"
+    );
+}
+
+/// HEAD mirrors GET on the source route through the registry's existing
+/// derivation — no second list, so nothing here was added for HEAD to work.
+/// The registry-walking HEAD test above covers the plain-serve shape (the
+/// route unregistered, the asset fallback's 404); this holds the flag-on
+/// shape, at the envelope's 200 and the allowlist's 404 alike.
+#[test]
+fn head_mirrors_get_on_the_source_route() {
+    let repo = materialize("simple");
+    scan(repo.path());
+    let server = serve_with(repo.path(), &["--open-code"]);
+
+    for (name, url) in [
+        ("a mapped file", source_url("file:src/main.ts")),
+        ("an unmapped id", source_url("file:not-in-the-map.ts")),
+    ] {
+        let (get_status, get_headers, get_body) = http_get(server.port, &url);
+        let (head_status, head_headers, head_body) = http_head(server.port, &url);
+        assert_eq!(
+            head_status, get_status,
+            "{name}: HEAD must carry GET's status"
+        );
+        for header_name in ["Content-Type", "Content-Length"] {
+            assert_eq!(
+                header(&head_headers, header_name),
+                header(&get_headers, header_name),
+                "{name}: {header_name} must match GET's"
+            );
+        }
+        assert_eq!(
+            header(&head_headers, "Content-Length").unwrap(),
+            get_body.len().to_string(),
+            "{name}: HEAD must promise exactly the body GET sends"
+        );
+        assert!(
+            head_body.is_empty(),
+            "{name}: HEAD must send no body, got {} bytes",
+            head_body.len()
+        );
+    }
+}
+
 /// Story 14's rule, applied to a route: the backend failing is a response,
 /// not the end of serving.
 #[test]

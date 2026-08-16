@@ -10,6 +10,7 @@ every push and pull request.
 [ADR-0008]: adr/0008-enrichment-through-an-authenticated-claude-cli-behind-its-own-feature.md
 [ADR-0009]: adr/0009-codebase-questions-are-answered-by-the-serving-binary.md
 [ADR-0012]: adr/0012-a-conversation-is-client-carried-bounded-input.md
+[ADR-0013]: adr/0013-open-code-is-a-flag-gated-serve-route-highlighted-by-the-vendored-grammars.md
 
 ## The one sentence
 
@@ -35,15 +36,21 @@ compiles and runs all three.
 
 `codeatlas scan`, `diff`, `share`, and `serve` never touch the network. Two
 flags are the exceptions, and they are named rather than implied:
-`scan --enrich` and `serve --ask`, which are guarantee 2's subject. Plain
-`serve` — the flag absent — holds no provider at all and does not route
-`POST /api/ask`. It is not quite the program it was before [ADR-0009],
-because it answers one route that decision added: `GET /api/capabilities`
-(`serve::CAPABILITIES_ROUTE`), which on a plain `serve` says `{"ask":false}`.
-The dashboard is the same embedded bytes either way, so which shape is
-serving it has to be said at runtime. That route is the whole of the
-difference — no provider, no credential, no egress path, one more loopback
-GET whose body is a boolean about this process.
+`scan --enrich` and `serve --ask`, which are guarantee 2's subject. A third
+serve flag, `serve --open-code`, is deliberately not in that pair: it
+registers `GET /api/source` ([ADR-0013]; the route list below), which
+widens what a *loopback* caller can be told and nothing about what leaves
+the host — the route reads local disk and answers the same loopback socket
+every other route answers, no provider and no HTTP client anywhere near it.
+Plain `serve` — the flags absent — holds no provider at all and routes
+neither `POST /api/ask` nor `GET /api/source`. It is not quite the program
+it was before [ADR-0009], because it answers one route that decision added:
+`GET /api/capabilities` (`serve::CAPABILITIES_ROUTE`), which on a plain
+`serve` says `{"ask":false,"open_code":false}`. The dashboard is the same
+embedded bytes either way, so which shape is serving it has to be said at
+runtime. That route is the whole of the difference — no provider, no
+credential, no egress path, one more loopback GET whose body is two
+booleans about this process.
 
 **Enforced by** `crates/codeatlas/tests/egress.rs`: each command runs inside
 a fresh Linux network namespace (`unshare -r -n`) whose only interface is
@@ -77,7 +84,11 @@ a fact about the server rather than about egress:
 each answer to the route it describes — a plain `serve` must 405 the question
 route it said it does not have, and a `serve --ask` must answer it. A
 capability answer nothing checks against reality is the kind of fact that
-drifts silently. `the_dashboard_asks_the_routes_this_binary_serves`
+drifts silently. `the_capability_route_states_whether_source_can_be_fetched`
+(same file) holds the second boolean the same way: false on a plain `serve`,
+whose source route must then draw the unregistered-route 404 even for a
+mapped file, and true on a `serve --open-code`, which must then serve one.
+`the_dashboard_asks_the_routes_this_binary_serves`
 (`crates/codeatlas/tests/routes.rs`) pins both route strings across the
 language border, so the page cannot come to ask for a route this server does
 not serve — which would look to a reader exactly like a server that cannot
@@ -97,11 +108,29 @@ omit a route the server answers nor keep naming one it no longer does:
 - `GET /api/map` — the map JSON, read from disk per request
 - `GET /api/diff` — the diff overlay, when `codeatlas diff` has written one;
   404 otherwise, which is how the dashboard knows to hide its toggle
-- `GET /api/capabilities` — one boolean: whether this process was started
-  with `--ask`
+- `GET /api/capabilities` — two booleans: whether this process was started
+  with `--ask`, and whether with `--open-code`
 - `POST /api/ask` — registered only while `--ask` puts a backend behind it;
   without the flag the route does not exist rather than existing and
   refusing, which is guarantee 1's plain-`serve` claim above
+- `GET /api/source` — registered only while `--open-code` was given, the
+  same pattern ([ADR-0013]): without the flag the route does not exist, and
+  asking for it draws the very 404 any unregistered path does. Its query
+  string must name a *file node the map holds* — map membership is the
+  allowlist and there is no path-addressed serving, so an unmapped path, a
+  symbol id, and a traversal-shaped id all draw one 404 with the filesystem
+  never consulted. What it serves is read live from disk per request — an
+  edited file as it now stands, a deleted one an honest 404 — and cut at
+  `serve::MAX_SOURCE_BYTES` with the cut disclosed in the envelope's
+  `truncated` flag rather than refused. The boundary this route does not
+  move: it changes what the reader's *browser* can be told, and nothing
+  about what a *model* receives — ask still sends no file contents
+  (guarantee 2), and a share artifact still carries no source. Enforced by
+  `the_source_route_exists_exactly_when_open_code_was_given`,
+  `only_file_nodes_in_the_map_resolve_and_disk_existence_buys_nothing`,
+  `source_is_read_live_so_an_edit_shows_and_a_deletion_says_so` and
+  `source_past_the_named_cap_arrives_truncated_and_says_so`
+  (`crates/codeatlas/tests/serve.rs`)
 
 Every other GET is answered from the embedded dashboard assets in process
 memory, or 404s — the dashboard itself, every remaining path rather than a
@@ -621,11 +650,18 @@ text — those claims are about what git does:
   availability of the local dashboard only, never confidentiality. What a connection can be told is the
   whole of this list:
   the map and the diff overlay, read from disk; the embedded dashboard
-  assets, from process memory; and — since [ADR-0009] — one boolean saying
-  whether this process was started with `--ask` (`CAPABILITIES_ROUTE`). That
-  last is the only thing the server discloses about its own configuration
-  rather than about the repository, and it is a fact a local process could
-  establish anyway by asking a question and seeing what comes back.
+  assets, from process memory; since [ADR-0009] two booleans saying whether
+  this process was started with `--ask` and with `--open-code`
+  (`CAPABILITIES_ROUTE`); and — only while `--open-code` holds the route
+  registered — the source of any file that is a node in the map, read live
+  from disk and cut at the named cap ([ADR-0013]; the route list above).
+  The booleans are the only thing the server discloses about its own
+  configuration rather than about the repository, and each is a fact a
+  local process could establish anyway by probing the route it describes.
+  The source route is the one deliberate widening of this list since it was
+  first written, and it is opt-in per process for exactly the reason
+  [ADR-0013] gives: a loopback port is readable by any local user on a
+  shared machine, and file permissions are not.
 - **Nothing caps how many connections hold threads at once.** `serve` is
   thread-per-connection and no thread cap exists. What the request-read
   bounds in the bullet above changed is each thread's tenure — one

@@ -13,30 +13,35 @@ because the drift gates force it to.
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready
+**Status:** done
 
-- [ ] The source route is registered exactly when `--open-code` was given;
+- [x] The source route is registered exactly when `--open-code` was given;
       without the flag a request draws the same refusal any unregistered
       route does, proven on the wire against the real binary (prior art:
       the `--ask` route-existence tests)
-- [ ] Only file nodes in the map resolve: an unmapped path, a symbol id,
+- [x] Only file nodes in the map resolve: an unmapped path, a symbol id,
       and a traversal-shaped request each draw 404 with no filesystem
       walk — the map is the allowlist, and there is no path-addressed
       serving to defend
-- [ ] Source is read live per request: a file edited after the scan serves
+- [x] Source is read live per request: a file edited after the scan serves
       its current contents; a deleted one draws a 404 naming the honest
       reason
-- [ ] The JSON envelope carries the source (plain text this ticket), the
+- [x] The JSON envelope carries the source (plain text this ticket), the
       path, and a truncation flag; content past the named size cap arrives
       truncated with the flag set — the cap proven able to fail by
-      lowering it and watching the test trip
-- [ ] The capabilities response carries the open-code boolean beside
+      lowering it and watching the test trip (lowered 512 KiB → 16 KiB,
+      the exact-bytes assertion tripped, reverted)
+- [x] The capabilities response carries the open-code boolean beside
       `ask`; true and false each observed on the wire, and each answer
       held to the route it describes (prior art: the capability-route
       test)
-- [ ] Both route drift gates green: `docs/SECURITY.md` names the route and
+- [x] Both route drift gates green: `docs/SECURITY.md` names the route and
       its what-a-connection-can-be-told list is updated honestly — proven
-      able to fail by un-naming the route
-- [ ] HEAD mirrors GET on the source route through the registry's existing
+      able to fail by un-naming the route (renamed every `/api/source`
+      token in the document, both gates tripped naming their own
+      direction, reverted)
+- [x] HEAD mirrors GET on the source route through the registry's existing
       derivation
-- [ ] Full suite green in all three feature configurations
+- [x] Full suite green in all three feature configurations (default,
+      `--no-default-features`, `--no-default-features --features
+      agent-cli` — 15 test binaries each, zero failures)
