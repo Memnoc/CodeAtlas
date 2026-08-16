@@ -28,6 +28,37 @@ repository is on the day you run it, so none are written down here.
 
 ## Quick start
 
+### Download and run
+
+The dashboard is compiled into the binary, so one downloaded file is the
+whole install — no toolchain, no key, no account. Every release on the
+[releases page](https://github.com/Memnoc/CodeAtlas/releases) carries a
+binary for each supported target — Linux x86_64 and aarch64 (musl,
+statically linked), macOS arm64 and x86_64 — with a `-sealed` variant
+beside each, a SHA-256 checksums file, and GitHub build-provenance
+attestation; the release's own notes say which binary is which and how to
+verify what you downloaded. Pick the file for your platform — its name
+carries the tag and the target — then:
+
+```sh
+curl -LO https://github.com/Memnoc/CodeAtlas/releases/download/<tag>/codeatlas-<tag>-<target>
+chmod +x codeatlas-<tag>-<target>     # a fresh download is not executable
+./codeatlas-<tag>-<target> scan .     # writes .codeatlas/knowledge-graph.json
+./codeatlas-<tag>-<target> serve .    # opens the map on http://127.0.0.1:4173/
+```
+
+Scanning, serving, diffing and sharing all run like that: offline, on
+loopback, no credential anywhere. The two flags that do reach a model —
+`scan --enrich` and `serve --ask` — are opt-in, need Claude, and are the
+subject of [Enrichment](#enrichment-optional); the `-sealed` variant is
+the build in which those two refuse because reaching a model is a compile
+error rather than a forbidden action ([Security](#security)).
+
+### Build from source
+
+The same commands, from a clone — this path needs a Rust toolchain
+(edition 2024) and Node 24:
+
 ```sh
 # one-time: the dashboard is compiled into the binary, so its deps must exist
 cd dashboard && npm ci && cd ..
@@ -47,7 +78,8 @@ one `.gitignore` interaction worth knowing.
 ### Optional: shell aliases
 
 The binary targets whatever repository you run it in, so a handful of
-aliases make it a global tool — adjust the first path to your clone. The
+aliases make it a global tool — point the first path at wherever your
+binary lives, the downloaded file or your clone's build. The
 model-touching pair carry `--provider cli:claude` on purpose: baking the
 flag in makes the bare-flag trap described in
 [Enrichment](#enrichment-optional) impossible to hit from muscle memory.
@@ -347,6 +379,15 @@ contract, enrichment behind a provider trait, content-hash carry-over, zero
 egress enforced by a compile-time feature gate, a committed annotation store,
 enrichment through an authenticated CLI, and questions answered by the
 serving binary. The V1 scope lives in [`docs/specs/`](docs/specs/).
+
+They are also the honest answer to how this software was built: CodeAtlas
+is built AI-assisted, under the Northstar engineering pipeline — specs,
+tickets, test-first slices, cross-checked reviews — with every decision a
+human's, recorded in those ADRs. The same disclosure runs through the
+artifact itself: prose a model wrote inside a map always says so — the
+annotation store records the provider, the model and the date that
+produced it, the dashboard badges enriched prose where it renders it, and
+`share` redacts it.
 
 ## Status
 
