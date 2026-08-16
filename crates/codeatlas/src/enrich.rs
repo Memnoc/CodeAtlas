@@ -306,6 +306,13 @@ pub const ANNOTATIONS_FILE: &str = "annotations.json";
 /// offer, and the next `--enrich` buys exactly those — while a bump would
 /// discard every purchased summary and name to learn prose the run could
 /// have bought incrementally.
+///
+/// The additive rule is safe to keep using because rewrites preserve the
+/// sections a binary does not understand (V3 ticket 07, ADR-0014): a future
+/// binary may add a section under version 2 knowing every released binary
+/// carries it across a rewrite rather than dropping it. Versions other than
+/// this one still read as empty — forward compatibility is about unknown
+/// sections within the understood version, never version tolerance.
 const STORE_VERSION: u32 = 2;
 
 /// The carry-over store (ADR-0005): enrichment prose keyed by identity
@@ -343,6 +350,21 @@ pub struct AnnotationStore {
     flows: BTreeMap<String, SemanticAnnotation>,
     #[serde(default)]
     tour: BTreeMap<String, SemanticAnnotation>,
+    /// Top-level sections this binary does not understand, captured on read
+    /// and written back on save (V3 ticket 07, ADR-0014). Distribution means
+    /// a released binary lives for years beside newer ones sharing the same
+    /// committed store; before this field, a rewrite was wholesale and an
+    /// old binary silently dropped any section a newer binary had purchased
+    /// — the `layer_descriptions` section was the first real casualty
+    /// candidate. Held as [`serde_json::Value`]s: the section's *content* is
+    /// preserved exactly, its formatting re-normalised by the same printer
+    /// that formats everything else. A `BTreeMap` so the write stays
+    /// deterministic; unknown sections serialize after the known ones,
+    /// sorted by name. Only sections *within* [`STORE_VERSION`] are carried
+    /// — a store of another version still reads as empty, this field
+    /// included.
+    #[serde(flatten)]
+    unknown: BTreeMap<String, serde_json::Value>,
 }
 
 /// Which backend, which model, and when — recorded because a committed store
@@ -576,7 +598,10 @@ impl AnnotationStore {
 /// keyed by its current derivation-input hash — and writes it
 /// deterministically (sorted keys, pretty, trailing newline). Rebuilding
 /// from the graph is self-pruning: annotations for deleted elements or
-/// no-longer-matching derivations simply cease to exist.
+/// no-longer-matching derivations simply cease to exist. Pruning stops at
+/// what this binary understands: top-level sections a newer binary wrote
+/// are carried across the rewrite untouched (V3 ticket 07, ADR-0014),
+/// because "not mine to rebuild" must never decay into "dropped".
 ///
 /// `identity` is the backend this run purchased through; it is recorded with
 /// today's date so the committed store says what wrote it (ADR-0007).
@@ -665,6 +690,12 @@ fn save_store(root: &Path, graph: &KnowledgeGraph, identity: ProviderIdentity) -
         layer_descriptions,
         flows,
         tour,
+        // Re-read from disk at the write itself rather than threaded through
+        // the callers: the preservation is the write path's own invariant,
+        // and every future caller of this function inherits it for free. A
+        // store of another version loads as empty, so its sections are
+        // deliberately NOT mined — wholesale replacement there is unchanged.
+        unknown: AnnotationStore::load(root).unknown,
     };
     let dir = root.join(crate::scan::OUTPUT_DIR);
     fs::create_dir_all(&dir)?;
@@ -2297,6 +2328,142 @@ mod tests {
         let description = graph.layers[0].description.as_ref().unwrap();
         assert_eq!(description.text, "Files under src/");
         assert_eq!(description.provenance, Provenance::Structural);
+    }
+
+    /// The forward-compat consequence ADR-0014 demands before the first
+    /// release (V3 ticket 07): rewriting a store preserves the top-level
+    /// sections this binary does not understand, so an old binary can never
+    /// silently drop prose a newer binary's owner paid for. The concrete V2
+    /// case: a binary without `layer_descriptions` rewriting a store that
+    /// had them — wholesale rewrite, silent loss of purchased prose.
+    ///
+    /// What "preserved" honestly means here: the section's JSON *value*
+    /// survives exactly — every key, every string, every number — not its
+    /// source formatting. Unknown sections ride through
+    /// [`serde_json::Value`], whose objects sort keys and whose printer owns
+    /// the whitespace, so a byte-identity assertion over the section's
+    /// serialized form would pass only on formatting luck. Content
+    /// equivalence is what the mechanism guarantees, so it is what is
+    /// asserted — and once one rewrite has normalised the formatting, every
+    /// later rewrite IS byte-identical, which the second save below pins.
+    #[test]
+    fn a_rewrite_preserves_the_sections_this_binary_does_not_understand() {
+        let root = TempRoot::new("unknown-section-survives");
+        let dir = root.path().join(crate::scan::OUTPUT_DIR);
+        fs::create_dir_all(&dir).unwrap();
+        // A version-2 store as a newer binary would write it: sections this
+        // binary knows, plus one it does not. The unknown section's keys are
+        // deliberately not alphabetical and its formatting is deliberately
+        // not the pretty-printer's, so this cannot pass by luck.
+        fs::write(
+            dir.join(ANNOTATIONS_FILE),
+            format!(
+                r#"{{"version": {STORE_VERSION},
+                    "annotations": {{}},
+                    "symbol_docs": {{
+                      "function:src/a.ts:go": {{"text": "Purchased by a newer binary.", "inputs_hash": "fnv1a64:00000000075bcd15", "tokens": 42}}
+                    }}}}"#
+            ),
+        )
+        .unwrap();
+        let purchased = serde_json::json!({
+            "function:src/a.ts:go": {
+                "text": "Purchased by a newer binary.",
+                "inputs_hash": "fnv1a64:00000000075bcd15",
+                "tokens": 42
+            }
+        });
+
+        // The rewrite every enrichment batch performs.
+        save_store(root.path(), &graph(), ProviderIdentity::unnamed()).unwrap();
+
+        let path = dir.join(ANNOTATIONS_FILE);
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            written["symbol_docs"], purchased,
+            "the `symbol_docs` section a newer binary wrote was lost by this \
+             binary's rewrite: {written}"
+        );
+        assert_eq!(written["version"], STORE_VERSION);
+
+        // Determinism holds with a stranger aboard: the store is read by a
+        // person in a diff (ADR-0007), so a second rewrite must reproduce
+        // the first byte for byte — the preserved section included.
+        let first = fs::read(&path).unwrap();
+        save_store(root.path(), &graph(), ProviderIdentity::unnamed()).unwrap();
+        let second = fs::read(&path).unwrap();
+        assert_eq!(
+            first, second,
+            "a preserved section must not wander between rewrites"
+        );
+    }
+
+    /// The other half of surviving strangers: a section this binary does
+    /// not understand must not spook the load — everything the store holds
+    /// that this binary DOES understand still re-attaches for free.
+    #[test]
+    fn a_store_carrying_unknown_sections_still_reattaches_everything_it_holds() {
+        let root = TempRoot::new("unknown-section-beside-known");
+        fs::create_dir_all(root.path().join("src")).unwrap();
+        fs::write(root.path().join("src/a.ts"), b"node body").unwrap();
+        let dir = root.path().join(crate::scan::OUTPUT_DIR);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(ANNOTATIONS_FILE),
+            format!(
+                r#"{{
+  "version": {STORE_VERSION},
+  "annotations": {{
+    "file:src/a.ts": {{"content_hash": "{}", "summary": "Carried prose."}}
+  }},
+  "symbol_docs": {{"function:src/a.ts:go": {{"text": "From the future."}}}}
+}}"#,
+                content_hash(b"node body"),
+            ),
+        )
+        .unwrap();
+
+        let mut graph = graph();
+        AnnotationStore::load(root.path()).reattach(root.path(), &mut graph);
+
+        assert_eq!(
+            graph.nodes[0].summary, "Carried prose.",
+            "a known annotation must survive an unknown neighbour"
+        );
+        assert_eq!(graph.nodes[0].provenance, Provenance::Llm);
+    }
+
+    /// Forward compatibility is about unknown sections *within* the
+    /// understood version, never version tolerance: a store of another
+    /// version reads as empty exactly as before, so a rewrite replaces it
+    /// wholesale — its unknown sections deliberately not mined for salvage.
+    /// (The read side's degrade-to-empty is pinned end-to-end by
+    /// `tests/enrich.rs::an_old_version_annotation_store_degrades_to_no_carry_over`.)
+    #[test]
+    fn another_versions_store_is_replaced_wholesale_not_mined_for_sections() {
+        let root = TempRoot::new("other-version-not-mined");
+        let dir = root.path().join(crate::scan::OUTPUT_DIR);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join(ANNOTATIONS_FILE),
+            format!(
+                r#"{{"version": {}, "annotations": {{}}, "symbol_docs": {{"k": "v"}}}}"#,
+                STORE_VERSION + 1
+            ),
+        )
+        .unwrap();
+
+        save_store(root.path(), &graph(), ProviderIdentity::unnamed()).unwrap();
+
+        let written: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(dir.join(ANNOTATIONS_FILE)).unwrap()).unwrap();
+        assert!(
+            written.get("symbol_docs").is_none(),
+            "a store of another version reads as empty, so its sections must \
+             not be carried into the rewrite: {written}"
+        );
+        assert_eq!(written["version"], STORE_VERSION);
     }
 
     #[test]
