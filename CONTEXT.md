@@ -127,6 +127,13 @@ _Avoid_: cost, spend
 The single redacted HTML file `share` exports: no server, no token, opens by
 double-click, and inherits the dashboard's renderer.
 
+**Open code**:
+The flag-gated serve capability (`serve --open-code`) that returns a mapped
+file's source, highlighted server-side by the vendored grammars, for the
+dashboard to open at a file or symbol; never in a share artifact, never
+sent to a model (ADR-0013).
+_Avoid_: source view, code view
+
 **Sealed build**:
 The build configuration whose compile-time feature gate proves zero egress
 (ADR-0006). The egress suite and the sealed probe test this posture; the

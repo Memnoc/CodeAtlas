@@ -14,3 +14,5 @@
 | [0010](./0010-file-significance-is-published-once-in-the-map-contract.md) | File significance is published once, in the map contract | accepted | 2026-08-13 |
 | [0011](./0011-no-layout-library-a-share-ceiling-enforces-it.md) | No layout library; a two-megabyte share ceiling enforces it | accepted | 2026-08-13 |
 | [0012](./0012-a-conversation-is-client-carried-bounded-input.md) | A conversation is client-carried, bounded input | accepted | 2026-08-13 |
+| [0013](./0013-open-code-is-a-flag-gated-serve-route-highlighted-by-the-vendored-grammars.md) | Open code is a flag-gated serve route, highlighted by the vendored grammars | accepted | 2026-08-16 |
+| [0014](./0014-distribution-is-attested-github-releases-sealed-beside-default.md) | Distribution is attested GitHub Releases, sealed beside default | accepted | 2026-08-16 |
