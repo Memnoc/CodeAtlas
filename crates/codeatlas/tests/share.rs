@@ -419,6 +419,40 @@ fn share_artifact_references_no_external_host() {
 }
 
 #[test]
+fn share_artifact_references_no_serve_route() {
+    // Ticket 04 of V3 (ADR-0013, spec story 10): a share recipient is
+    // precisely someone who does not hold the code, so the artifact must
+    // not even carry the source route's name — and the honest way to make
+    // that true is structural: every route-speaking function lives in the
+    // dashboard's wire module, which only `App`'s served branch reaches,
+    // and only by dynamic import. The inliner embeds exactly what
+    // `index.html` references, so the wire chunk never rides the artifact.
+    //
+    // The scan walks `serve::REGISTRY` rather than naming `/api/source`
+    // alone: the registry is the one place a route is declared, so a route
+    // added tomorrow joins this scan the day it exists, and a static import
+    // that drags any route string back into the main chunk trips here.
+    let root = share_fixture_root();
+    let html = String::from_utf8(run_share(root.path())).unwrap();
+
+    for route in codeatlas::serve::REGISTRY {
+        assert!(
+            !html.contains(route.path),
+            "the share artifact byte-contains {} — a serve route has no \
+             business in a file whose recipient has no server (ADR-0013)",
+            route.path
+        );
+    }
+    // The registry-walk above can only guard routes it contains; pin the
+    // one this ticket exists for, so an emptied registry cannot quietly
+    // turn the loop vacuous.
+    assert!(
+        !html.contains("/api/source"),
+        "the share artifact byte-contains the source route"
+    );
+}
+
+#[test]
 fn share_survives_map_content_that_mentions_asset_like_paths() {
     // A scanned repo can legitimately contain nodes whose paths look like
     // the artifact's own moving parts (an index.html, an assets dir) —
@@ -537,7 +571,9 @@ fn the_share_artifact_stays_under_its_ceiling() {
 
     // What the recipient receives: the artifact's own bytes on disk, after
     // templating and inlining, uncompressed.
-    let measured = run_share(&root).len() as u64;
+    let bytes = run_share(&root);
+    let measured = bytes.len() as u64;
+    eprintln!("this repository's share artifact measured {measured} bytes");
     assert!(
         measured <= SHARE_CEILING_BYTES,
         "the share artifact is {measured} bytes — {over} bytes over the \
@@ -545,6 +581,48 @@ fn the_share_artifact_stays_under_its_ceiling() {
          what the artifact embeds, or raise SHARE_CEILING_BYTES in \
          src/share.rs and say why in the diff.",
         over = measured - SHARE_CEILING_BYTES
+    );
+
+    // Ticket 04 (ADR-0013), on the same artifact — the one built from this
+    // repository's own enriched map, annotation store and all, because that
+    // is the artifact a person actually hands to a stranger. The fixture
+    // tests above prove the same properties on a synthetic map; this proves
+    // nothing about the real one smuggles them back in.
+    let html = String::from_utf8(bytes).expect("the artifact is UTF-8");
+    for route in codeatlas::serve::REGISTRY {
+        assert!(
+            !html.contains(route.path),
+            "this repository's own share artifact byte-contains {}",
+            route.path
+        );
+    }
+    // No source rides either: probe with a line of a mapped Rust file —
+    // read at test time so the probe cannot go stale. The map may name
+    // serve.rs, count its lines and list its symbols; the moment a line of
+    // it appears verbatim, the artifact is carrying code. The probe is the
+    // longest line containing no `"`, `\` or `<`, because those are the
+    // characters the two leak paths rewrite (JSON string escaping in the
+    // payload, the inliner's `<`): a line free of them arrives
+    // byte-identical whether it leaked raw into the HTML or inside the
+    // embedded JSON, so one scan covers both vectors — the first tamper of
+    // this guard leaked a quoted line and sailed through as `\"`-escaped
+    // bytes, which is exactly the miss this filter closes.
+    let serve_rs = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/serve.rs"))
+        .expect("serve.rs is readable");
+    let probe = serve_rs
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.contains(['"', '\\', '<']))
+        .max_by_key(|line| line.len())
+        .expect("serve.rs has lines");
+    assert!(
+        probe.len() > 60,
+        "the probe line is too short to be distinctive: {probe:?}"
+    );
+    assert!(
+        !html.contains(probe),
+        "this repository's own share artifact contains a line of serve.rs — \
+         source is riding the artifact (ADR-0013): {probe:?}"
     );
 }
 

@@ -1,11 +1,13 @@
 // Story 21, the dashboard half (ticket 27): asking the served map a question
 // in prose. The model call itself is the serving binary's (ADR-0009) — this
-// file only knows how to speak to the two routes that expose it, and how to
-// hold the one question in flight.
+// file holds what asking *is* (the envelopes, the one-question state
+// machine), while how the routes are spoken to lives in `wire.ts`, which
+// only `App`'s served branch reaches and only by dynamic import (ticket 04:
+// the share artifact must not even carry the routes' names).
 //
 // Two rules shape what is here rather than in `MapExplorer`:
 //
-// - **Only this file fetches.** The explorer renders share artifacts too, and
+// - **The explorer never fetches.** It renders share artifacts too, and
 //   ADR-0009 rejected giving a double-clicked `file://` page a network path.
 //   The explorer therefore takes an [`AskFn`] as a prop; `App` supplies one
 //   only for a served map whose binary said it can answer, and share mode
@@ -16,21 +18,8 @@
 //   map (the map schema is a published contract for external producers —
 //   story 16, ADR-0003), so it is not in the payload; and probing the question
 //   route to find out would be a request made to answer a question nobody
-//   asked. It has a route of its own.
+//   asked. It has a route of its own (`wire.ts` reads it).
 import { useCallback, useRef, useState } from "react";
-
-/** Where a question goes. Must match `serve::ASK_ROUTE`. */
-export const ASK_ROUTE = "/api/ask";
-
-/** Where the dashboard asks what this server can do. Must match
- * `serve::CAPABILITIES_ROUTE`. */
-export const CAPABILITIES_ROUTE = "/api/capabilities";
-
-/** The route answers 415 to anything else, which is what keeps another
- * origin from spending the reader's model budget: a cross-origin `fetch` can
- * only set the three "simple" content types without a preflight, and the
- * server answers no `OPTIONS`. Same-origin — this — is unaffected. */
-const ASK_CONTENT_TYPE = "application/json";
 
 /** An answer and the nodes it was drawn from. Citations are node IDs; the
  * server drops any that its map does not contain, and the explorer still
@@ -72,94 +61,8 @@ export type AskFn = (question: string, turns?: Turn[]) => Promise<Answer>;
  * than this route all read the same way: no questions, no source —
  * `open_code` (ticket 02, ADR-0013) is read exactly as `ask` is, and its
  * absence from an older binary's answer honestly means the route is not
- * there to call. */
+ * there to call. `wire.ts` is what reads the answer off the wire. */
 export type Capabilities = { ask: boolean; open_code: boolean };
-
-/** Every capability off: what unreachable, refused and pre-capabilities
- * servers all mean, written once so the three cannot drift. */
-const NO_CAPABILITIES: Capabilities = { ask: false, open_code: false };
-
-/**
- * Asks the local server what it offers. Never rejects — an old binary, the
- * dev server, or a served map with no `--ask` all mean the same thing to the
- * reader, and none of them is an error worth showing them.
- */
-export async function readCapabilities(): Promise<Capabilities> {
-  try {
-    const res = await fetch(CAPABILITIES_ROUTE);
-    if (!res.ok) {
-      return NO_CAPABILITIES;
-    }
-    const body = (await res.json()) as { ask?: unknown; open_code?: unknown };
-    return { ask: body?.ask === true, open_code: body?.open_code === true };
-  } catch {
-    return NO_CAPABILITIES;
-  }
-}
-
-/**
- * Puts one question to `POST /api/ask` and returns what came back, or throws
- * with the server's own explanation. Every failure the route defines carries
- * an `error` string (400 for the question, 413, 415, 500, 502 for the
- * backend), so the reader is told what the program running on their machine
- * said rather than a status number.
- *
- * `turns` is the conversation so far, oldest first (ADR-0012); the thread
- * that assembles it is ticket 09's. A call without turns sends the exact
- * body it always has, so a first question — and every caller written before
- * conversations existed — rides the wire unchanged.
- */
-export async function askServer(
-  question: string,
-  turns: Turn[] = [],
-): Promise<Answer> {
-  const res = await fetch(ASK_ROUTE, {
-    method: "POST",
-    headers: { "Content-Type": ASK_CONTENT_TYPE },
-    body: JSON.stringify(turns.length > 0 ? { question, turns } : { question }),
-  });
-  const body = (await res.json().catch(() => null)) as {
-    answer?: unknown;
-    citations?: unknown;
-    usage?: unknown;
-    error?: unknown;
-  } | null;
-  if (!res.ok) {
-    throw new Error(
-      typeof body?.error === "string"
-        ? body.error
-        : `the server answered ${res.status}`,
-    );
-  }
-  if (typeof body?.answer !== "string") {
-    throw new Error("the server's reply carried no answer");
-  }
-  const usage = readUsage(body.usage);
-  return {
-    answer: body.answer,
-    citations: Array.isArray(body.citations)
-      ? body.citations.filter((id): id is string => typeof id === "string")
-      : [],
-    // Spread rather than `usage: undefined`: an unreported usage is an
-    // absent key, exactly as the wire carries it.
-    ...(usage === null ? {} : { usage }),
-  };
-}
-
-/** The wire's usage object, or nothing. Two numeric counts come through as
- * the measurement they are; anything less — no field, a missing count, a
- * count that is not a number — reads as no measurement at all, because a
- * number shown to the reader must be one a provider actually reported
- * (ADR-0012), never a zero standing in for silence. */
-function readUsage(value: unknown): Usage | null {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-  const { input_tokens, output_tokens } = value as Record<string, unknown>;
-  return typeof input_tokens === "number" && typeof output_tokens === "number"
-    ? { input_tokens, output_tokens }
-    : null;
-}
 
 /** One question at a time, and what became of it — plus the conversation
  * the question continues. `turns` is every exchange completed *before* the

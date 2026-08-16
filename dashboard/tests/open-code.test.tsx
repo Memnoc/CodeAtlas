@@ -15,8 +15,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeGraph } from "../src/index.js";
 import { App } from "../src/app/App.js";
-import { CAPABILITIES_ROUTE } from "../src/app/ask.js";
-import { SOURCE_ROUTE, type SourceEnvelope } from "../src/app/source.js";
+import type { SourceEnvelope } from "../src/app/source.js";
+import { CAPABILITIES_ROUTE, SOURCE_ROUTE } from "../src/app/wire.js";
 import { SHARE_DATA_ID } from "../src/app/share.js";
 import { openRegion, selectedOnCanvas } from "./drive.js";
 import smallMap from "./fixtures/small-map.json";
@@ -548,5 +548,42 @@ describe("the other places a node is already selected", () => {
     expect(
       detail().queryByRole("button", { name: "Open code" }),
     ).not.toBeInTheDocument();
+  });
+
+  it("stays absent in a share artifact even when a server would say yes", async () => {
+    // Ticket 04: the artifact's absence must not hinge on the runtime being
+    // network-dead. An artifact opened over http (a colleague drags it into
+    // a tab while a serving binary happens to run on the same port) sits
+    // one imagined fetch away from a capabilities route answering
+    // `open_code: true` — so pin the structure: share mode never asks, and
+    // a would-be yes buys no affordance. The stub answers everything and
+    // counts everything; the assertion is that it was never spoken to.
+    const user = userEvent.setup();
+    const script = document.createElement("script");
+    script.id = SHARE_DATA_ID;
+    script.type = "application/json";
+    script.textContent = JSON.stringify({
+      map,
+      redaction: {
+        marker: "[redacted]",
+        policy: ["Node.summary"],
+        redacted: [],
+      },
+    });
+    document.head.append(script);
+    const fetchStub = servedBy({ open_code: true });
+
+    render(<App />);
+    await screen.findByLabelText("Search nodes");
+    await selectViaSearch(user, "main.ts");
+
+    expect(screen.getByLabelText("Node detail")).toBeInTheDocument();
+    expect(
+      detail().queryByRole("button", { name: "Open code" }),
+    ).not.toBeInTheDocument();
+    // No capability probe, no map fetch, nothing: the payload is the whole
+    // world, which is exactly what makes the affordance's absence a
+    // property of the artifact rather than of its surroundings.
+    expect(fetchStub).not.toHaveBeenCalled();
   });
 });

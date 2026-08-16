@@ -1,8 +1,10 @@
 //! The route paths the serving binary and the dashboard have to agree on
-//! (ticket 27). Rust declares them; `dashboard/src/app/ask.ts` re-declares
-//! them as string literals, because a TypeScript module cannot import a Rust
-//! constant — and until this test existed, nothing made the second copy
-//! true. A comment saying "must match `serve::ASK_ROUTE`" is a wish.
+//! (ticket 27). Rust declares them; `dashboard/src/app/wire.ts` — the one
+//! module that speaks to the server, kept out of the share artifact by
+//! ticket 04 — re-declares them as string literals, because a TypeScript
+//! module cannot import a Rust constant — and until this test existed,
+//! nothing made the second copy true. A comment saying "must match
+//! `serve::ASK_ROUTE`" is a wish.
 //!
 //! It matters more here than a duplicated string usually would, because the
 //! failure would be silent rather than loud. `readCapabilities` swallows
@@ -36,14 +38,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use codeatlas::enrich::ask::MAX_TURNS;
-use codeatlas::serve::{ASK_ROUTE, CAPABILITIES_ROUTE, REGISTRY};
+use codeatlas::serve::{ASK_ROUTE, CAPABILITIES_ROUTE, REGISTRY, SOURCE_ROUTE};
 
-/// The dashboard module that declares both routes.
-fn dashboard_routes() -> String {
-    let path: PathBuf =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../dashboard/src/app/ask.ts");
+/// A dashboard source module, read whole.
+fn dashboard_module(name: &str) -> String {
+    let path: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../dashboard/src/app")
+        .join(name);
     fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read the dashboard's route module at {path:?}: {e}"))
+        .unwrap_or_else(|e| panic!("cannot read the dashboard module at {path:?}: {e}"))
 }
 
 /// A committed file at the repository root, read whole. These tests build
@@ -58,16 +61,21 @@ fn repo_file(relative: &str) -> String {
 
 #[test]
 fn the_dashboard_asks_the_routes_this_binary_serves() {
-    let source = dashboard_routes();
+    let source = dashboard_module("wire.ts");
 
+    // `SOURCE_ROUTE` joined when the constants moved into `wire.ts`
+    // (ticket 04): its drift is quieter than a hard 404 sounds, because the
+    // affordance is gated on capabilities alone — the button would render,
+    // and every press would fail against a route this server never served.
     for (name, route) in [
         ("ASK_ROUTE", ASK_ROUTE),
         ("CAPABILITIES_ROUTE", CAPABILITIES_ROUTE),
+        ("SOURCE_ROUTE", SOURCE_ROUTE),
     ] {
         let declaration = format!("export const {name} = \"{route}\";");
         assert!(
             source.contains(&declaration),
-            "dashboard/src/app/ask.ts must declare `{declaration}` to match \
+            "dashboard/src/app/wire.ts must declare `{declaration}` to match \
              `serve::{name}` — as written, the dashboard asks a route this \
              server does not serve, and says nothing about it"
         );
@@ -83,7 +91,7 @@ fn the_dashboard_asks_the_routes_this_binary_serves() {
 /// binary.
 #[test]
 fn the_dashboard_carries_the_turn_bound_this_binary_clamps_to() {
-    let source = dashboard_routes();
+    let source = dashboard_module("ask.ts");
 
     let declaration = format!("export const MAX_TURNS = {MAX_TURNS};");
     assert!(

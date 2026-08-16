@@ -13,16 +13,17 @@
 //   rather than by a check somebody has to remember.
 // - **The capability is asked for, not assumed.** Whether this server
 //   process was started with `--open-code` is a property of the process,
-//   not of the map, so the capabilities route says it (`ask.ts` reads it)
-//   and nothing here probes the source route to find out.
+//   not of the map, so the capabilities route says it and nothing here
+//   probes the source route to find out.
+//
+// How the source route is actually spoken to lives in `wire.ts`, which only
+// `App`'s served branch reaches and only by dynamic import (ticket 04: the
+// share artifact must not even carry the route's name). This file keeps
+// what an opened file *is* — the envelope, the state machine, the hook —
+// all of which the artifact legitimately carries: a hook handed no function
+// renders no affordance.
 import { useCallback, useRef, useState } from "react";
 import type { Range } from "../index.js";
-
-/** The route a mapped file's source is fetched on. Must match
- * `serve::SOURCE_ROUTE`: `GET /api/source?id=<file-node-id>` — the id, not
- * a path, because the map is the allowlist and the wire speaks file nodes
- * only. */
-export const SOURCE_ROUTE = "/api/source";
 
 /** What the route answers with (ticket 01's envelope, carrying ticket 03's
  * highlighting): the file as HTML — token spans (`hl-…` classes, styled by
@@ -47,47 +48,6 @@ export type SourceEnvelope = {
  * explanation. Absent means no affordance — every share artifact, and
  * every `serve` without the flag. */
 export type OpenSourceFn = (fileId: string) => Promise<SourceEnvelope>;
-
-/**
- * Fetches one mapped file's source, or throws with the server's own words.
- * Every failure the route defines carries an `error` string — the 404 for a
- * file the map names but the disk no longer holds is the one a reader will
- * actually meet, and its message ("re-run `codeatlas scan`…") is better
- * advice than a status number.
- *
- * The id rides as one percent-encoded query parameter: a node id contains
- * `:` and `/`, and the server decodes exactly `encodeURIComponent`'s
- * escapes.
- */
-export async function fetchSource(fileId: string): Promise<SourceEnvelope> {
-  const res = await fetch(`${SOURCE_ROUTE}?id=${encodeURIComponent(fileId)}`);
-  const body = (await res.json().catch(() => null)) as {
-    html?: unknown;
-    language?: unknown;
-    path?: unknown;
-    truncated?: unknown;
-    error?: unknown;
-  } | null;
-  if (!res.ok) {
-    throw new Error(
-      typeof body?.error === "string"
-        ? body.error
-        : `the server answered ${res.status}`,
-    );
-  }
-  if (typeof body?.html !== "string" || typeof body?.path !== "string") {
-    throw new Error("the server's reply carried no source");
-  }
-  return {
-    html: body.html,
-    // The one field the panel can survive missing: language is a statement
-    // to the reader, not a rendering input, and the fallback's own name is
-    // the honest default for an envelope that failed to make it.
-    language: typeof body.language === "string" ? body.language : "plain text",
-    path: body.path,
-    truncated: body.truncated === true,
-  };
-}
 
 /** One opened file, and what became of opening it. Never an empty panel:
  * every non-closed phase has something honest to show — the request under

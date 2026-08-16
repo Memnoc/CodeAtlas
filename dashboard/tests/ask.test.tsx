@@ -13,12 +13,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { KnowledgeGraph } from "../src/index.js";
 import { App } from "../src/app/App.js";
+import type { Turn } from "../src/app/ask.js";
 import {
   ASK_ROUTE,
   CAPABILITIES_ROUTE,
   askServer,
-  type Turn,
-} from "../src/app/ask.js";
+} from "../src/app/wire.js";
 import { SHARE_DATA_ID } from "../src/app/share.js";
 import { openRegion, selectedOnCanvas } from "./drive.js";
 import smallMap from "./fixtures/small-map.json";
