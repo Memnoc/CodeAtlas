@@ -1,0 +1,168 @@
+---
+system: CodeAtlas
+owner: Memnoc (Matteo Stara)
+last-reviewed: 2026-08-16
+phase: audit
+verdict: ready
+---
+
+# Compliance: CodeAtlas
+
+## Boundary
+
+- Intended purpose: a local developer tool that scans a codebase with
+  deterministic tree-sitter parsers, serves an interactive map on loopback
+  only, and optionally buys AI prose (enrich) or answers questions (ask)
+  through Anthropic's Claude using the operator's own credentials.
+  Evidence: `README.md`, `docs/SECURITY.md`, `CONTEXT.md`.
+- Users and affected people: software developers running it on their own
+  machines; recipients of operator-exported share artifacts. No output
+  influences a decision about a person.
+- Distribution and jurisdictions: public GitHub source
+  (github.com/Memnoc/CodeAtlas, MIT), worldwide by default; first binary
+  release (GitHub Releases) imminent but not yet cut — no tags, no
+  releases at review time. Maker jurisdiction: `unknown — owner: Memnoc`
+  (likely UK; the EU nexus exists regardless via worldwide distribution).
+- Builder/operator legal roles: maker distributes free open-source
+  software and operates nothing; the operator supplies their own Anthropic
+  credentials and runs everything locally. Anthropic is the upstream model
+  provider. Whether the with-key build makes the maker an EU AI Act
+  "provider" is CQ1 below.
+- Upstream providers and models: Anthropic Claude via the operator's API
+  key or logged-in CLI; the `fake:` test provider is compile-gated out of
+  release builds (`test-provider` feature). Evidence:
+  `crates/codeatlas/src/enrich/claude.rs`, `docs/SECURITY.md` guarantee 2.
+- Training or fine-tuning: none. No model ships in any artifact.
+- Data categories, sources, destinations, retention, deletion: source code
+  stays local; ask sends bounded map-derived context, never file contents
+  (`crates/codeatlas/src/enrich/ask.rs` bounds, six limits listed in
+  `docs/SECURITY.md`); no telemetry, no accounts, no collection by the
+  maker; annotation store lives on the operator's disk; ANTHROPIC_API_KEY
+  is stripped from spawned children (`crates/codeatlas/src/enrich/agent_cli.rs`).
+- Outputs and decisions influenced: code-map visuals (deterministic) and
+  AI-generated prose (enrichment summaries, ask answers) badged in the
+  dashboard where rendered; the annotation store carries one
+  machine-readable `ProducedBy` record naming provider, model and UTC date
+  of the last run that wrote it (`crates/codeatlas/src/enrich.rs`); share
+  artifacts redact all enriched prose. No decisions about people.
+- Behaviour configuration: prompts and bounds live in the repository,
+  version-addressed by git; no runtime-mutable AI configuration.
+- Release state and relevant dates: audit pinned at commit `cb7239d`
+  (2026-08-16). Release workflow (`.github/workflows/release.yml`) present;
+  its proving dry run was in flight at review time. `v0.1.0` is gated by
+  `/harden` and the fresh-machine walk (ADR-0014).
+
+## Trigger triage
+
+| Trigger | Result | Evidence | Disposition |
+|---------|--------|----------|-------------|
+| AI inference / upstream AI service | yes (optional, operator-keyed) | ask/enrich via Claude; sealed build compiles egress out | EU AI Act pack |
+| AI-assisted authorship of the software itself | yes | README/release-notes provenance paragraph | recorded as disclosure, no pack |
+| Personal, sensitive, biometric, children's data | no | no telemetry/accounts; maker processes nothing; `docs/SECURITY.md` | GDPR pack (role check only) |
+| Output filtering/scoring/deciding about persons | no | outputs are code maps and code prose | inapplicable |
+| Human interaction presented through AI / generated text | yes | ask is labelled Claude; enrichment prose badged; store self-discloses | EU AI Act Art 50 analysis |
+| Biometrics, emotion inference, surveillance, social scoring | no | no such capability in repo | inapplicable |
+| Regulated product, profession, sector | no | developer tooling | inapplicable |
+| Foreseeable material harm / misuse | low | harm review below | recorded below |
+| Jurisdictional nexus | yes | worldwide public GitHub distribution | EU/UK/US packs |
+
+## Distribution inventory
+
+| Artifact or service | Revision/version | Public/deployed/supported | Evidence | Coverage |
+|---------------------|------------------|---------------------------|----------|----------|
+| GitHub source repository (main) | `cb7239d` | public | `git remote -v`; repo public | reviewed |
+| Committed annotation store (AI prose, self-disclosing) | in-tree at `cb7239d` | public | `.codeatlas/annotations.json`, store v2 `ProducedBy` record | reviewed |
+| Dashboard bundle | embedded via `build.rs` | ships inside binaries | `crates/codeatlas/build.rs` | reviewed |
+| GitHub Release v0.1.0 (8 binaries, checksums, attestation) | not yet cut | planned, imminent | `.github/workflows/release.yml`; dry run in flight at review time | unverifiable at audit — re-check at shipping branch |
+| Share artifacts | operator-produced | not distributed by maker | share redaction suite, route byte-scan (`crates/codeatlas/tests/share.rs`) | reviewed |
+| Packages (crates.io, npm, containers), hosted services, demos | none | none | ADR-0014 defers crates.io, name unregistered | n/a |
+
+## Foreseeable harm review
+
+| Affected party | Capability, failure, or misuse | Reach and reversibility | Safeguard evidence | Disposition |
+|----------------|--------------------------------|-------------------------|--------------------|-------------|
+| Share recipients / code owners | share artifact leaking source or enriched prose | public once shared; irreversible | redaction suite; registry-wide route byte-scan; source structurally absent (wire chunk never embedded) | no material path identified |
+| Local users on shared machines | open code widening loopback disclosure | local-only | route absent without `--open-code` (registry-gated); loopback bind hardcoded | no material path identified |
+| Operators | credential exposure | account compromise; reversible by rotation | key never in bundle/logs; stripped from child env; no secret files in VCS | no material path identified |
+| Download users | tampered or misattributed release binaries | material until noticed | SHA-256 checksums + GitHub build-provenance attestation in workflow; sealed probe against built artifacts | pending first release — verify at shipping |
+| Readers | over-trusting AI prose | low; correctable | badging at render; store provenance; refuse-don't-fabricate ask posture | no material path identified |
+
+## Audit remediation
+
+Owner's standing directive (Memnoc, 2026-08-16): before anything publishes,
+return to this record, rectify, and prepare all necessary documentation —
+be over-zealous and over-document choices rather than leaving any gap,
+guess, or assumption. Every row below must be closed or explicitly
+dispositioned by Memnoc before the `v0.1.0` tag is cut.
+
+| Finding | Affected artifact/release | Owner | Required remediation | Evidence to close | Status |
+|---------|---------------------------|-------|----------------------|-------------------|--------|
+| R-1: release evidence unproven at audit time (P-5) | v0.1.0 | Memnoc | run this skill's shipping branch after the dry run: close P-5 with the green run URL, re-run triage against release facts, append a dated re-verdict | new review entry + run URL | open |
+| R-2: transparency position implicit, not stated | v0.1.0 release notes / README | Memnoc | add a voluntary AI-transparency statement to the release documentation: the Art 50 posture (interaction labelled, machine-readable provenance, redaction-on-export), framed as disclosure of practice, not as a concession of applicability | committed prose, cross-checked against shipped behaviour | open |
+| R-3: two research caveats rest on secondary sources | record integrity | Memnoc | re-verify Illinois text against ilga.gov and the Colorado AG filing against the docket when reachable | research note updated with primary citations | open |
+| R-4: counsel questions have no recorded disposition | v0.1.0 | Memnoc | record an explicit disposition for each of CQ1–CQ5: consult counsel, or accept the documented risk position with rationale — silence is not a disposition | Uncertainty table updated with owner's decision per row | open |
+| R-5: decision-trail completeness sweep | record | Memnoc | sweep every compliance-relevant design choice (flag-gated open code, share redaction, provenance record shape, no-telemetry, sealed builds, key handling) for a citation to its ADR/SECURITY.md/test; add any missing citation to this record | this record's tables fully cited | open |
+
+## Legal obligations
+
+| ID | Pack and primary source | Applies because | Required outcome | Owner | Evidence | Status |
+|----|-------------------------|-----------------|------------------|-------|----------|--------|
+| L-1 | EU AI Act Art 50(1), Reg. 2024/1689 (in force for Art 50 since 2026-08-02; Digital Omnibus Reg. 2026/1744 left Art 50 on schedule) | only if with-key build is an "AI system" the maker "places on the market" (CQ1, CQ2) | people interacting with the AI feature are informed | Memnoc | ask is labelled as asking Claude; dashboard badges; README/release notes disclose — satisfied on the facts even if applicable | ready |
+| L-2 | EU AI Act Art 50(2) (same gates) | as L-1, for AI-generated text | machine-readable marking of synthetic content | Memnoc | store carries machine-readable `ProducedBy` (provider/model/UTC date); prose badged at render; share export strips it; whether marking must travel per-output is CQ3 | ready within coverage; CQ3 open |
+| L-3 | EU AI Act Art 2(12), Recitals 102–104 | free open-source release | exemption applies outside Art 5 / high-risk / Art 50; Art 5 and Annex III demonstrably do not engage | Memnoc | research note §Pack 1 | ready |
+| L-4 | GDPR Art 4(7)–(8); EDPB 07/2020 §76; C-40/17 | maker performs no processing operation | no controller/processor role attaches to distribution | Memnoc | no telemetry/accounts in repo; research note §Pack 2 | ready |
+| L-5 | UK: no statute in force (bills.parliament.uk verified 2026-08-16) | maker likely UK-established | none | Memnoc | research note §Pack 3 | ready |
+| L-6 | US federal + state scans (CO SB24-205/SB26-189, CA SB 53, SB 942, AB 2013, UT/TX/IL/CT/NY) | worldwide distribution | none attach on the statutes' own scope definitions; AB 2013 edge is CQ4 | Memnoc | research note §Pack 4 | ready |
+
+## Northstar engineering policy
+
+| ID | Trigger | Control | Owner | Evidence | Status |
+|----|---------|---------|-------|----------|--------|
+| P-1 | remote model service | operator-supplied key; never in bundles/logs; stripped from child env | Memnoc | egress tests, `agent_cli.rs` test | ready |
+| P-2 | AI changes runtime prose | provider/model/date recorded; prompts version-addressed in git | Memnoc | store `ProducedBy`; repo history | ready |
+| P-3 | humans interact with AI / receive generated text | identity clear at the point that matters | Memnoc | ask labelling, badges, provenance paragraph | ready |
+| P-4 | AI failure path | tool degrades to full structural function with no key; never fabricates success | Memnoc | scan-first ordering, egress counter-test, sealed refusal string | ready |
+| P-5 | release evidence | checksums + attestation + sealed probe inside workflow | Memnoc | `.github/workflows/release.yml`; dry run pending | action-required until dry run green (ticket 09) |
+
+## Uncertainty and decisions
+
+| Question | Why material | Decision owner | Resolution or due condition | Release consequence |
+|----------|--------------|----------------|-----------------------------|---------------------|
+| CQ1: is with-key CodeAtlas an "AI system" / the maker its "provider"? (Art 3(1), Rec 97, Art 3(68); C(2025) 924 guidelines silent on BYO-key routing) | gates whether Art 50 attaches at all | Memnoc → qualified counsel | counsel opinion, or facts change (shipping a model, hosting) | none identified that blocks: on the most protective reading, L-1/L-2 are already substantially satisfied |
+| CQ2: is a free MIT release "placing on the market"? (Art 3(9)–(10), Rec 103, Blue Guide §2.2) | second gate on Art 50 | Memnoc → counsel | counsel opinion; revisit on any monetisation, bundled service, or commercial support | as CQ1 |
+| CQ3: does store-level machine-readable provenance satisfy Art 50(2) marking, or must marking travel with each output? | the one obligation with substance if gates resolve against | Memnoc → counsel | counsel opinion; note share export removes AI text entirely, narrowing exposure to the local store | none identified that blocks; remediable if answered adversely |
+| CQ4: does CA AB 2013 ("designs, codes, produces" a GenAI system) reach an API wrapper that never trained? | duty would be factually unsatisfiable by the maker | Memnoc → counsel | counsel opinion | low likelihood on text; monitor |
+| CQ5: Colorado interregnum + "doing business in this state" for a UK individual | low | Memnoc | practically mooted by existing labelling | none |
+| Research caveats: Illinois text verified only via secondary reproduction (ilga.gov unreachable); Colorado AG non-enforcement filing not docket-verified | evidence hygiene | Memnoc | re-verify when sources reachable | none |
+
+## Research
+
+- [2026-08-16 — AI legislation for CodeAtlas distribution (EU AI Act, GDPR, UK, US)](../research/2026-08-16-ai-legislation-for-codeatlas-distribution.md)
+
+## Review history
+
+### 2026-08-16 — audit
+
+- Boundary changes: first review; boundary established at commit `cb7239d`,
+  pre-first-release (no tags, no releases).
+- Evidence exercised: full Rust suite green in all three feature
+  configurations and dashboard suite green as recorded in
+  `.scratch/codeatlas-v3/` tickets 01–08 (same-day, this tree); loopback
+  bind, egress posture, share redaction, ask bounds, provenance record and
+  sealed gating all held by named committed tests cited in
+  `docs/SECURITY.md`. Release-artifact evidence (checksums, attestation,
+  sealed probe, smoke runs) is workflow-borne and was in flight at review
+  time — documentary until the dry run completes.
+- Accepted unverifiable evidence, approver, and rationale: none accepted;
+  the release surface is deliberately left `unverifiable` pending the dry
+  run and the shipping-branch re-check.
+- Verdict and reason: **ready** — no release-blocking issue identified
+  within the recorded coverage. This states the evidence position, not
+  that harm is impossible and not a legal conclusion. The two EU threshold
+  questions (CQ1, CQ2) and the marking-standard question (CQ3) are named
+  for counsel, but on every reading examined the substantive transparency
+  obligations are already substantially met by shipped behaviour
+  (labelling, badging, machine-readable provenance, redaction-on-export).
+  Condition attached: run this skill's **shipping branch** before cutting
+  `v0.1.0` — it must confirm the dry run went green (P-5 closes) and that
+  release facts introduced no new trigger.
