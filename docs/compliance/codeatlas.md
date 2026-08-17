@@ -1,8 +1,8 @@
 ---
 system: CodeAtlas
 owner: Memnoc (Matteo Stara)
-last-reviewed: 2026-08-16
-phase: audit
+last-reviewed: 2026-08-17
+phase: shipping
 verdict: ready
 ---
 
@@ -97,11 +97,50 @@ dispositioned by Memnoc before the `v0.1.0` tag is cut.
 
 | Finding | Affected artifact/release | Owner | Required remediation | Evidence to close | Status |
 |---------|---------------------------|-------|----------------------|-------------------|--------|
-| R-1: release evidence unproven at audit time (P-5) | v0.1.0 | Memnoc | run this skill's shipping branch after the dry run: close P-5 with the green run URL, re-run triage against release facts, append a dated re-verdict | new review entry + run URL | open |
-| R-2: transparency position implicit, not stated | v0.1.0 release notes / README | Memnoc | add a voluntary AI-transparency statement to the release documentation: the Art 50 posture (interaction labelled, machine-readable provenance, redaction-on-export), framed as disclosure of practice, not as a concession of applicability | committed prose, cross-checked against shipped behaviour | open |
-| R-3: two research caveats rest on secondary sources | record integrity | Memnoc | re-verify Illinois text against ilga.gov and the Colorado AG filing against the docket when reachable | research note updated with primary citations | open |
+| R-1: release evidence unproven at audit time (P-5) | v0.1.0 | Memnoc | run this skill's shipping branch after the dry run: close P-5 with the green run URL, re-run triage against release facts, append a dated re-verdict | 2026-08-17 shipping entry below + run URL in P-5 | **closed 2026-08-17** |
+| R-2: transparency position implicit, not stated | v0.1.0 release notes / README | Memnoc | add a voluntary AI-transparency statement to the release documentation: the Art 50 posture (interaction labelled, machine-readable provenance, redaction-on-export), framed as disclosure of practice, not as a concession of applicability | committed prose, cross-checked against shipped behaviour; **proposed text staged below, awaiting Memnoc's sign-off** | open — drafted |
+| R-3: two research caveats rest on secondary sources | record integrity | Memnoc | re-verify Illinois text against ilga.gov and the Colorado AG filing against the docket when reachable | Colorado: **closed 2026-08-17** — docket-verified, and upgraded: a stipulated court order (X.AI LLC v. Weiser, 1:26-cv-01515, ECF 22 + 24) bars enforcement through the interregnum, quotes in the research note. Illinois: attempt exhausted 2026-08-17 (ILGA network unreachable from here, archives empty — full record in the note); finding not upgraded, stays on secondary evidence | half-closed — Illinois re-verify stays open until ilga.gov reachable |
 | R-4: counsel questions have no recorded disposition | v0.1.0 | Memnoc | record an explicit disposition for each of CQ1–CQ5: consult counsel, or accept the documented risk position with rationale — silence is not a disposition | Uncertainty table updated with owner's decision per row | open |
-| R-5: decision-trail completeness sweep | record | Memnoc | sweep every compliance-relevant design choice (flag-gated open code, share redaction, provenance record shape, no-telemetry, sealed builds, key handling) for a citation to its ADR/SECURITY.md/test; add any missing citation to this record | this record's tables fully cited | open |
+| R-5: decision-trail completeness sweep | record | Memnoc | sweep every compliance-relevant design choice (flag-gated open code, share redaction, provenance record shape, no-telemetry, sealed builds, key handling) for a citation to its ADR/SECURITY.md/test; add any missing citation to this record | the Design-choice citations table below | **closed 2026-08-17** |
+
+### Proposed transparency statement (R-2 — awaiting Memnoc's sign-off)
+
+Destined for the release-notes template (beside "How this software was
+built") and the README's Design record, verbatim or edited by Memnoc:
+
+> CodeAtlas's AI is strictly bring-your-own: `--ask` and enrichment call
+> Anthropic's Claude with credentials you supply, and nothing else in the
+> tool talks to a model — the sealed build cannot even be compiled to.
+> Wherever AI-written prose appears it says so: the dashboard badges
+> enriched text where it renders it, the annotation store carries a
+> machine-readable record naming the provider, the model and the UTC date
+> of the last run that wrote it, and `share` removes AI prose from the
+> exported file entirely. Interaction with the model is always labelled
+> as interaction with the model. This is stated as practice, verified by
+> the tests `docs/SECURITY.md` names — not as a reading of where any
+> law's lines fall — so a reader never has to guess which words a model
+> wrote.
+
+Every claim in the draft maps to shipped behaviour: badging
+(`the dashboard badges enriched prose where it renders it`, CONTEXT.md
+verbatim), the store record (`ProducedBy`, one record, last writing run —
+the 3022fe6 correction's wording), share redaction (ADR-0006 allowlist,
+share suite), sealed build (ADR-0006 feature gate), labelling (ask panel).
+
+### Design-choice citations (R-5 sweep, 2026-08-17)
+
+| Design choice | Decision record | Enforcement evidence |
+|---------------|-----------------|----------------------|
+| Open code is flag-gated, map-allowlisted, loopback-only | ADR-0013 | route-existence + allowlist + drift-gate tests named in `docs/SECURITY.md`; harden walk 2026-08-16 (spec Verification, stories 5–8) |
+| Zero egress by default; sealed build makes exfiltration a compile error | ADR-0006 | `tests/egress.rs` (network-namespace suite), `tests/sealed.rs`, `scripts/sealed-probe.sh` run against release artifacts in-workflow |
+| Share artifact redacts AI prose and carries no route strings | ADR-0006 (redaction allowlist), ADR-0011 (2 MiB ceiling) | share suite incl. registry-walk byte-scan and JSON-transparent probe; harden byte-scan of a real artifact |
+| Two model paths only, operator-credentialed; key stripped from children | ADR-0004 (direct API), ADR-0008 (authenticated CLI) | `resolve_credentials`, `agent_cli.rs` env-strip test; SECURITY.md guarantee 2 |
+| Ask is a serve route with bounded, client-carried input | ADR-0009, ADR-0012 | six bounds listed in SECURITY.md, each test-named; clamp + 400 wire tests |
+| Annotation store is a committed artifact with one self-disclosing provenance record | ADR-0007; store-level record design (`enrich.rs` `ProducedBy` comment) | `the_store_records_what_produced_its_prose`; store round-trip byte-identical (harden 2026-08-16) |
+| Store preserves sections it does not understand (old binaries can't drop purchased prose) | ADR-0014 consequence | flatten-capture unit tests incl. tamper naming the lost section |
+| Releases are attested, sealed-beside-default, checksummed | ADR-0014 | `.github/workflows/release.yml`; green dry run 31963531524; attestation digest-verified against downloaded binary (harden) |
+| Serve binds loopback only, no `--host` | SECURITY.md guarantee 1 | hardcoded `Ipv4Addr::LOCALHOST`; no flag exists to widen it |
+| Map contract unversioned by releases (tag ≠ contract version) | ADR-0014 / spec "the map contract is untouched" | contract drift CI job |
 
 ## Legal obligations
 
@@ -122,7 +161,7 @@ dispositioned by Memnoc before the `v0.1.0` tag is cut.
 | P-2 | AI changes runtime prose | provider/model/date recorded; prompts version-addressed in git | Memnoc | store `ProducedBy`; repo history | ready |
 | P-3 | humans interact with AI / receive generated text | identity clear at the point that matters | Memnoc | ask labelling, badges, provenance paragraph | ready |
 | P-4 | AI failure path | tool degrades to full structural function with no key; never fabricates success | Memnoc | scan-first ordering, egress counter-test, sealed refusal string | ready |
-| P-5 | release evidence | checksums + attestation + sealed probe inside workflow | Memnoc | `.github/workflows/release.yml`; dry run pending | action-required until dry run green (ticket 09) |
+| P-5 | release evidence | checksums + attestation + sealed probe inside workflow | Memnoc | green dry run github.com/Memnoc/CodeAtlas/actions/runs/31963531524 — 8 artifacts built, checksums re-verified on a fresh runner, attestation produced and verified for all 9 subjects, sealed probe green per target, publish leg inert | ready (closed 2026-08-17) |
 
 ## Uncertainty and decisions
 
@@ -133,13 +172,37 @@ dispositioned by Memnoc before the `v0.1.0` tag is cut.
 | CQ3: does store-level machine-readable provenance satisfy Art 50(2) marking, or must marking travel with each output? | the one obligation with substance if gates resolve against | Memnoc → counsel | counsel opinion; note share export removes AI text entirely, narrowing exposure to the local store | none identified that blocks; remediable if answered adversely |
 | CQ4: does CA AB 2013 ("designs, codes, produces" a GenAI system) reach an API wrapper that never trained? | duty would be factually unsatisfiable by the maker | Memnoc → counsel | counsel opinion | low likelihood on text; monitor |
 | CQ5: Colorado interregnum + "doing business in this state" for a UK individual | low | Memnoc | practically mooted by existing labelling | none |
-| Research caveats: Illinois text verified only via secondary reproduction (ilga.gov unreachable); Colorado AG non-enforcement filing not docket-verified | evidence hygiene | Memnoc | re-verify when sources reachable | none |
+| Research caveat: Illinois text verified only via secondary reproduction (ilga.gov unreachable; re-attempt exhausted 2026-08-17, record in the note). Colorado caveat resolved 2026-08-17: enforcement stay is a docket-verified court order, not merely a reported disclaimer | evidence hygiene | Memnoc | Illinois: re-verify when ilga.gov reachable | none |
 
 ## Research
 
 - [2026-08-16 — AI legislation for CodeAtlas distribution (EU AI Act, GDPR, UK, US)](../research/2026-08-16-ai-legislation-for-codeatlas-distribution.md)
 
 ## Review history
+
+### 2026-08-17 — shipping
+
+- Boundary changes: none in capability or data flow. Since the audit at
+  `cb7239d`: the release workflow's dry run executed green
+  (run 31963531524 — 8 binaries, checksums, attestation, sealed probe,
+  publish leg proven inert), `/harden` walked all 20 stories (19 pass;
+  story 15, the fresh-machine walk, deliberately remains Memnoc's), and
+  the audit record itself was committed publicly (`eeead9b`). Attestation
+  hash metadata now exists in the public Sigstore log for unpublished dry
+  artifacts — disclosed in the workflow header, no new trigger.
+- Evidence exercised: shallow triage re-run against release facts — every
+  trigger's answer unchanged from 2026-08-16; P-5 closed with the green
+  run (checksums re-verified on a fresh runner in-run; locally,
+  `sha256sum --check` OK and the sealed binary's digest resolves via the
+  GitHub attestations API to this repo, `refs/heads/main`,
+  `release.yml`).
+- Accepted unverifiable evidence, approver, and rationale: none.
+- Verdict and reason: **ready** — remains the evidence-state verdict
+  within recorded coverage. The `v0.1.0` tag stays gated by Memnoc's
+  standing directive regardless: R-2 (transparency statement — drafted
+  below, awaiting sign-off) and R-4 (counsel-question dispositions) are
+  open; R-1, R-3 and R-5 close per their rows. Harden's Verification
+  section (spec, `e2f45ef`) can cite this dated entry.
 
 ### 2026-08-16 — audit
 
