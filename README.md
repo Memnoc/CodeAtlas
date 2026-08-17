@@ -390,6 +390,19 @@ the UTC date of the last run that wrote it, and prose bought by earlier
 runs rides beneath that latest record; the dashboard badges enriched
 prose where it renders it, and `share` redacts it.
 
+Stated once, as the standing transparency position: CodeAtlas's AI is
+strictly bring-your-own: `--ask` and enrichment call Anthropic's Claude
+with credentials you supply, and nothing else in the tool talks to a
+model — the sealed build cannot even be compiled to. Wherever AI-written
+prose appears it says so: the dashboard badges enriched text where it
+renders it, the annotation store carries a machine-readable record naming
+the provider, the model and the UTC date of the last run that wrote it,
+and `share` removes AI prose from the exported file entirely. Interaction
+with the model is always labelled as interaction with the model. This is
+stated as practice, verified by the tests [`docs/SECURITY.md`](docs/SECURITY.md)
+names — not as a reading of where any law's lines fall — so a reader
+never has to guess which words a model wrote.
+
 ## Status
 
 V2 shipped on 2026-08-14. Where V1 proved the pipeline — scan, map, serve,

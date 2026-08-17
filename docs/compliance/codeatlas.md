@@ -98,15 +98,15 @@ dispositioned by Memnoc before the `v0.1.0` tag is cut.
 | Finding | Affected artifact/release | Owner | Required remediation | Evidence to close | Status |
 |---------|---------------------------|-------|----------------------|-------------------|--------|
 | R-1: release evidence unproven at audit time (P-5) | v0.1.0 | Memnoc | run this skill's shipping branch after the dry run: close P-5 with the green run URL, re-run triage against release facts, append a dated re-verdict | 2026-08-17 shipping entry below + run URL in P-5 | **closed 2026-08-17** |
-| R-2: transparency position implicit, not stated | v0.1.0 release notes / README | Memnoc | add a voluntary AI-transparency statement to the release documentation: the Art 50 posture (interaction labelled, machine-readable provenance, redaction-on-export), framed as disclosure of practice, not as a concession of applicability | committed prose, cross-checked against shipped behaviour; **proposed text staged below, awaiting Memnoc's sign-off** | open — drafted |
+| R-2: transparency position implicit, not stated | v0.1.0 release notes / README | Memnoc | add a voluntary AI-transparency statement to the release documentation: the Art 50 posture (interaction labelled, machine-readable provenance, redaction-on-export), framed as disclosure of practice, not as a concession of applicability | signed off by Memnoc 2026-08-17 ("R2 is ok"); placed verbatim: `docs/RELEASE_NOTES_TEMPLATE.md` § Transparency and README § Design record; every claim maps to a named test | **closed 2026-08-17** |
 | R-3: two research caveats rest on secondary sources | record integrity | Memnoc | re-verify Illinois text against ilga.gov and the Colorado AG filing against the docket when reachable | Colorado: **closed 2026-08-17** — docket-verified, and upgraded: a stipulated court order (X.AI LLC v. Weiser, 1:26-cv-01515, ECF 22 + 24) bars enforcement through the interregnum, quotes in the research note. Illinois: attempt exhausted 2026-08-17 (ILGA network unreachable from here, archives empty — full record in the note); finding not upgraded, stays on secondary evidence | half-closed — Illinois re-verify stays open until ilga.gov reachable |
 | R-4: counsel questions have no recorded disposition | v0.1.0 | Memnoc | record an explicit disposition for each of CQ1–CQ5: consult counsel, or accept the documented risk position with rationale — silence is not a disposition | Uncertainty table updated with owner's decision per row | open |
 | R-5: decision-trail completeness sweep | record | Memnoc | sweep every compliance-relevant design choice (flag-gated open code, share redaction, provenance record shape, no-telemetry, sealed builds, key handling) for a citation to its ADR/SECURITY.md/test; add any missing citation to this record | the Design-choice citations table below | **closed 2026-08-17** |
 
-### Proposed transparency statement (R-2 — awaiting Memnoc's sign-off)
+### Transparency statement (R-2 — signed off by Memnoc 2026-08-17, placed)
 
-Destined for the release-notes template (beside "How this software was
-built") and the README's Design record, verbatim or edited by Memnoc:
+Lives in the release-notes template (§ Transparency, beside "How this
+software was built") and the README's Design record. The signed text:
 
 > CodeAtlas's AI is strictly bring-your-own: `--ask` and enrichment call
 > Anthropic's Claude with credentials you supply, and nothing else in the

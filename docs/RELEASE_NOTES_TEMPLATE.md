@@ -79,3 +79,17 @@ dashboard badges enriched prose where it renders it, and `share` redacts
 it from the exported file. The security posture — what can reach a model,
 what it receives, and the committed test behind each claim — is
 `docs/SECURITY.md`.
+
+## Transparency
+
+CodeAtlas's AI is strictly bring-your-own: `--ask` and enrichment call
+Anthropic's Claude with credentials you supply, and nothing else in the
+tool talks to a model — the sealed build cannot even be compiled to.
+Wherever AI-written prose appears it says so: the dashboard badges
+enriched text where it renders it, the annotation store carries a
+machine-readable record naming the provider, the model and the UTC date
+of the last run that wrote it, and `share` removes AI prose from the
+exported file entirely. Interaction with the model is always labelled as
+interaction with the model. This is stated as practice, verified by the
+tests `docs/SECURITY.md` names — not as a reading of where any law's
+lines fall — so a reader never has to guess which words a model wrote.
