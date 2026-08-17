@@ -99,8 +99,8 @@ dispositioned by Memnoc before the `v0.1.0` tag is cut.
 |---------|---------------------------|-------|----------------------|-------------------|--------|
 | R-1: release evidence unproven at audit time (P-5) | v0.1.0 | Memnoc | run this skill's shipping branch after the dry run: close P-5 with the green run URL, re-run triage against release facts, append a dated re-verdict | 2026-08-17 shipping entry below + run URL in P-5 | **closed 2026-08-17** |
 | R-2: transparency position implicit, not stated | v0.1.0 release notes / README | Memnoc | add a voluntary AI-transparency statement to the release documentation: the Art 50 posture (interaction labelled, machine-readable provenance, redaction-on-export), framed as disclosure of practice, not as a concession of applicability | signed off by Memnoc 2026-08-17 ("R2 is ok"); placed verbatim: `docs/RELEASE_NOTES_TEMPLATE.md` § Transparency and README § Design record; every claim maps to a named test | **closed 2026-08-17** |
-| R-3: two research caveats rest on secondary sources | record integrity | Memnoc | re-verify Illinois text against ilga.gov and the Colorado AG filing against the docket when reachable | Colorado: **closed 2026-08-17** — docket-verified, and upgraded: a stipulated court order (X.AI LLC v. Weiser, 1:26-cv-01515, ECF 22 + 24) bars enforcement through the interregnum, quotes in the research note. Illinois: attempt exhausted 2026-08-17 (ILGA network unreachable from here, archives empty — full record in the note); finding not upgraded, stays on secondary evidence | half-closed — Illinois re-verify stays open until ilga.gov reachable |
-| R-4: counsel questions have no recorded disposition | v0.1.0 | Memnoc | record an explicit disposition for each of CQ1–CQ5: consult counsel, or accept the documented risk position with rationale — silence is not a disposition | Uncertainty table updated with owner's decision per row | open |
+| R-3: two research caveats rest on secondary sources | record integrity | Memnoc | re-verify Illinois text against ilga.gov and the Colorado AG filing against the docket when reachable | Colorado: **closed 2026-08-17** — docket-verified, and upgraded: a stipulated court order (X.AI LLC v. Weiser, 1:26-cv-01515, ECF 22 + 24) bars enforcement through the interregnum, quotes in the research note. Illinois: attempt exhausted 2026-08-17 (ILGA network unreachable from here, archives empty — full record in the note); same day, ilga.gov also unreachable from Memnoc's own browser, and a third network path drew ECONNREFUSED. **Dispositioned 2026-08-17 by Memnoc: accepted on secondary evidence with scope-class reasoning** — the statute class (employer duties over AI in employment decisions) cannot plausibly reach a free developer tool or its maker; re-verify opportunistically if ilga.gov becomes reachable | **closed 2026-08-17** (Illinois by disposition, Colorado by docket) |
+| R-4: counsel questions have no recorded disposition | v0.1.0 | Memnoc | record an explicit disposition for each of CQ1–CQ5: consult counsel, or accept the documented risk position with rationale — silence is not a disposition | Uncertainty table: all five rows dispositioned 2026-08-17, each an accept-with-rationale, tripwires named on CQ2/CQ3 | **closed 2026-08-17** |
 | R-5: decision-trail completeness sweep | record | Memnoc | sweep every compliance-relevant design choice (flag-gated open code, share redaction, provenance record shape, no-telemetry, sealed builds, key handling) for a citation to its ADR/SECURITY.md/test; add any missing citation to this record | the Design-choice citations table below | **closed 2026-08-17** |
 
 ### Transparency statement (R-2 — signed off by Memnoc 2026-08-17, placed)
@@ -167,11 +167,11 @@ share suite), sealed build (ADR-0006 feature gate), labelling (ask panel).
 
 | Question | Why material | Decision owner | Resolution or due condition | Release consequence |
 |----------|--------------|----------------|-----------------------------|---------------------|
-| CQ1: is with-key CodeAtlas an "AI system" / the maker its "provider"? (Art 3(1), Rec 97, Art 3(68); C(2025) 924 guidelines silent on BYO-key routing) | gates whether Art 50 attaches at all | Memnoc → qualified counsel | counsel opinion, or facts change (shipping a model, hosting) | none identified that blocks: on the most protective reading, L-1/L-2 are already substantially satisfied |
-| CQ2: is a free MIT release "placing on the market"? (Art 3(9)–(10), Rec 103, Blue Guide §2.2) | second gate on Art 50 | Memnoc → counsel | counsel opinion; revisit on any monetisation, bundled service, or commercial support | as CQ1 |
-| CQ3: does store-level machine-readable provenance satisfy Art 50(2) marking, or must marking travel with each output? | the one obligation with substance if gates resolve against | Memnoc → counsel | counsel opinion; note share export removes AI text entirely, narrowing exposure to the local store | none identified that blocks; remediable if answered adversely |
-| CQ4: does CA AB 2013 ("designs, codes, produces" a GenAI system) reach an API wrapper that never trained? | duty would be factually unsatisfiable by the maker | Memnoc → counsel | counsel opinion | low likelihood on text; monitor |
-| CQ5: Colorado interregnum + "doing business in this state" for a UK individual | low | Memnoc | practically mooted by existing labelling | none |
+| CQ1: is with-key CodeAtlas an "AI system" / the maker its "provider"? (Art 3(1), Rec 97, Art 3(68); C(2025) 924 guidelines silent on BYO-key routing) | gates whether Art 50 attaches at all | Memnoc | **dispositioned 2026-08-17 — Memnoc accepts the documented position, no counsel engaged**: even on the most adverse reading, the attaching obligations (Art 50(1)/(2)) are substantially met by shipped, tested behaviour; revisit if Commission guidance speaks to BYO-key routing | none identified that blocks |
+| CQ2: is a free MIT release "placing on the market"? (Art 3(9)–(10), Rec 103, Blue Guide §2.2) | second gate on Art 50 | Memnoc | **dispositioned 2026-08-17 — accepted with named tripwires**: monetisation, a hosted service, bundled commercial support, or business deployment each trigger a compliance re-round BEFORE the fact | as CQ1 |
+| CQ3: does store-level machine-readable provenance satisfy Art 50(2) marking, or must marking travel with each output? | the one obligation with substance if gates resolve against | Memnoc | **dispositioned 2026-08-17 — accepted**: the only distributed AI text is the committed store, which self-discloses machine-readably; `share` strips AI prose so none travels unmarked; revisit if any future feature emits AI text into artifacts that leave the machine | none identified that blocks |
+| CQ4: does CA AB 2013 ("designs, codes, produces" a GenAI system) reach an API wrapper that never trained? | duty would be factually unsatisfiable by the maker | Memnoc | **dispositioned 2026-08-17 — accepted**: the duty presupposes training that never happened; monitor only | low likelihood on text |
+| CQ5: Colorado interregnum + "doing business in this state" for a UK individual | low | Memnoc | **dispositioned 2026-08-17 — accepted**: enforcement stayed by docket-verified court order through the interregnum (ECF 22/24), and the scope definitions never reached the maker | none |
 | Research caveat: Illinois text verified only via secondary reproduction (ilga.gov unreachable; re-attempt exhausted 2026-08-17, record in the note). Colorado caveat resolved 2026-08-17: enforcement stay is a docket-verified court order, not merely a reported disclaimer | evidence hygiene | Memnoc | Illinois: re-verify when ilga.gov reachable | none |
 
 ## Research
@@ -196,13 +196,19 @@ share suite), sealed build (ADR-0006 feature gate), labelling (ask panel).
   `sha256sum --check` OK and the sealed binary's digest resolves via the
   GitHub attestations API to this repo, `refs/heads/main`,
   `release.yml`).
-- Accepted unverifiable evidence, approver, and rationale: none.
+- Accepted unverifiable evidence, approver, and rationale: one item —
+  the Illinois primary text, accepted by Memnoc on secondary evidence
+  with scope-class reasoning after the source refused every network
+  path including Memnoc's own browser (2026-08-17); re-verify
+  opportunistically.
 - Verdict and reason: **ready** — remains the evidence-state verdict
-  within recorded coverage. The `v0.1.0` tag stays gated by Memnoc's
-  standing directive regardless: R-2 (transparency statement — drafted
-  below, awaiting sign-off) and R-4 (counsel-question dispositions) are
-  open; R-1, R-3 and R-5 close per their rows. Harden's Verification
-  section (spec, `e2f45ef`) can cite this dated entry.
+  within recorded coverage. Same-day closure of the remediation gate:
+  R-1/R-5 by evidence, R-2 signed and placed (`a042484`), R-3 by docket
+  (Colorado) and disposition (Illinois), R-4 by Memnoc's recorded
+  accept-with-rationale on all five counsel questions, tripwires named
+  on CQ2/CQ3. **All five rows closed; the sole remaining gate on
+  `v0.1.0` is the spec's story-15 fresh-machine walk.** Harden's
+  Verification section (spec, `e2f45ef`) can cite this dated entry.
 
 ### 2026-08-16 — audit
 
