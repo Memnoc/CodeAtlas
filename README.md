@@ -2,9 +2,9 @@
 
 # CodeAtlas
 
-The problem I am solving for myself, and maybe someone else: in the era of AI, we write a lot of code. Impossible to keep up with the LLM, and unwise to want to look at every single line of said code. However, I am strong advocate of knowing what is going in the software you write and release in the world. Code Atlas solves exactly this problem: review the code, without having to read every single line of it.
+The problem I am solving for myself, and maybe someone else: in the era of AI, we write a lot of code. Impossible to keep up with the LLM, and unwise to want to look at every single line of said code. However, I am a strong advocate of knowing what is going on in the software you write and release in the world. CodeAtlas solves exactly this problem: review the code, without having to read every single line of it.
 
-While developing this tool, I've focused particularly on way to visualize and inform about a code base that is unfamiliar, but even when you know that code base very well, you might want to review a function or a portion of domain or business logic. So I have baked these use cases in the code, and tried to make it as pleasing, easy and immediate as possible.
+While developing this tool, I've focused particularly on ways to visualize and inform about a codebase that is unfamiliar, but even when you know that codebase very well, you might want to review a function or a portion of domain or business logic. So I have baked these use cases in the code, and tried to make it as pleasing, easy and immediate as possible.
 
 One command turns a repository into a knowledge graph: files, functions,
 classes, and the import/export/call edges between them are rendered as an
@@ -108,7 +108,9 @@ alias cakill='pkill -x codeatlas'                                   # stop a run
 
 ## What it looks like
 
-The cards are designed to be minimal but exhaustive, and the main feature they carry is the connections to other cards, as well as the information they trigger on the side bar menu once clicked.
+The cards are designed to be minimal but exhaustive, and the main feature they carry is the connections to other cards, as well as the information they trigger on the sidebar menu once clicked.
+
+Some of these images are real screenshots: the numbers in them were true the day they were captured, not necessarily today. The rest are illustrations drawn from a small example repository, not from CodeAtlas itself.
 
 ### How to read the map
 
