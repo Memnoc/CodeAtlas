@@ -299,7 +299,7 @@ dashboard 307/307, tsc clean.
 | 12 | tag builds all targets, checksums, attestation | pass | seam 6 executed: the green dry run built 8 binaries + checksums, attested and verified all 9 subjects in-run |
 | 13 | CI gates + sealed probe before publish | pass | run job graph: all gates green, sealed probe green per target, publish leg skipped (tag-only by `if`) |
 | 14 | auditor verifies the sealed binary | pass | checksums OK locally; attestation fetched by the downloaded file's sha256 digest — names this repo, `refs/heads/main`, `release.yml`; full `gh attestation verify` green in-run (local gh predates the subcommand — an auditor needs gh ≥ 2.49) |
-| 15 | first tag gated by fresh-machine walk | **unverifiable** | the human layer, by design: needs Memnoc on a fresh machine, target repo (not CodeAtlas) picked at walk time; the `v0.1.0` tag waits on it |
+| 15 | first tag gated by fresh-machine walk | **pass** | walked by Memnoc 2026-08-18 — addendum below |
 | 16 | release notes/README say no-key, needs-Claude, how-built | pass | the dry run's rendered notes.md read: no-key section, measured artifact sizes, verify instructions, provenance paragraph, zero unfilled slots; README claims adversarially cross-checked in ticket 08 review + provenance fix `3022fe6` |
 | 17 | released binary preserves unknown store sections | pass | seam 5 executed (preservation/tamper tests 5/5); committed store byte-identical through a plain scan on a repo copy (sha256 compared); binary↔commit lineage held by attestation |
 | 18 | every 405 carries Allow | pass | watched: `GET, HEAD` everywhere; `GET, HEAD, POST` exactly where ask is registered |
@@ -316,9 +316,44 @@ walkthrough-steps rename left dashboard suite and typecheck green (09's
 fix); the rendered release notes consume ticket 08's template with every
 slot measured (08×09).
 
-Unverifiable: story 15 only — the fresh-machine walk is the deliberate
-human gate on `v0.1.0`, exactly as V2's reader's walk was. Shipping
-therefore waits on that walk (or Memnoc's recorded acceptance in its
-place). One tooling note: local `gh` here is too old for `attestation
-verify`; the story passes on in-run verification plus a digest-level API
-check, and a stranger auditing with current gh reproduces the full check.
+Unverifiable at the 2026-08-16 walk: story 15 only — the fresh-machine
+walk is the deliberate human gate on `v0.1.0`, exactly as V2's reader's
+walk was. Shipping therefore waits on that walk (or Memnoc's recorded
+acceptance in its place). One tooling note: local `gh` here is too old
+for `attestation verify`; the story passes on in-run verification plus a
+digest-level API check, and a stranger auditing with current gh
+reproduces the full check.
+
+### Addendum 2026-08-18 — story 15 walked by Memnoc
+
+The human walk happened on 2026-08-17/18 and story 15 moves to **pass**,
+conditions stated exactly:
+
+- **Walker and machine**: Memnoc, on their own Linux x86_64 machine — not
+  a factory-fresh one. The no-toolchain claim rides the statically linked
+  musl binary (`ldd`: not a dynamic executable, proven in-workflow and
+  locally) and the walk never invoking a toolchain; a literally fresh
+  machine remains open to anyone who wants the purer form.
+- **Artifact source**: the green dry run's `binaries-x86_64-unknown-linux-musl`
+  (run 31963531524), since the walk gates the release that would otherwise
+  be the download page. Noted friction that vanishes post-tag: workflow
+  artifacts need a GitHub login and live at the run's Summary page —
+  the real newcomer gets plain release downloads.
+- **Target**: `craftinginterpreters` — 754 files, 4 regions, 1,047
+  structural nodes, 498 relationships; multi-language (C, Java, Dart,
+  Markdown, HTML). Not CodeAtlas, per the spec's rule.
+- **Watched**: download → `chmod +x` → `scan` → `serve` →
+  map in the browser at `127.0.0.1:4173`; drill and selection; then with
+  `--open-code`: a symbol (`initValueArray`, `c/value.c`) opened beside
+  the map, scrolled and lit at exactly its own lines 13–17, C
+  highlighted; Memnoc's words: "a very neat user experience".
+- **Friction log, all of it**: (1) the artifacts download hid on the run's
+  Summary page — pre-release-only friction; (2) `-scan` typed for `scan` —
+  the CLI refused with usage, honestly; (3) with plain `serve`, Memnoc
+  looked for open code and nothing hinted it exists behind a flag —
+  exactly ADR-0013's absent-not-advertised design, recorded here as a
+  discoverability datum for `/next` to weigh.
+
+With this walk and the compliance record's closed remediation gate
+(`5e9f692`), every story passes and nothing further gates the tag:
+**`v0.1.0` is the next act, and it is Memnoc's push.**
