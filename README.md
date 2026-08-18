@@ -334,10 +334,10 @@ a structural one, because the answer is drawn from the map's own prose.
 
 ## Security
 
-> CodeAtlas has exactly two ways to reach a model: A) an HTTPS POST to
-> `api.anthropic.com`, and B) spawning the already-authenticated `claude` CLI.
+> CodeAtlas has exactly two ways to reach a model — an HTTPS POST to
+> `api.anthropic.com`, and spawning the already-authenticated `claude` CLI.
 > Each sits behind its own Cargo feature; each is reachable only from
-> `scan --enrich` and `serve --ask`. The sealed build has neither, trying to keep things as safe and under control as possible.
+> `scan --enrich` and `serve --ask`. The sealed build has neither.
 
 For the HTTPS route the destination is a hardcoded constant, and redirects
 and environment proxies are disabled at the transport level, so the transport
