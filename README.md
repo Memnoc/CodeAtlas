@@ -2,8 +2,12 @@
 
 # CodeAtlas
 
-One command turns a repository into a knowledge graph — files, functions,
-classes, and the import/export/call edges between them — rendered as an
+The problem I am solving for myself, and maybe someone else: in the era of AI, we write a lot of code. Impossible to keep up with the LLM, and unwise to want to look at every single line of said code. However, I am strong advocate of knowing what is going in the software you write and release in the world. Code Atlas solves exactly this problem: review the code, without having to read every single line of it.
+
+While developing this tool, I've focused particularly on way to visualize and inform about a code base that is unfamiliar, but even when you know that code base very well, you might want to review a function or a portion of domain or business logic. So I have baked these use cases in the code, and tried to make it as pleasing, easy and immediate as possible.
+
+One command turns a repository into a knowledge graph: files, functions,
+classes, and the import/export/call edges between them are rendered as an
 interactive map you can search, walk through, and ask questions of. It runs
 offline by default: scanning, serving, diffing, and sharing never open a
 non-loopback socket, and a sealed build exists in which egress is not a
@@ -17,7 +21,7 @@ forbidden action but a compile error.
 
 The map itself needs no model and no key: `codeatlas scan .` writes the
 whole picture to `.codeatlas/knowledge-graph.json`; enrichment and questions
-are opt-in flags on top. Run it and look — the counts belong to whatever the
+are opt-in flags on top. Run it and look; the counts belong to whatever the
 repository is on the day you run it, so none are written down here.
 
 <picture>
@@ -31,14 +35,14 @@ repository is on the day you run it, so none are written down here.
 ### Download and run
 
 The dashboard is compiled into the binary, so one downloaded file is the
-whole install — no toolchain, no key, no account. Every release on the
+whole install; no toolchain, no key, no account. Every release on the
 [releases page](https://github.com/Memnoc/CodeAtlas/releases) carries a
-binary for each supported target — Linux x86_64 and aarch64 (musl,
+binary for each supported target: Linux x86_64 and aarch64 (musl,
 statically linked), macOS arm64 and x86_64 — with a `-sealed` variant
 beside each, a SHA-256 checksums file, and GitHub build-provenance
-attestation; the release's own notes say which binary is which and how to
-verify what you downloaded. Pick the file for your platform — its name
-carries the tag and the target — then:
+attestation. The release's own notes say which binary is which and how to
+verify what you downloaded. Pick the file for your platform, its name
+carries the tag and the target, then:
 
 ```sh
 curl -LO https://github.com/Memnoc/CodeAtlas/releases/download/<tag>/codeatlas-<tag>-<target>
@@ -48,7 +52,7 @@ chmod +x codeatlas-<tag>-<target>     # a fresh download is not executable
 ```
 
 Scanning, serving, diffing and sharing all run like that: offline, on
-loopback, no credential anywhere. The two flags that do reach a model —
+loopback, no credential anywhere. The two flags that do reach a model:
 `scan --enrich` and `serve --ask` — are opt-in, need Claude, and are the
 subject of [Enrichment](#enrichment-optional); the `-sealed` variant is
 the build in which those two refuse because reaching a model is a compile
@@ -56,7 +60,7 @@ error rather than a forbidden action ([Security](#security)).
 
 ### Build from source
 
-The same commands, from a clone — this path needs a Rust toolchain
+The same commands, from a clone; this path needs a Rust toolchain
 (edition 2024) and Node 24:
 
 ```sh
@@ -104,9 +108,7 @@ alias cakill='pkill -x codeatlas'                                   # stop a run
 
 ## What it looks like
 
-Designed cards, following your GitHub theme. Some draw this repository with
-the counts of the day they were made; the concept cards draw an
-illustrative repository, not this one.
+The cards are designed to be minimal but exhaustive, and the main feature they carry is the connections to other cards, as well as the information they trigger on the side bar menu once clicked.
 
 ### How to read the map
 
@@ -174,29 +176,29 @@ illustrative repository, not this one.
 
 ## Commands
 
-| Command | What it does |
-| --- | --- |
-| `scan [PATH]` | Walk the repo, parse it, write the map to `.codeatlas/knowledge-graph.json`. `--enrich` additionally fills prose slots through an LLM (see below); `--provider` chooses which one. |
+| Command        | What it does                                                                                                                                                                                                                                         |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `scan [PATH]`  | Walk the repo, parse it, write the map to `.codeatlas/knowledge-graph.json`. `--enrich` additionally fills prose slots through an LLM (see below); `--provider` chooses which one.                                                                   |
 | `serve [PATH]` | Serve the dashboard and the local map from memory on `127.0.0.1`. `--port` chooses the port; there is deliberately no `--host`. `--ask` additionally answers questions about the map at `POST /api/ask`, through the same providers `--enrich` uses. |
-| `diff [PATH]` | Project a git diff onto the map: changed nodes plus their one-hop blast radius, written to `.codeatlas/diff-overlay.json`. Pure git and graph traversal — no LLM, no network. |
-| `share [PATH]` | Export one self-contained, redacted HTML file that opens by double-click, with no server and no external requests. |
-| `schema` | Print the JSON Schema of the map contract. |
+| `diff [PATH]`  | Project a git diff onto the map: changed nodes plus their one-hop blast radius, written to `.codeatlas/diff-overlay.json`. Pure git and graph traversal — no LLM, no network.                                                                        |
+| `share [PATH]` | Export one self-contained, redacted HTML file that opens by double-click, with no server and no external requests.                                                                                                                                   |
+| `schema`       | Print the JSON Schema of the map contract.                                                                                                                                                                                                           |
 
 The dashboard picks up the diff overlay automatically when one exists, offering
 a toggle that distinguishes changed nodes from the ones they affect.
 
 ## Languages
 
-| Language | Extensions |
-| --- | --- |
-| TypeScript | `.ts`, `.tsx` |
-| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs` |
-| Rust | `.rs` |
-| Python | `.py` |
-| Go | `.go` |
-| C | `.c`, `.h` |
-| C++ | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx` |
-| Markdown | `.md`, `.markdown` — relative links become edges; no symbols |
+| Language   | Extensions                                                   |
+| ---------- | ------------------------------------------------------------ |
+| TypeScript | `.ts`, `.tsx`                                                |
+| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs`                                |
+| Rust       | `.rs`                                                        |
+| Python     | `.py`                                                        |
+| Go         | `.go`                                                        |
+| C          | `.c`, `.h`                                                   |
+| C++        | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`                 |
+| Markdown   | `.md`, `.markdown` — relative links become edges; no symbols |
 
 Parsing uses tree-sitter grammars compiled into the binary; nothing is
 downloaded at runtime. Files in unsupported languages still appear as nodes,
@@ -241,7 +243,7 @@ only when it is missing and never overwrite it, so your edit stands.
 
 One interaction to check: if your repository already ignores `.codeatlas/`
 outright, narrow that line to `**/.codeatlas/*` — CodeAtlas's own rule. Git
-never lets a nested file re-include anything under an excluded *directory*,
+never lets a nested file re-include anything under an excluded _directory_,
 so an outright exclusion keeps the store unpublished no matter what the
 nested `.gitignore` says; ignoring the contents lets it do its job. The
 `**/` keeps the rule alive for scans run from a subdirectory.
@@ -270,14 +272,14 @@ codeatlas scan . --enrich --provider cli:claude
 
 ### Running it
 
-Ask what it would cost before spending anything:
+I have added a feature to ask what it would cost before spending anything:
 
 ```sh
 codeatlas scan . --enrich --dry-run --provider cli:claude
 ```
 
 Every enrichment run states its price up front and reports progress as it
-goes — one line per batch, the same on a terminal and in a log. The shape
+goes: one line per batch, the same on a terminal and in a log. The shape
 (the numbers are one repository on one day, not a promise):
 
 ```text
@@ -330,10 +332,10 @@ a structural one, because the answer is drawn from the map's own prose.
 
 ## Security
 
-> CodeAtlas has exactly two ways to reach a model — an HTTPS POST to
-> `api.anthropic.com`, and spawning the already-authenticated `claude` CLI.
+> CodeAtlas has exactly two ways to reach a model: A) an HTTPS POST to
+> `api.anthropic.com`, and B) spawning the already-authenticated `claude` CLI.
 > Each sits behind its own Cargo feature; each is reachable only from
-> `scan --enrich` and `serve --ask`. The sealed build has neither.
+> `scan --enrich` and `serve --ask`. The sealed build has neither, trying to keep things as safe and under control as possible.
 
 For the HTTPS route the destination is a hardcoded constant, and redirects
 and environment proxies are disabled at the transport level, so the transport
@@ -343,7 +345,7 @@ Building with `--no-default-features` produces the sealed binary, in which
 every command still works and both `--enrich` and `--ask` refuse with a clear
 message.
 
-These are tested claims, not documentation. **[docs/SECURITY.md](docs/SECURITY.md)**
+These claims were tested and holds true to the best of my knowledge. **[docs/SECURITY.md](docs/SECURITY.md)**
 is the audit entry point: it maps each guarantee to the code and the committed
 test that enforces it, states what a model receives on each path, names the CI
 jobs that run them, and records the honest limitations.
