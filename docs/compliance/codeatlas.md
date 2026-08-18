@@ -49,8 +49,11 @@ verdict: ready
   version-addressed by git; no runtime-mutable AI configuration.
 - Release state and relevant dates: audit pinned at commit `cb7239d`
   (2026-08-16). Release workflow (`.github/workflows/release.yml`) present;
-  its proving dry run was in flight at review time. `v0.1.0` is gated by
-  `/harden` and the fresh-machine walk (ADR-0014).
+  its proving dry run was in flight at review time. `v0.1.0` was gated by
+  `/harden` and the fresh-machine walk (ADR-0014) — both passed, and
+  **v0.1.0 published 2026-08-18** (run 32114387855, 9 attested assets:
+  default + sealed × 4 targets + checksums), every gate of this record
+  closed beforehand.
 
 ## Trigger triage
 
