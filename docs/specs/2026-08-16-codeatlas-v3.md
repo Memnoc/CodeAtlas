@@ -170,7 +170,7 @@ methods served at that path, which deliberately supersedes V2 ticket 13's
 byte-identical-405s constraint — that constraint pinned a shape, and this
 lap changes the shape on purpose. The request line is accepted only as
 exactly three tokens; a syntactically valid request whose method is
-recognised by HTTP but not served here draws 501 rather than the 405 that
+unrecognised by HTTP draws 501 rather than the 405 that
 today claims a method-of-this-path problem. Carried citations get a
 per-field bound clamped like every other carried field — the history is
 the dashboard's bookkeeping, so clamping over refusing follows
@@ -271,6 +271,13 @@ ticked; that rule has earned itself in this repository beyond argument.
 - Sequencing inside the lap, per the interview: open-code stories first,
   the store forward-compat story before the release ticket, the release
   ticket last, `v0.1.0` cut only after the harden walk.
+- Correction 2026-08-25, approved by Memnoc in the V4 harvest: the
+  protocol-honesties paragraph originally read "recognised by HTTP but
+  not served here draws 501" — assigning 501 to the 405 case. Ticket 05's
+  crosscheck caught the slip; story 19 and the implementation were always
+  the RFC-correct way round (unrecognised → 501, recognised-but-unserved
+  → 405 with `Allow`). The word is corrected in place; this note is the
+  record of the change.
 
 ## Verification
 
