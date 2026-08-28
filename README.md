@@ -51,6 +51,22 @@ chmod +x codeatlas-<tag>-<target>     # a fresh download is not executable
 ./codeatlas-<tag>-<target> serve .    # opens the map on http://127.0.0.1:4173/
 ```
 
+On macOS, the first run of a **browser-downloaded** binary is blocked:
+these binaries are not Apple-signed or notarized, so macOS quarantines
+what a browser saves and Gatekeeper refuses to run it. The way through
+that keeps you honest: verify the download first — the checksums file
+and the provenance attestation, exactly as the release notes show — and
+only then clear the quarantine mark:
+
+```sh
+xattr -d com.apple.quarantine codeatlas-<tag>-<target>
+```
+
+(System Settings → Privacy & Security → "Allow Anyway" reaches the same
+end through more clicks.) A `curl` download, as above, never receives
+the quarantine mark — macOS attaches it to what browsers save, not to
+what the terminal fetches.
+
 Scanning, serving, diffing and sharing all run like that: offline, on
 loopback, no credential anywhere. The two flags that do reach a model:
 `scan --enrich` and `serve --ask` — are opt-in, need Claude, and are the

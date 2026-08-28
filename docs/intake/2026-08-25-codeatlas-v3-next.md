@@ -174,6 +174,34 @@ disposable):
    be the only material that came from the tool being *used* rather
    than built.
 
+## Post-harvest field feedback — 2026-08-28
+
+The first external user ran CodeAtlas (relayed by Memnoc, 2026-08-28) —
+the first hands on the tool that are not its author's. Two items, both
+`user-supplied`:
+
+- **macOS blocked the binary at first run.** Gatekeeper quarantines a
+  browser-downloaded unsigned binary; the user needed multiple steps to
+  allow it, and allowlisted on personal trust rather than verification —
+  which is precisely the reader the attestation exists for. The
+  documentation half is **done** (2026-08-28: README Quick start and the
+  release-notes template carry the verify-then-dequarantine path). The
+  V4 candidate that remains: **Apple Developer ID signing + notarization
+  in the release workflow** — a decision, not a ticket: a paid developer
+  account, credential management in CI, and it reopens territory
+  ADR-0014 settled for GPG on different facts (GPG was rejected for lack
+  of a verifier audience; Gatekeeper friction blocks every macOS
+  browser-downloader at first contact).
+- **`scan` is silent while it works.** Its only output is the final
+  `mapped N files` line — one `eprintln!` at the end of the run — so on
+  a larger repository the user could not tell whether anything was
+  happening. V4 candidate: **progress/status output for scan** (and any
+  long-running command); the interview owns its shape — what to count,
+  TTY behaviour, whether a quiet flag exists. Live counts are measured
+  as they happen, so the measured-or-absent rule is satisfiable.
+
+Open question 4 anticipated this section; it is now collecting.
+
 ## Hand-off
 
 Fresh session, `/adr-with-docs`, this document as the agenda — **when

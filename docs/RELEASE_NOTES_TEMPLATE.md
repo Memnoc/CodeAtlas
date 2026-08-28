@@ -65,6 +65,13 @@ the exact workflow run and commit that built it:
 {{attestation-verify-command}}
 ```
 
+On macOS: these binaries are not Apple-signed or notarized, so a
+browser-downloaded copy arrives quarantined and Gatekeeper refuses its
+first run. Verify it with the two commands above, then clear the mark —
+`xattr -d com.apple.quarantine <the file>` — or allow it under System
+Settings → Privacy & Security. A `curl` download never receives the
+quarantine mark.
+
 ## How this software was built
 
 CodeAtlas is built AI-assisted, under the Northstar engineering pipeline:
