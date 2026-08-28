@@ -205,6 +205,37 @@ the first hands on the tool that are not its author's. Two items, both
   pipe, and a wiring test that a real scan ticks once per file. What
   remains for the interview is only whether other long-running commands
   deserve the same line.
+  *Follow-up from Memnoc's own macOS walk, 2026-08-28:* sub-second
+  scans erased the counter before an eye could catch it — scan clears
+  a few hundred files in well under a second, so the line as first
+  shipped was invisible on every ordinary repository. At Memnoc's
+  direction the final frame now **stands** instead of clearing:
+  `scanning: N/N files` survives above the summary, proof of life at
+  any speed. Both new guards tamper-proven (a restored clear tripped
+  the standing-frame test; an unconditional newline tripped the
+  empty-walk test). Open datum: whether the friend's original "is it
+  doing anything" was a genuinely huge repository — which would close
+  this item — or a wait somewhere else entirely, which would reopen it
+  as a different feature.
+
+From Memnoc's own macOS walk (2026-08-28, `user-supplied`):
+
+- **The launch ritual is too manual.** cd into the repository, type a
+  long binary path, run two commands — Memnoc's words: explore "a menu
+  that asks the user to provide the path of the repository and that's
+  it, no more tasks for them." Partially true already: `scan` and
+  `serve` take the path as an argument, so the cd was never required —
+  a documentation gap before it is a feature gap. The V4 exploration
+  proper: a zero-argument interactive mode — bare `codeatlas` asks for
+  a path, then scans, serves, and hands over the URL in one motion.
+  The interview owns the shape: prompt versus menu, whether it opens
+  the browser itself, how an interactive mode coexists with the
+  scriptable CLI (a bare invocation currently prints clap's help —
+  changing that is a behaviour change scripts could feel), and what
+  PATH-install story a downloaded single binary owes so the long name
+  disappears (`mv` to a bin dir today; an `install` verb, a brew
+  formula, and Apple signing all live in this same first-five-minutes
+  neighbourhood).
 
 Open question 4 anticipated this section; it is now collecting.
 

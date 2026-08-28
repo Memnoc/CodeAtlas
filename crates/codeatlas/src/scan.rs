@@ -55,9 +55,10 @@ const DEFAULT_EXCLUDES: &[&str] = &["node_modules", "target", ".git", OUTPUT_DIR
 /// `scripts/release-smoke.sh` see output byte-identical to a build
 /// without this type — the final `mapped N files` summary stays the only
 /// thing a non-human ever reads. Every count rendered was measured the
-/// moment it printed; the line is redrawn in place with `\r` and cleared
-/// by [`Progress::finish`] so nothing half-drawn survives beside the
-/// summary.
+/// moment it printed; the line is redrawn in place with `\r` while the
+/// scan works, and [`Progress::finish`] lets the final frame stand —
+/// most scans outrun the eye, and a settled `n/N` line is the proof of
+/// life a cleared one could never leave.
 pub struct Progress<W: Write> {
     out: Option<W>,
     /// Width of the widest line drawn so far, so a redraw or the final
@@ -100,10 +101,15 @@ impl<W: Write> Progress<W> {
         self.drawn = self.drawn.max(line.len());
     }
 
-    /// Clears the line so the summary stands alone.
+    /// Settles the line: the final frame stands and the summary gets its
+    /// own line beneath it. A scan that drew nothing settles nothing — an
+    /// empty walk must not leave a stray blank line.
     fn finish(&mut self) {
         let Some(out) = &mut self.out else { return };
-        let _ = write!(out, "\r{:width$}\r", "", width = self.drawn);
+        if self.drawn == 0 {
+            return;
+        }
+        let _ = writeln!(out);
         let _ = out.flush();
         self.drawn = 0;
     }
@@ -698,7 +704,7 @@ mod progress_tests {
     use super::{Progress, scan_with};
 
     #[test]
-    fn an_enabled_progress_renders_measured_ticks_and_clears_the_line() {
+    fn an_enabled_progress_renders_measured_ticks_and_the_final_frame_stands() {
         let mut buf: Vec<u8> = Vec::new();
         let mut progress = Progress::to(&mut buf);
         progress.tick(1, 3);
@@ -709,17 +715,29 @@ mod progress_tests {
             drawn.contains("scanning: 1/3 files"),
             "first tick missing: {drawn:?}"
         );
+        // After finish(), the final frame must survive as a completed line:
+        // most scans outrun the eye, and the settled `n/N` is the proof of
+        // life the reader asked for. The summary then lands on its own line.
+        let last_frame = drawn.rsplit('\r').next().unwrap();
         assert!(
-            drawn.contains("scanning: 3/3 files"),
-            "final tick missing: {drawn:?}"
+            last_frame.trim_end().ends_with("scanning: 3/3 files")
+                || last_frame.starts_with("scanning: 3/3 files"),
+            "the final count did not stand after finish(): {last_frame:?}"
         );
-        // After finish(), everything past the last carriage return must be
-        // blank — the `mapped N files` summary can never land beside a
-        // half-drawn count.
-        let tail = drawn.rsplit('\r').next().unwrap();
         assert!(
-            tail.chars().all(|c| c == ' '),
-            "finish() left glyphs standing: {tail:?}"
+            drawn.ends_with('\n'),
+            "finish() must complete the line, or the summary lands beside it: {drawn:?}"
+        );
+    }
+
+    #[test]
+    fn a_walk_that_drew_nothing_settles_nothing() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut progress = Progress::to(&mut buf);
+        progress.finish();
+        assert!(
+            buf.is_empty(),
+            "an empty scan left a stray blank line: {buf:?}"
         );
     }
 
