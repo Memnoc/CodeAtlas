@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fs;
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -48,7 +49,73 @@ pub const DEFAULT_IGNORE: &str = "\
 /// Directories never worth mapping, ignored even when no gitignore says so.
 const DEFAULT_EXCLUDES: &[&str] = &["node_modules", "target", ".git", OUTPUT_DIR];
 
+/// A live `scanning: n/N files` line for a human watching a long scan;
+/// inert everywhere else. [`Progress::stderr`] attaches a writer exactly
+/// when stderr is a terminal, so pipes, CI legs, tests and
+/// `scripts/release-smoke.sh` see output byte-identical to a build
+/// without this type — the final `mapped N files` summary stays the only
+/// thing a non-human ever reads. Every count rendered was measured the
+/// moment it printed; the line is redrawn in place with `\r` and cleared
+/// by [`Progress::finish`] so nothing half-drawn survives beside the
+/// summary.
+pub struct Progress<W: Write> {
+    out: Option<W>,
+    /// Width of the widest line drawn so far, so a redraw or the final
+    /// clear always overwrites every glyph the previous draw left.
+    drawn: usize,
+}
+
+impl Progress<io::Stderr> {
+    /// Live on a terminal, silent through a pipe — the decision is made
+    /// here and nowhere else.
+    pub fn stderr() -> Self {
+        Self {
+            out: io::stderr().is_terminal().then(io::stderr),
+            drawn: 0,
+        }
+    }
+}
+
+impl<W: Write> Progress<W> {
+    /// A progress line writing somewhere visible to a test.
+    pub fn to(out: W) -> Self {
+        Self {
+            out: Some(out),
+            drawn: 0,
+        }
+    }
+
+    /// True when a writer is attached — when a human is watching.
+    pub fn is_live(&self) -> bool {
+        self.out.is_some()
+    }
+
+    /// One measured step: `done` of `total` files extracted so far.
+    fn tick(&mut self, done: usize, total: usize) {
+        let Some(out) = &mut self.out else { return };
+        let line = format!("scanning: {done}/{total} files");
+        let pad = self.drawn.saturating_sub(line.len());
+        let _ = write!(out, "\r{line}{:pad$}", "");
+        let _ = out.flush();
+        self.drawn = self.drawn.max(line.len());
+    }
+
+    /// Clears the line so the summary stands alone.
+    fn finish(&mut self) {
+        let Some(out) = &mut self.out else { return };
+        let _ = write!(out, "\r{:width$}\r", "", width = self.drawn);
+        let _ = out.flush();
+        self.drawn = 0;
+    }
+}
+
 pub fn scan(root: &Path) -> Result<KnowledgeGraph> {
+    scan_with(root, &mut Progress::stderr())
+}
+
+/// [`scan`] with the progress line injected — the seam tests drive with a
+/// buffer where a real run holds the terminal.
+pub fn scan_with<W: Write>(root: &Path, progress: &mut Progress<W>) -> Result<KnowledgeGraph> {
     let root = root
         .canonicalize()
         .with_context(|| format!("cannot scan {}", root.display()))?;
@@ -78,10 +145,19 @@ pub fn scan(root: &Path) -> Result<KnowledgeGraph> {
 
     let mut nodes = Vec::new();
     let mut edges = Vec::new();
+    let total = paths.len();
     let facts: Vec<FileFacts> = paths
         .iter()
-        .map(|path| extract_file(&root, path, &mut nodes, &mut edges))
+        .enumerate()
+        .map(|(done, path)| {
+            // Extract first, tick after: the rendered count claims
+            // completed work, never work about to happen.
+            let facts = extract_file(&root, path, &mut nodes, &mut edges);
+            progress.tick(done + 1, total);
+            facts
+        })
         .collect();
+    progress.finish();
 
     resolve_imports(&paths, &facts, &mut edges, &root);
     resolve_calls(&paths, &facts, &mut edges, &root);
@@ -614,5 +690,76 @@ fn write_ignore_file(dir: &Path) -> Result<()> {
         Ok(false) => fs::write(&path, DEFAULT_IGNORE)
             .with_context(|| format!("cannot write {}", path.display())),
         Ok(true) | Err(_) => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::{Progress, scan_with};
+
+    #[test]
+    fn an_enabled_progress_renders_measured_ticks_and_clears_the_line() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut progress = Progress::to(&mut buf);
+        progress.tick(1, 3);
+        progress.tick(3, 3);
+        progress.finish();
+        let drawn = String::from_utf8(buf).unwrap();
+        assert!(
+            drawn.contains("scanning: 1/3 files"),
+            "first tick missing: {drawn:?}"
+        );
+        assert!(
+            drawn.contains("scanning: 3/3 files"),
+            "final tick missing: {drawn:?}"
+        );
+        // After finish(), everything past the last carriage return must be
+        // blank — the `mapped N files` summary can never land beside a
+        // half-drawn count.
+        let tail = drawn.rsplit('\r').next().unwrap();
+        assert!(
+            tail.chars().all(|c| c == ' '),
+            "finish() left glyphs standing: {tail:?}"
+        );
+    }
+
+    #[test]
+    fn a_redraw_overwrites_every_glyph_of_a_wider_earlier_line() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut progress = Progress::to(&mut buf);
+        progress.tick(100, 100);
+        progress.tick(1, 1); // narrower line: must pad over the old one
+        let drawn = String::from_utf8(buf).unwrap();
+        let last = drawn.rsplit('\r').next().unwrap();
+        assert!(
+            last.len() >= "scanning: 100/100 files".len(),
+            "the narrow redraw left the wide line's tail visible: {last:?}"
+        );
+    }
+
+    #[test]
+    fn under_a_piped_stderr_the_real_constructor_stays_silent() {
+        // cargo test reaches stderr through a pipe, never a terminal — the
+        // same shape as every script and CI leg. The constructor must
+        // decline, or scripts/release-smoke.sh's exact-line assertion and
+        // every stderr-reading test would meet progress noise.
+        assert!(!Progress::stderr().is_live());
+    }
+
+    #[test]
+    fn scan_ticks_the_progress_once_per_file_while_it_works() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::write(repo.path().join("a.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(repo.path().join("b.rs"), "fn b() {}\n").unwrap();
+        let mut buf: Vec<u8> = Vec::new();
+        scan_with(repo.path(), &mut Progress::to(&mut buf)).unwrap();
+        let drawn = String::from_utf8(buf).unwrap();
+        // Two files on disk plus the .gitignore the scan itself writes is
+        // not on disk yet during the walk — the walk saw exactly a.rs and
+        // b.rs, and each completed extraction drew its own measured count.
+        assert!(
+            drawn.contains("scanning: 1/2 files") && drawn.contains("scanning: 2/2 files"),
+            "expected a tick per extracted file, got: {drawn:?}"
+        );
     }
 }

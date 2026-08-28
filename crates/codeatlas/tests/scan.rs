@@ -45,6 +45,35 @@ fn scan_reports_the_number_of_files_it_mapped() {
     );
 }
 
+/// The progress line is a TTY affordance and nothing else. Through a pipe —
+/// which is every script, every CI leg, and scripts/release-smoke.sh with
+/// its exact-line assertion — scan's stderr must stay byte-identical to a
+/// build with no progress at all: the summary line, and no carriage return
+/// anywhere.
+#[test]
+fn a_piped_scan_keeps_stderr_to_the_summary_line_alone() {
+    let repo = materialize("simple");
+    let output = assert_cmd::Command::cargo_bin("codeatlas")
+        .unwrap()
+        .arg("scan")
+        .current_dir(repo.path())
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr).to_string();
+    assert!(
+        !stderr.contains('\r'),
+        "a progress redraw leaked into a pipe: {stderr:?}"
+    );
+    assert!(
+        !stderr.contains("scanning:"),
+        "a progress line leaked into a pipe: {stderr:?}"
+    );
+    assert!(
+        stderr.contains("mapped "),
+        "the summary line is missing: {stderr:?}"
+    );
+}
+
 fn node_ids(map: &serde_json::Value) -> Vec<String> {
     map["nodes"]
         .as_array()

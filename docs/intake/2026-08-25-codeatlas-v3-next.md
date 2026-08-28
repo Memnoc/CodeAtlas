@@ -192,13 +192,19 @@ the first hands on the tool that are not its author's. Two items, both
   ADR-0014 settled for GPG on different facts (GPG was rejected for lack
   of a verifier audience; Gatekeeper friction blocks every macOS
   browser-downloader at first contact).
-- **`scan` is silent while it works.** Its only output is the final
+- **`scan` is silent while it works.** Its only output was the final
   `mapped N files` line — one `eprintln!` at the end of the run — so on
   a larger repository the user could not tell whether anything was
-  happening. V4 candidate: **progress/status output for scan** (and any
-  long-running command); the interview owns its shape — what to count,
-  TTY behaviour, whether a quiet flag exists. Live counts are measured
-  as they happen, so the measured-or-absent rule is satisfiable.
+  happening. **Fixed ahead of the lap, 2026-08-28, at Memnoc's
+  direction**: scan now draws a live `scanning: n/N files` line, each
+  count measured at the moment it prints, exactly when stderr is a
+  terminal — through a pipe (every script, CI leg, and
+  `scripts/release-smoke.sh`'s exact-line assertion) output is
+  byte-identical to before. Guarded in both directions and each guard
+  proven able to fail: a binary-seam test that no progress leaks into a
+  pipe, and a wiring test that a real scan ticks once per file. What
+  remains for the interview is only whether other long-running commands
+  deserve the same line.
 
 Open question 4 anticipated this section; it is now collecting.
 
