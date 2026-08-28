@@ -1,6 +1,7 @@
 pub mod diff;
 pub mod enrich;
 pub mod highlight;
+pub mod launcher;
 pub mod map;
 pub mod parsers;
 pub mod scan;
@@ -8,7 +9,8 @@ pub mod semantics;
 pub mod serve;
 pub mod share;
 
-use std::path::PathBuf;
+use std::io::IsTerminal;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Parser, Subcommand};
@@ -124,7 +126,40 @@ enum Command {
     },
 }
 
+/// The structural scan every entry point shares: build, re-attach stored
+/// prose where content is unchanged (ADR-0005), save, and say how many
+/// files were mapped. Used by the `scan` subcommand and the interactive
+/// launcher, so the two can never drift apart.
+///
+/// File nodes, not all nodes: the map holds a node per function and class
+/// too, so `nodes.len()` reported roughly four times the number of files
+/// scanned. Carried across five harden walks as the only number the CLI
+/// states to a reader that is not true; corrected in V1 ticket 34.
+pub(crate) fn build_and_save_map(root: &Path) -> anyhow::Result<map::KnowledgeGraph> {
+    let mut graph = scan::scan(root)?;
+    enrich::AnnotationStore::load(root).reattach(root, &mut graph);
+    scan::save(root, &graph)?;
+    let files = graph
+        .nodes
+        .iter()
+        .filter(|n| n.kind == map::NodeKind::File)
+        .count();
+    eprintln!("mapped {files} files");
+    Ok(graph)
+}
+
 pub fn run() -> ExitCode {
+    // A bare invocation from a human at a terminal gets the interactive
+    // launcher; from anything else — scripts, pipes, CI — it keeps
+    // printing clap's usage exactly as it always has (the gate is
+    // launcher::should_run, and tests pin the piped shape).
+    if launcher::should_run(
+        std::env::args_os().count(),
+        std::io::stdin().is_terminal(),
+        std::io::stderr().is_terminal(),
+    ) {
+        return launcher::run();
+    }
     match Cli::parse().command {
         Command::Scan {
             path,
@@ -133,34 +168,15 @@ pub fn run() -> ExitCode {
             backend,
         } => {
             let root = path.unwrap_or_else(|| PathBuf::from("."));
-            // The structural map is always built and saved first — with
-            // stored annotations re-attached where content is unchanged
-            // (ADR-0005) — so any enrichment failure leaves a complete map
-            // behind (story 14).
-            let result = scan::scan(&root).and_then(|mut graph| {
-                enrich::AnnotationStore::load(&root).reattach(&root, &mut graph);
-                scan::save(&root, &graph)?;
-                Ok(graph)
-            });
-            let mut graph = match result {
+            // The structural map is always built and saved first, so any
+            // enrichment failure leaves a complete map behind (story 14).
+            let mut graph = match build_and_save_map(&root) {
                 Ok(graph) => graph,
                 Err(err) => {
                     eprintln!("error: {err:#}");
                     return ExitCode::FAILURE;
                 }
             };
-            // File nodes, not all nodes: the map holds a node per function
-            // and class too, so `nodes.len()` reported roughly four times
-            // the number of files scanned. Carried across five harden walks
-            // as the only number the CLI states to a reader that is not
-            // true; corrected here because ticket 34 was the next thing to
-            // touch this function.
-            let files = graph
-                .nodes
-                .iter()
-                .filter(|n| n.kind == map::NodeKind::File)
-                .count();
-            eprintln!("mapped {files} files");
             if !enrich {
                 return ExitCode::SUCCESS;
             }

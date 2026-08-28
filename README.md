@@ -67,6 +67,20 @@ end through more clicks.) A `curl` download, as above, never receives
 the quarantine mark — macOS attaches it to what browsers save, not to
 what the terminal fetches.
 
+Or skip the commands entirely: run the binary **bare** and it asks
+instead —
+
+```sh
+./codeatlas-<tag>-<target>
+# repository path [.]: ~/Code/my-project
+# show mapped files' source in the dashboard? [y/N]: y
+```
+
+— then it scans, serves, and opens the map in your browser itself. The
+interactive launcher only ever appears when you run it by hand at a
+terminal; in scripts and pipes a bare invocation prints usage, exactly
+as a CLI should.
+
 Scanning, serving, diffing and sharing all run like that: offline, on
 loopback, no credential anywhere. The two flags that do reach a model:
 `scan --enrich` and `serve --ask` — are opt-in, need Claude, and are the

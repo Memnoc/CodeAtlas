@@ -77,6 +77,24 @@ paths to fail in the same conditions:
   request is a live control, not a courtesy: a server that never started
   would produce a 502 just as readily
 
+One entry point sits beside the four commands: a bare `codeatlas` run by a
+human at a terminal starts an interactive launcher that asks for a
+repository path, scans it, and serves it — the same code paths as `scan`
+and plain `serve` (optionally `--open-code`, asked as a question), never a
+provider and never a model flag, identical in a sealed build. It spawns
+exactly one program the commands above do not: the operating system's URL
+opener — `open` on macOS, `xdg-open` elsewhere — fixed by name, not
+configurable, handed exactly the served loopback URL as its only argument,
+only after the served port answers, and with `ANTHROPIC_API_KEY` stripped
+from its environment. `serve` itself never spawns it; only the launcher
+does. In any non-terminal context the launcher does not exist: a piped
+bare invocation prints usage and exits, unchanged. **Enforced by**
+`the_opener_is_the_platform_opener_with_the_loopback_url_and_no_api_key`
+and `the_gate_wants_a_bare_invocation_and_a_terminal_on_both_ends`
+(`crates/codeatlas/src/launcher.rs`), and at the binary seam by
+`a_bare_invocation_through_pipes_still_prints_usage_and_exits_2`
+(`crates/codeatlas/tests/launcher.rs`).
+
 The capability route is held by a test of its own, because what it claims is
 a fact about the server rather than about egress:
 `the_capability_route_states_whether_questions_can_be_asked`

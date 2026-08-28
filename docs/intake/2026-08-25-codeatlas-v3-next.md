@@ -223,19 +223,24 @@ From Memnoc's own macOS walk (2026-08-28, `user-supplied`):
 - **The launch ritual is too manual.** cd into the repository, type a
   long binary path, run two commands — Memnoc's words: explore "a menu
   that asks the user to provide the path of the repository and that's
-  it, no more tasks for them." Partially true already: `scan` and
-  `serve` take the path as an argument, so the cd was never required —
-  a documentation gap before it is a feature gap. The V4 exploration
-  proper: a zero-argument interactive mode — bare `codeatlas` asks for
-  a path, then scans, serves, and hands over the URL in one motion.
-  The interview owns the shape: prompt versus menu, whether it opens
-  the browser itself, how an interactive mode coexists with the
-  scriptable CLI (a bare invocation currently prints clap's help —
-  changing that is a behaviour change scripts could feel), and what
-  PATH-install story a downloaded single binary owes so the long name
-  disappears (`mv` to a bin dir today; an `install` verb, a brew
-  formula, and Apple signing all live in this same first-five-minutes
-  neighbourhood).
+  it, no more tasks for them." (`scan` and `serve` always took the path
+  as an argument, so the cd was never required — now documented.)
+  **Built 2026-08-28 at Memnoc's direction, high priority**, decisions
+  made in-session with Memnoc: bare `codeatlas` at a real terminal
+  (stdin *and* stderr TTYs) runs an interactive launcher — repository
+  path with `~` expansion and honest retry, one open-code yes/no
+  (closing the discoverability gap the walk found), then scan → serve →
+  the OS URL-opener spawned only after the served port answers, and
+  never when the port was already owned by something else. A piped bare
+  invocation still prints clap's usage and exits 2, pinned at the
+  binary seam. The launcher offers no model flags — it is the no-key
+  path, identical in a sealed build — and `docs/SECURITY.md` names the
+  one new spawned program (fixed name, loopback URL argument, API key
+  stripped) with its enforcing tests. Proven by pty walk: interview →
+  standing counter → serve → opener called with exactly the loopback
+  URL. Remaining in this neighbourhood for the interview: the
+  PATH-install story (an `install` verb, a brew formula) and Apple
+  signing.
 
 Open question 4 anticipated this section; it is now collecting.
 
