@@ -1,15 +1,27 @@
-// The header's theme switch: Rosé Pine Dawn ⇄ Moon.
+// The header's theme switch: a cycle through Rosé Pine Dawn → Rosé Pine →
+// Rosé Pine Moon. The main variant's full name is just "Rosé Pine" — the
+// palette the others are variants of.
 import { useLayoutEffect, useState } from "react";
 import {
   applyTheme,
   initialTheme,
-  otherTheme,
+  nextTheme,
   persistTheme,
   type Theme,
 } from "./theme.js";
 
-const NAME: Record<Theme, string> = { dawn: "Dawn", moon: "Moon" };
-const GLYPH: Record<Theme, string> = { dawn: "☀", moon: "☾" };
+const GLYPH: Record<Theme, string> = { dawn: "☀", main: "✦", moon: "☾" };
+
+function label(theme: Theme): string {
+  switch (theme) {
+    case "dawn":
+      return "Rosé Pine Dawn";
+    case "main":
+      return "Rosé Pine";
+    case "moon":
+      return "Rosé Pine Moon";
+  }
+}
 
 export function ThemeToggle() {
   const [theme, setTheme] = useState<Theme>(initialTheme);
@@ -20,15 +32,15 @@ export function ThemeToggle() {
     applyTheme(theme);
   }, [theme]);
 
-  const next = otherTheme(theme);
+  const next = nextTheme(theme);
 
   return (
     <button
       type="button"
       className="theme-toggle"
       data-walkthrough="theme"
-      aria-label={`Theme: Rosé Pine ${NAME[theme]}. Switch to ${NAME[next]}.`}
-      title={`Switch to Rosé Pine ${NAME[next]}`}
+      aria-label={`Theme: ${label(theme)}. Switch to ${label(next)}.`}
+      title={`Switch to ${label(next)}`}
       onClick={() => {
         setTheme(next);
         persistTheme(next);
@@ -37,7 +49,7 @@ export function ThemeToggle() {
       <span className="theme-toggle-glyph" aria-hidden="true">
         {GLYPH[theme]}
       </span>
-      Rosé Pine {NAME[theme]}
+      {label(theme)}
     </button>
   );
 }

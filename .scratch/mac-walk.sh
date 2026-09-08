@@ -11,7 +11,7 @@
 # hands — your hands are the test — and the checklist prints at the end.
 set -euo pipefail
 
-TAG="v0.1.4"
+TAG="v0.1.5"
 
 case "$(uname -m)" in
   arm64)  TARGET=aarch64-apple-darwin ;;

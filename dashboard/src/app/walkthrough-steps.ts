@@ -185,8 +185,9 @@ export const WALKTHROUGH_STEPS: readonly WalkthroughStep[] = [
     id: "theme",
     title: "Light and dark",
     body:
-      "Rosé Pine Dawn and Moon. The page opens in whichever your system " +
-      "asks for, and a deliberate choice is remembered in this browser.",
+      "Rosé Pine, in three variants: Dawn for light, the main palette for " +
+      "dark, Moon for a softer dark. The page opens to match your system, " +
+      "and a deliberate choice is remembered in this browser.",
   },
   {
     id: "walkthrough",

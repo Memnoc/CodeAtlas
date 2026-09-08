@@ -380,6 +380,13 @@ datums, both acted on immediately:
   scanning — the pre-check correctly refuses to open a browser at the
   other instance's server. Whether the launcher should offer another
   port is a small V4 question.
+- **A want, not a bug, shipped in the same run:** the dashboard's third
+  theme — Rosé Pine's main variant, per Memnoc's ask — is now the dark
+  default (the media query and `systemTheme()` both say `main` for a
+  never-chosen dark-OS reader; Moon became an explicit choice, reached
+  through the header's new three-way cycle Dawn → Rosé Pine → Moon).
+  The token architecture absorbed it as its own comment predicted: "a
+  third variant would be one more block and nothing else."
 - **Fourth find, same day, in the dashboard: the source panel cut off
   line 1 of a six-line file.** `.source-code` had `overflow-x: auto`
   all along — the scrollbar sat at the bottom of a flex-stretched

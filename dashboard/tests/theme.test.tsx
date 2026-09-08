@@ -48,9 +48,11 @@ afterEach(() => {
 
 describe("theme toggle", () => {
   it("opens in the theme the operating system asks for", () => {
+    // A dark preference means the main variant — Moon is only ever a
+    // deliberate choice, mirroring the stylesheet's own media query.
     stubPrefersDark(true);
     render(<MapExplorer map={map} />);
-    expect(document.documentElement).toHaveAttribute("data-theme", "moon");
+    expect(document.documentElement).toHaveAttribute("data-theme", "main");
   });
 
   it("opens in Dawn when the operating system prefers light", () => {
@@ -65,17 +67,26 @@ describe("theme toggle", () => {
     const { unmount } = render(<MapExplorer map={map} />);
 
     const toggle = screen.getByRole("button", { name: /^Theme: Rosé Pine/ });
-    expect(toggle).toHaveAccessibleName(/Dawn\. Switch to Moon\./);
+    expect(toggle).toHaveAccessibleName(/Dawn\. Switch to Rosé Pine\./);
+
+    // The cycle: Dawn → Rosé Pine (main) → Moon → Dawn.
+    await user.click(toggle);
+    expect(document.documentElement).toHaveAttribute("data-theme", "main");
+    expect(toggle).toHaveAccessibleName(/Rosé Pine\. Switch to Rosé Pine Moon\./);
 
     await user.click(toggle);
     expect(document.documentElement).toHaveAttribute("data-theme", "moon");
-    expect(toggle).toHaveAccessibleName(/Moon\. Switch to Dawn\./);
+    expect(toggle).toHaveAccessibleName(/Moon\. Switch to Rosé Pine Dawn\./);
 
-    // The choice outranks the system preference on the next visit.
+    await user.click(toggle);
+    expect(document.documentElement).toHaveAttribute("data-theme", "dawn");
+
+    // A deliberate stop mid-cycle outranks the system on the next visit.
+    await user.click(toggle);
     unmount();
     document.documentElement.removeAttribute("data-theme");
     render(<MapExplorer map={map} />);
-    expect(document.documentElement).toHaveAttribute("data-theme", "moon");
+    expect(document.documentElement).toHaveAttribute("data-theme", "main");
   });
 
   it("still themes the page when storage refuses, as on file://", async () => {
@@ -95,7 +106,7 @@ describe("theme toggle", () => {
 
     expect(document.documentElement).toHaveAttribute("data-theme", "dawn");
     await user.click(screen.getByRole("button", { name: /^Theme: Rosé Pine/ }));
-    expect(document.documentElement).toHaveAttribute("data-theme", "moon");
+    expect(document.documentElement).toHaveAttribute("data-theme", "main");
   });
 
   it("falls back to the stylesheet's own default when matchMedia is absent", () => {
