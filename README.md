@@ -45,7 +45,7 @@ verify what you downloaded. Pick the file for your platform, its name
 carries the tag and the target, then:
 
 ```sh
-curl -LO https://github.com/Memnoc/CodeAtlas/releases/download/<tag>/codeatlas-<tag>-<target>
+curl -fLO https://github.com/Memnoc/CodeAtlas/releases/download/<tag>/codeatlas-<tag>-<target>   # -f: fail loudly, never save an error page
 chmod +x codeatlas-<tag>-<target>     # a fresh download is not executable
 ./codeatlas-<tag>-<target> scan .     # writes .codeatlas/knowledge-graph.json
 ./codeatlas-<tag>-<target> serve .    # opens the map on http://127.0.0.1:4173/
