@@ -50,21 +50,29 @@ it, so none are written down here.
 One downloaded file is the whole install — the dashboard is compiled in; no
 toolchain, no key, no account. `curl` is the default path on every platform,
 and on macOS it is also the smoothest one: what the terminal fetches never
-receives the quarantine mark, so Gatekeeper never gets involved. Pick your
-target from the [latest release](https://github.com/Memnoc/CodeAtlas/releases)
-— Linux `x86_64`/`aarch64` (static musl) or macOS `arm64`/`x86_64` — then:
+receives the quarantine mark, so Gatekeeper never gets involved.
 
 ```sh
-curl -fLO https://github.com/Memnoc/CodeAtlas/releases/download/<tag>/codeatlas-<tag>-<target>   # -f: fail loudly, never save an error page
-chmod +x codeatlas-<tag>-<target>
-./codeatlas-<tag>-<target>
+# macOS (Apple silicon)
+curl -fLO https://github.com/Memnoc/CodeAtlas/releases/latest/download/codeatlas-aarch64-apple-darwin   # -f: fail loudly, never save an error page
+chmod +x codeatlas-aarch64-apple-darwin && mv codeatlas-aarch64-apple-darwin codeatlas
+./codeatlas
+
+# Linux (x86_64)
+curl -fLO https://github.com/Memnoc/CodeAtlas/releases/latest/download/codeatlas-x86_64-unknown-linux-musl
+chmod +x codeatlas-x86_64-unknown-linux-musl && mv codeatlas-x86_64-unknown-linux-musl codeatlas
+./codeatlas
 ```
 
-The release notes carry the exact copy-paste commands per platform, plus the
+An Intel Mac or an Arm Linux box swaps the target: `x86_64-apple-darwin`,
+`aarch64-unknown-linux-musl` (the Linux binaries are static musl). The
+`latest` URLs always fetch the newest release; every binary also exists
+under a tag-pinned name, with a `-sealed` variant beside each, and the
+[release notes](https://github.com/Memnoc/CodeAtlas/releases) carry the
 SHA-256 checksums file and GitHub build-provenance attestation to verify
-what you downloaded, and a `-sealed` variant beside every binary.
+what you downloaded.
 
-Run it **bare**, as above, and a small terminal menu does the rest: `Enter`
+Run it **bare** — `./codeatlas`, as above — and a small terminal menu does the rest: `Enter`
 opens a folder exactly like a file manager, `h` climbs, `/` types a path,
 `Enter` on the pinned `.` row maps the directory you are in — one confirm
 screen states plainly whether open code is on (`o` toggles it), then it
@@ -77,8 +85,8 @@ exactly as a CLI should.
 The explicit commands behind it, for scripts and muscle memory:
 
 ```sh
-./codeatlas-<tag>-<target> scan .     # writes .codeatlas/knowledge-graph.json
-./codeatlas-<tag>-<target> serve .    # serves the map on http://127.0.0.1:4173/
+./codeatlas scan .     # writes .codeatlas/knowledge-graph.json
+./codeatlas serve .    # serves the map on http://127.0.0.1:4173/
 ```
 
 Everything CodeAtlas writes lands in `.codeatlas/` under the scanned root,
@@ -91,7 +99,7 @@ deliberate, and [Enrichment](#enrichment-optional) explains it.
 > refuses to run it. The way through that keeps you honest: verify the
 > download first — the checksums file and the provenance attestation,
 > exactly as the release notes show — and only then clear the mark with
-> `xattr -d com.apple.quarantine codeatlas-<tag>-<target>`. (System
+> `xattr -d com.apple.quarantine <the file>`. (System
 > Settings → Privacy & Security → "Allow Anyway" reaches the same end
 > through more clicks.) The `curl` path above skips all of this.
 

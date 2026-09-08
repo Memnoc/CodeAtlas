@@ -7,6 +7,13 @@ name: Release
 # checksums file, produces and verifies build-provenance attestation for
 # every artifact — and only then publishes a GitHub Release.
 #
+# Every binary is published twice: under its tag-pinned name and under a
+# tag-free one (`codeatlas-<target>[-sealed]`), so
+# `releases/latest/download/<stable-name>` is a URL that never goes stale.
+# The copy is byte-identical by construction (`cp` of the smoke-run,
+# probed artifact); the checksums file lists both names and attestation
+# covers both, so either download verifies the same way.
+#
 # `workflow_dispatch` is the dry run (spec seam 6): the same workflow end to
 # end, publishing nothing. The publish job is gated on the tag-push context
 # below, so on a dispatch it is skipped by construction — dispatch runs on a
@@ -171,6 +178,15 @@ jobs:
           scripts/sealed-probe.sh \
             "dist/codeatlas-${TAG}-${{ matrix.target }}-sealed" \
             "dist/codeatlas-${TAG}-${{ matrix.target }}"
+      # After the smoke run and the sealed probe, deliberately: the stable
+      # names are copies of artifacts already proven on this runner, never a
+      # separate build that could drift from what was tested.
+      - name: Collect each proven artifact under its stable, tag-free name
+        run: |
+          cp "dist/codeatlas-${TAG}-${{ matrix.target }}" \
+             "dist/codeatlas-${{ matrix.target }}"
+          cp "dist/codeatlas-${TAG}-${{ matrix.target }}-sealed" \
+             "dist/codeatlas-${{ matrix.target }}-sealed"
       - uses: actions/upload-artifact@v4
         with:
           name: binaries-${{ matrix.target }}
@@ -203,29 +219,43 @@ jobs:
           pattern: binaries-*
           merge-multiple: true
           path: dist
+      # 16 binaries: a default and a `-sealed` one per target, each under
+      # its tag-pinned name and its tag-free copy. A stable-named file must
+      # also be byte-identical to its tagged twin — a copy that drifted
+      # from what was smoke-run and probed must never ship.
       - name: Every expected artifact, exactly
         run: |
           ls -l dist
           count="$(ls dist | wc -l)"
-          [ "$count" -eq 8 ] || {
-            echo "::error::expected 8 artifacts, found $count"
+          [ "$count" -eq 16 ] || {
+            echo "::error::expected 16 artifacts, found $count"
             exit 1
           }
           for t in x86_64-unknown-linux-musl aarch64-unknown-linux-musl \
                    aarch64-apple-darwin x86_64-apple-darwin; do
             for suffix in "" "-sealed"; do
-              [ -f "dist/codeatlas-${TAG}-${t}${suffix}" ] || {
-                echo "::error::missing codeatlas-${TAG}-${t}${suffix}"
+              for name in "codeatlas-${TAG}-${t}${suffix}" "codeatlas-${t}${suffix}"; do
+                [ -f "dist/${name}" ] || {
+                  echo "::error::missing ${name}"
+                  exit 1
+                }
+              done
+              cmp "dist/codeatlas-${TAG}-${t}${suffix}" "dist/codeatlas-${t}${suffix}" || {
+                echo "::error::codeatlas-${t}${suffix} is not byte-identical to its tagged twin"
                 exit 1
               }
             done
           done
+      # The tag-free `codeatlas-checksums.txt` is a byte-identical copy of
+      # the tagged file, made after generation so neither file lists itself
+      # or the other; both list every binary under both of its names.
       - name: SHA-256 checksums over every artifact
         run: |
           cd dist
           sha256sum codeatlas-* > "codeatlas-${TAG}-checksums.txt"
+          cp "codeatlas-${TAG}-checksums.txt" codeatlas-checksums.txt
           cat "codeatlas-${TAG}-checksums.txt"
-      - name: Attest build provenance (every artifact and the checksums file)
+      - name: Attest build provenance (every artifact and both checksums files)
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: dist/codeatlas-*
@@ -243,7 +273,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: checksums
-          path: dist/codeatlas-*-checksums.txt
+          path: |
+            dist/codeatlas-*-checksums.txt
+            dist/codeatlas-checksums.txt
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
@@ -275,8 +307,15 @@ jobs:
           cd dist
           sha256sum --check --strict "codeatlas-${TAG}-checksums.txt"
           listed="$(wc -l < "codeatlas-${TAG}-checksums.txt")"
-          [ "$listed" -eq 8 ] || {
-            echo "::error::checksums file lists $listed artifacts, expected 8"
+          [ "$listed" -eq 16 ] || {
+            echo "::error::checksums file lists $listed artifacts, expected 16"
+            exit 1
+          }
+          # The tag-free checksums file must be the tagged one, byte for
+          # byte — a downloader on the `latest` URL checks against the
+          # same measurements, not a second opinion.
+          cmp "codeatlas-${TAG}-checksums.txt" codeatlas-checksums.txt || {
+            echo "::error::codeatlas-checksums.txt drifted from the tagged checksums file"
             exit 1
           }
 

@@ -44,15 +44,25 @@ backend. It is the binary to hand a security review.
 ## Artifacts
 
 <!-- Filled by the workflow: one row per artifact it built and attested —
-     a default and a `-sealed` binary for each supported target, named
-     codeatlas-<tag>-<target>[-sealed], with the checksums file beside
-     them. -->
+     a default and a `-sealed` binary for each supported target, each
+     under its tag-pinned name codeatlas-<tag>-<target>[-sealed] AND its
+     tag-free copy codeatlas-<target>[-sealed], with both checksums files
+     beside them. -->
 
 {{artifact-list}}
 
+Each binary appears twice on purpose: under its tag-pinned name and as a
+byte-identical copy under a tag-free one (`codeatlas-<target>[-sealed]`),
+so `https://github.com/Memnoc/CodeAtlas/releases/latest/download/codeatlas-<target>`
+is a stable URL that always fetches the newest release. Same bytes, both
+names: the checksums file lists both, the attestation covers both, and
+the workflow refuses to publish a copy that differs from its tagged twin.
+
 ## Verify what you downloaded
 
-Every artifact is listed in `{{checksums-file}}`; check the one you took:
+Every artifact is listed in `{{checksums-file}}` — also uploaded as its
+byte-identical, tag-free copy `codeatlas-checksums.txt`; check the one
+you took against either:
 
 ```sh
 {{checksums-verify-command}}
