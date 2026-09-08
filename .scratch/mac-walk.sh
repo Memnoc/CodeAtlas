@@ -11,7 +11,7 @@
 # hands — your hands are the test — and the checklist prints at the end.
 set -euo pipefail
 
-TAG="v0.1.3"
+TAG="v0.1.4"
 
 case "$(uname -m)" in
   arm64)  TARGET=aarch64-apple-darwin ;;
@@ -33,25 +33,33 @@ cat <<'WALK'
 prep done — verified binary at ~/Downloads/codeatlas
 (a curl download carries no quarantine mark: Gatekeeper will not block it)
 
-THE WALK — the launcher's first human run on real macOS
+THE WALK — the modal's first human run on real macOS
   1. run:   ~/Downloads/codeatlas
-  2. repository path [.]:   type a repo path (~ works), e.g. ~/Code/omarchy-site
-  3. show mapped files' source? [y/N]:   answer y
-  4. then hands off, and watch for, in order:
+  2. a bordered menu appears, listing the directories where you are:
+       j/k move · Enter choose · l/h descend and climb · / type a path
+       o toggles "open code in dashboard" · q quits
+     navigate to a repo (e.g. ~/Code/omarchy-site), press o, then Enter
+  3. then hands off, and watch for, in order:
+       - the terminal restored cleanly (no raw-mode debris, no lost prompt)
        - "scanning: N/N files" standing above "mapped N files"
-       - the browser OPENING ITSELF at http://127.0.0.1:4173/
-         (the `open` spawn: unit-tested, never human-watched on a Mac)
+       - the browser opening itself at http://127.0.0.1:4173/
        - in the dashboard: select a symbol -> Open code -> source lit
-         at its own lines
+         at its own lines, and the language pill on a non-highlighted
+         file now says "plain text — no grammar shipped for this file"
+       - in magnify with both side panels open: the "Back to assets"
+         button stays on ONE line and the caption truncates instead
+         (the fix for your last report's layout finding)
        - Ctrl-C stops the server
 
 EDGE POKES (30 seconds)
-  5. run it again; type a garbage path -> expect
-     "no directory at ... — try again", and a real path still lands after
-  6. run it once more; press Enter at the path -> maps the directory
-     you are standing in
+  4. run it again; press / and type a garbage path -> expect
+     "no directory at ..." inside the frame, and a real path still
+     lands after
+  5. run it once more; press Enter immediately -> maps the directory
+     you are standing in (the pinned ". (this directory)" row)
+  6. press q on a fresh run -> clean exit, "no repository chosen"
 
 REPORT — the friction log is the point
-  - did the browser open by itself? roughly how fast?
+  - did the keys feel right? anything the footer did not explain?
   - anything that made you pause, however small
 WALK
