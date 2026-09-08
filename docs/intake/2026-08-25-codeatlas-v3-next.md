@@ -343,6 +343,34 @@ scanned repository, a retained record of what the reader scanned, and
 that is a decision with a documented location and a way to clear it,
 not a convenience default.
 
+**Second round, same day — Memnoc's Linux walk of the modal.** Two
+datums, both acted on immediately:
+
+- **The passive checkbox lost to the forced question.** Memnoc served a
+  repo and looked for Open code in the dashboard — it was off, because
+  the modal's `[ ]` row was sailed past where the old interview's
+  `[y/N]` question could not be. The author of the feature being the
+  one it bit is the strongest evidence discoverability will get. Fixed:
+  Enter now lands on a **confirm frame** — the chosen path with
+  `OPEN CODE ON/OFF` stated loudly, `o` flips it there, `Enter` goes,
+  `Esc` backs out — the forced-decision moment restored without giving
+  up the modal.
+- **The navigator existed and was not found.** From `~/Downloads`
+  (no code beneath it), Memnoc typed a full path from memory — while
+  `h`/`l` navigation sat in the footer unread. A footer key nobody
+  reads is not an affordance; a visible row is. Fixed: a `../ (up)`
+  row now sits in every listing with a parent, and Enter on it climbs
+  (navigates, never "chooses" the parent).
+- Plus the polish asked for: the frame now colours by meaning through
+  the terminal's own 16-colour palette (accent title, highlighted
+  cursor row, dim footer, red errors) — the reader's theme, never a
+  shipped one.
+- Small datum from the same walk, unfixed and noted: a second launcher
+  while one serves fails honestly at the bind (port 4173) after
+  scanning — the pre-check correctly refuses to open a browser at the
+  other instance's server. Whether the launcher should offer another
+  port is a small V4 question.
+
 ## Hand-off
 
 Fresh session, `/adr-with-docs`, this document as the agenda — **when

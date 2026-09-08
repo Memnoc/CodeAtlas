@@ -1,14 +1,20 @@
 //! The launcher's modal: a bordered, navigable frame for picking the
 //! repository and toggling open code — the interaction Memnoc asked for
-//! after walking the plain prompts on macOS ("way too clunky").
+//! after walking the plain prompts on macOS ("way too clunky"), then
+//! sharpened by their Linux walk: a visible `../` row (a footer key
+//! nobody reads is not an affordance; a row is), and a confirm step
+//! before launch, because the passive checkbox let its own author sail
+//! past open code — the forced decision the old interview had, restored.
 //!
 //! Drawn by hand over `crossterm`, no TUI framework — the same call
 //! ADR-0011 made for the dashboard: one small surface does not buy a
 //! layout engine. The modal is a pure state machine ([`Modal::handle`])
 //! driven by abstract keys and answering with abstract steps, so every
 //! interaction is unit-testable without a terminal; the terminal shell
-//! ([`run_modal`]) owns raw mode, the alternate screen, and restoring
-//! both on every exit path including panic.
+//! ([`run_modal`]) owns raw mode, the alternate screen, colour, and
+//! restoring everything on every exit path including panic. Colour comes
+//! from the terminal's own 16-colour palette, so the frame wears the
+//! reader's theme rather than shipping one.
 //!
 //! Privacy line, stated because a file picker invites the question: the
 //! picker reads directory *names* beneath wherever the reader navigates,
@@ -21,7 +27,7 @@
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crossterm::{cursor, event, execute, terminal};
+use crossterm::{cursor, event, execute, style::Stylize, terminal};
 
 use super::{Choices, resolve_path};
 
@@ -54,9 +60,18 @@ pub enum Step {
     Quit,
 }
 
-/// The modal's whole state. `entries` are the subdirectory names of
-/// `dir`; row 0 is always the pinned "this directory" row, so
-/// `cursor == 0` chooses `dir` itself and `cursor - 1` indexes `entries`.
+/// One row of the picker list.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Row {
+    /// The directory being listed — choosing it is choosing "here".
+    Here,
+    /// The visible way up; Enter and `l` both climb.
+    Up,
+    /// A subdirectory, by name.
+    Sub(String),
+}
+
+/// The modal's whole state.
 pub struct Modal {
     pub dir: PathBuf,
     pub entries: Vec<String>,
@@ -64,6 +79,9 @@ pub struct Modal {
     pub open_code: bool,
     pub typing: Option<String>,
     pub error: Option<String>,
+    /// `Some` while the confirm frame is up: the path awaiting a final
+    /// Enter, with open code stated loudly beside it.
+    pub confirming: Option<PathBuf>,
     home: Option<PathBuf>,
 }
 
@@ -76,12 +94,20 @@ impl Modal {
             open_code: false,
             typing: None,
             error: None,
+            confirming: None,
             home,
         }
     }
 
-    fn rows(&self) -> usize {
-        self.entries.len() + 1
+    /// The list as the reader sees it: here, up (when a parent exists),
+    /// then the subdirectories.
+    pub fn rows(&self) -> Vec<Row> {
+        let mut rows = vec![Row::Here];
+        if self.dir.parent().is_some() {
+            rows.push(Row::Up);
+        }
+        rows.extend(self.entries.iter().cloned().map(Row::Sub));
+        rows
     }
 
     /// The driver read a directory listing after a [`Step::List`].
@@ -95,9 +121,25 @@ impl Modal {
     /// The driver found a chosen path not to be a directory.
     pub fn reject(&mut self, path: &Path) {
         self.error = Some(format!("no directory at {}", path.display()));
+        self.confirming = None;
     }
 
     pub fn handle(&mut self, key: Key) -> Step {
+        // The confirm frame: the one moment that cannot be sailed past.
+        if let Some(chosen) = self.confirming.clone() {
+            return match key {
+                Key::Enter => Step::Choose(chosen),
+                Key::ToggleOpenCode => {
+                    self.open_code = !self.open_code;
+                    Step::Stay
+                }
+                Key::Quit | Key::Out => {
+                    self.confirming = None;
+                    Step::Stay
+                }
+                _ => Step::Stay,
+            };
+        }
         if let Some(buffer) = &mut self.typing {
             return match key {
                 Key::Char(c) => {
@@ -110,7 +152,10 @@ impl Modal {
                 }
                 Key::Enter => {
                     let raw = buffer.trim().to_string();
-                    Step::Choose(resolve_path(&raw, self.home.as_deref(), &self.dir))
+                    let resolved = resolve_path(&raw, self.home.as_deref(), &self.dir);
+                    self.typing = None;
+                    self.confirming = Some(resolved);
+                    Step::Stay
                 }
                 Key::TypePath | Key::Quit => {
                     self.typing = None;
@@ -120,9 +165,10 @@ impl Modal {
                 _ => Step::Stay,
             };
         }
+        let rows = self.rows();
         match key {
             Key::Down => {
-                if self.cursor + 1 < self.rows() {
+                if self.cursor + 1 < rows.len() {
                     self.cursor += 1;
                 }
                 Step::Stay
@@ -131,17 +177,24 @@ impl Modal {
                 self.cursor = self.cursor.saturating_sub(1);
                 Step::Stay
             }
-            Key::In => match self.cursor {
-                0 => Step::Stay,
-                n => Step::List(self.dir.join(&self.entries[n - 1])),
+            Key::In => match &rows[self.cursor] {
+                Row::Here => Step::Stay,
+                Row::Up => self.climb(),
+                Row::Sub(name) => Step::List(self.dir.join(name)),
             },
-            Key::Out => match self.dir.parent() {
-                Some(parent) => Step::List(parent.to_path_buf()),
-                None => Step::Stay,
-            },
-            Key::Enter => match self.cursor {
-                0 => Step::Choose(self.dir.clone()),
-                n => Step::Choose(self.dir.join(&self.entries[n - 1])),
+            Key::Out => self.climb(),
+            Key::Enter => match &rows[self.cursor] {
+                // Enter on the way up navigates — every picker's
+                // convention; "choosing" a parent is a typo, not a wish.
+                Row::Up => self.climb(),
+                Row::Here => {
+                    self.confirming = Some(self.dir.clone());
+                    Step::Stay
+                }
+                Row::Sub(name) => {
+                    self.confirming = Some(self.dir.join(name));
+                    Step::Stay
+                }
             },
             Key::ToggleOpenCode => {
                 self.open_code = !self.open_code;
@@ -156,12 +209,41 @@ impl Modal {
             Key::Char(_) | Key::Backspace => Step::Stay,
         }
     }
+
+    fn climb(&mut self) -> Step {
+        match self.dir.parent() {
+            Some(parent) => Step::List(parent.to_path_buf()),
+            None => Step::Stay,
+        }
+    }
+}
+
+/// What a rendered line is, so the shell can colour by meaning and the
+/// tests can read the text without fighting escape codes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Role {
+    Border,
+    Title,
+    Where,
+    Cursor,
+    Row,
+    Option,
+    Input,
+    Error,
+    Footer,
+    Blank,
+    Confirm,
+}
+
+pub struct Line {
+    pub role: Role,
+    pub text: String,
 }
 
 /// How many list rows the frame shows at once; the window slides to keep
 /// the cursor visible.
 const VISIBLE_ROWS: usize = 9;
-const INNER_WIDTH: usize = 44;
+const INNER_WIDTH: usize = 46;
 
 fn clip(text: &str, width: usize) -> String {
     let count = text.chars().count();
@@ -172,59 +254,85 @@ fn clip(text: &str, width: usize) -> String {
     format!("{kept}…")
 }
 
-fn frame_line(content: &str) -> String {
-    let clipped = clip(content, INNER_WIDTH);
-    let pad = INNER_WIDTH - clipped.chars().count();
-    format!("│ {clipped}{:pad$} │", "")
+fn line(role: Role, content: &str) -> Line {
+    Line {
+        role,
+        text: clip(content, INNER_WIDTH),
+    }
 }
 
-/// Renders the whole modal as plain lines — pure, so tests read it as
-/// strings. The shell positions and prints them.
-pub fn draw(modal: &Modal) -> Vec<String> {
+/// Renders the whole modal as roled lines — pure, so tests read text and
+/// roles as data. The shell borders, pads and colours them.
+pub fn draw(modal: &Modal) -> Vec<Line> {
     let mut lines = Vec::new();
-    lines.push(format!("┌{}┐", "─".repeat(INNER_WIDTH + 2)));
-    lines.push(frame_line("CODEATLAS — map a repository"));
-    lines.push(frame_line(""));
-    lines.push(frame_line(&format!("in {}", modal.dir.display())));
+    lines.push(line(Role::Title, "CODEATLAS — map a repository"));
+    lines.push(line(Role::Blank, ""));
 
+    if let Some(chosen) = &modal.confirming {
+        let open = if modal.open_code {
+            "OPEN CODE ON — the dashboard may show file source"
+        } else {
+            "OPEN CODE OFF — the dashboard shows the map only"
+        };
+        lines.push(line(Role::Where, &format!("ready: {}", chosen.display())));
+        lines.push(line(Role::Blank, ""));
+        lines.push(line(Role::Confirm, open));
+        if let Some(error) = &modal.error {
+            lines.push(line(Role::Error, &format!("! {error}")));
+        }
+        lines.push(line(Role::Blank, ""));
+        lines.push(line(Role::Footer, "Enter go · o flip open code · Esc back"));
+        return lines;
+    }
+
+    lines.push(line(Role::Where, &format!("in {}", modal.dir.display())));
+    let rows = modal.rows();
     let first = modal
         .cursor
         .saturating_sub(VISIBLE_ROWS - 1)
-        .min(modal.rows().saturating_sub(VISIBLE_ROWS));
-    for row in first..modal.rows().min(first + VISIBLE_ROWS) {
-        let marker = if row == modal.cursor { "▸" } else { " " };
+        .min(rows.len().saturating_sub(VISIBLE_ROWS));
+    for (index, row) in rows.iter().enumerate().skip(first).take(VISIBLE_ROWS) {
+        let marker = if index == modal.cursor { "▸" } else { " " };
         let label = match row {
-            0 => ". (this directory)".to_string(),
-            n => format!("{}/", modal.entries[n - 1]),
+            Row::Here => ". (this directory)".to_string(),
+            Row::Up => "../ (up)".to_string(),
+            Row::Sub(name) => format!("{name}/"),
         };
-        lines.push(frame_line(&format!(" {marker} {label}")));
+        let role = if index == modal.cursor {
+            Role::Cursor
+        } else {
+            Role::Row
+        };
+        lines.push(line(role, &format!(" {marker} {label}")));
     }
-    if modal.rows() > first + VISIBLE_ROWS {
-        lines.push(frame_line(&format!(
-            "   … {} more below",
-            modal.rows() - (first + VISIBLE_ROWS)
-        )));
+    if rows.len() > first + VISIBLE_ROWS {
+        lines.push(line(
+            Role::Row,
+            &format!("   … {} more below", rows.len() - (first + VISIBLE_ROWS)),
+        ));
     }
 
-    lines.push(frame_line(""));
+    lines.push(line(Role::Blank, ""));
     let checkbox = if modal.open_code { "[x]" } else { "[ ]" };
-    lines.push(frame_line(&format!("{checkbox} open code in dashboard")));
+    lines.push(line(
+        Role::Option,
+        &format!("{checkbox} open code in dashboard"),
+    ));
 
     if let Some(buffer) = &modal.typing {
-        lines.push(frame_line(&format!("path: {buffer}▏")));
+        lines.push(line(Role::Input, &format!("path: {buffer}▏")));
     }
     if let Some(error) = &modal.error {
-        lines.push(frame_line(&format!("! {error} — try again")));
+        lines.push(line(Role::Error, &format!("! {error} — try again")));
     }
 
-    lines.push(frame_line(""));
+    lines.push(line(Role::Blank, ""));
     let footer = if modal.typing.is_some() {
-        "Enter choose · Esc back to list"
+        "Enter continue · Esc back to list"
     } else {
-        "j/k move · l/h in/out · Enter choose · / type · o open code · q quit"
+        "j/k move · Enter choose · l/h in/out · / type · o open code · q quit"
     };
-    lines.push(frame_line(footer));
-    lines.push(format!("└{}┘", "─".repeat(INNER_WIDTH + 2)));
+    lines.push(line(Role::Footer, footer));
     lines
 }
 
@@ -285,6 +393,25 @@ fn map_key(event: &event::KeyEvent, typing: bool) -> Option<Key> {
     }
 }
 
+/// One bordered, coloured frame line. Colours are the terminal's own —
+/// `cyan` and `dark grey` here are whatever the reader's theme says they
+/// are, which is how the frame matches the screenshot taste it came from
+/// without shipping a palette.
+fn paint(l: &Line) -> String {
+    let pad = INNER_WIDTH - l.text.chars().count();
+    let padded = format!("{}{:pad$}", l.text, "");
+    let body = match l.role {
+        Role::Title => padded.bold().cyan().to_string(),
+        Role::Cursor => padded.black().on_cyan().to_string(),
+        Role::Confirm => padded.bold().cyan().to_string(),
+        Role::Where => padded.dark_grey().to_string(),
+        Role::Error => padded.red().to_string(),
+        Role::Footer => padded.dark_grey().to_string(),
+        Role::Option | Role::Input | Role::Row | Role::Blank | Role::Border => padded,
+    };
+    format!("{} {} {}", "│".dark_grey(), body, "│".dark_grey())
+}
+
 /// Restores the terminal on every exit path, panic included — a raw-mode
 /// terminal left behind is worse than any error message.
 struct Restore;
@@ -314,10 +441,16 @@ pub fn run_modal(start: &Path, home: Option<PathBuf>) -> io::Result<Option<Choic
             terminal::Clear(terminal::ClearType::All),
             cursor::MoveTo(0, 0)
         )?;
-        for line in draw(&modal) {
+        let top = format!("┌{}┐", "─".repeat(INNER_WIDTH + 2));
+        let bottom = format!("└{}┘", "─".repeat(INNER_WIDTH + 2));
+        execute!(err, cursor::MoveToColumn(0))?;
+        writeln!(err, "{}", top.as_str().dark_grey())?;
+        for l in draw(&modal) {
             execute!(err, cursor::MoveToColumn(0))?;
-            writeln!(err, "{line}")?;
+            writeln!(err, "{}", paint(&l))?;
         }
+        execute!(err, cursor::MoveToColumn(0))?;
+        writeln!(err, "{}", bottom.as_str().dark_grey())?;
         err.flush()?;
 
         let event::Event::Key(key_event) = event::read()? else {
@@ -358,13 +491,32 @@ mod tests {
         )
     }
 
+    fn frame(modal: &Modal) -> String {
+        draw(modal)
+            .iter()
+            .map(|l| l.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Enter on a directory, then Enter on the confirm frame.
+    fn choose(modal: &mut Modal) -> Step {
+        assert_eq!(modal.handle(Key::Enter), Step::Stay, "no confirm frame");
+        modal.handle(Key::Enter)
+    }
+
     #[test]
-    fn the_pinned_first_row_chooses_the_directory_being_listed() {
+    fn the_pinned_first_row_chooses_here_through_the_confirm() {
         let mut modal = modal_over(&["alpha", "beta"]);
-        assert_eq!(
-            modal.handle(Key::Enter),
-            Step::Choose(PathBuf::from("/repos"))
-        );
+        assert_eq!(choose(&mut modal), Step::Choose(PathBuf::from("/repos")));
+    }
+
+    #[test]
+    fn the_up_row_is_visible_and_enter_on_it_climbs_instead_of_choosing() {
+        let mut modal = modal_over(&["alpha"]);
+        assert!(frame(&modal).contains("../ (up)"), "no visible way up");
+        modal.handle(Key::Down); // onto ../
+        assert_eq!(modal.handle(Key::Enter), Step::List(PathBuf::from("/")));
     }
 
     #[test]
@@ -372,12 +524,12 @@ mod tests {
         let mut modal = modal_over(&["alpha", "beta"]);
         modal.handle(Key::Up); // already at the top
         assert_eq!(modal.cursor, 0);
-        modal.handle(Key::Down);
-        modal.handle(Key::Down);
-        modal.handle(Key::Down); // past the end
-        assert_eq!(modal.cursor, 2, "cursor ran past the last row");
+        for _ in 0..5 {
+            modal.handle(Key::Down); // past the end: ., .., alpha, beta
+        }
+        assert_eq!(modal.cursor, 3, "cursor ran past the last row");
         assert_eq!(
-            modal.handle(Key::Enter),
+            choose(&mut modal),
             Step::Choose(PathBuf::from("/repos/beta"))
         );
     }
@@ -386,6 +538,7 @@ mod tests {
     fn descending_and_climbing_ask_the_driver_for_listings() {
         let mut modal = modal_over(&["alpha"]);
         modal.handle(Key::Down);
+        modal.handle(Key::Down); // ., .., alpha
         assert_eq!(
             modal.handle(Key::In),
             Step::List(PathBuf::from("/repos/alpha"))
@@ -395,26 +548,35 @@ mod tests {
     }
 
     #[test]
-    fn descending_on_the_pinned_row_goes_nowhere() {
-        let mut modal = modal_over(&["alpha"]);
-        assert_eq!(modal.handle(Key::In), Step::Stay);
-    }
-
-    #[test]
-    fn the_open_code_toggle_flips_and_the_frame_shows_it() {
+    fn the_confirm_frame_states_open_code_loudly_and_o_flips_it_there() {
         let mut modal = modal_over(&[]);
-        assert!(!modal.open_code);
-        modal.handle(Key::ToggleOpenCode);
-        assert!(modal.open_code);
-        let frame = draw(&modal).join("\n");
+        modal.handle(Key::Enter);
         assert!(
-            frame.contains("[x] open code"),
-            "checkbox unticked: {frame}"
+            frame(&modal).contains("OPEN CODE OFF"),
+            "the confirm frame must state the choice: {}",
+            frame(&modal)
         );
+        modal.handle(Key::ToggleOpenCode);
+        assert!(frame(&modal).contains("OPEN CODE ON"));
+        assert_eq!(
+            modal.handle(Key::Enter),
+            Step::Choose(PathBuf::from("/repos"))
+        );
+        assert!(modal.open_code, "the flip did not survive the confirm");
     }
 
     #[test]
-    fn typing_mode_collects_a_path_and_enter_chooses_it_resolved() {
+    fn esc_on_the_confirm_frame_returns_to_the_list_unchosen() {
+        let mut modal = modal_over(&["alpha"]);
+        modal.handle(Key::Enter);
+        assert!(modal.confirming.is_some());
+        modal.handle(Key::Quit);
+        assert!(modal.confirming.is_none(), "Esc did not back out");
+        assert_eq!(modal.handle(Key::Quit), Step::Quit, "then quit quits");
+    }
+
+    #[test]
+    fn typing_mode_collects_a_path_and_lands_on_the_confirm_frame() {
         let mut modal = modal_over(&["alpha"]);
         modal.handle(Key::TypePath);
         for c in "x/y".chars() {
@@ -422,9 +584,10 @@ mod tests {
         }
         modal.handle(Key::Backspace);
         modal.handle(Key::Char('z'));
+        assert_eq!(modal.handle(Key::Enter), Step::Stay);
         assert_eq!(
-            modal.handle(Key::Enter),
-            Step::Choose(PathBuf::from("/repos/x/z")),
+            modal.confirming,
+            Some(PathBuf::from("/repos/x/z")),
             "typed paths resolve against the listed directory"
         );
     }
@@ -442,23 +605,37 @@ mod tests {
     }
 
     #[test]
-    fn a_rejected_path_draws_an_honest_error_in_the_frame() {
+    fn a_rejected_path_falls_back_to_the_list_with_an_honest_error() {
         let mut modal = modal_over(&[]);
+        modal.handle(Key::Enter);
         modal.reject(Path::new("/nope"));
-        let frame = draw(&modal).join("\n");
         assert!(
-            frame.contains("no directory at /nope"),
-            "the rejection is invisible: {frame}"
+            modal.confirming.is_none(),
+            "a reject must leave the confirm"
+        );
+        assert!(
+            frame(&modal).contains("no directory at /nope"),
+            "the rejection is invisible: {}",
+            frame(&modal)
         );
     }
 
     #[test]
     fn the_frame_carries_the_cursor_marker_and_the_keybind_footer() {
         let modal = modal_over(&["alpha", "beta"]);
-        let frame = draw(&modal).join("\n");
-        assert!(frame.contains("▸ . (this directory)"));
-        assert!(frame.contains("alpha/"));
-        assert!(frame.contains("j/k move"), "footer missing: {frame}");
+        let text = frame(&modal);
+        assert!(text.contains("▸ . (this directory)"));
+        assert!(text.contains("alpha/"));
+        assert!(text.contains("j/k move"), "footer missing: {text}");
+        let cursor_role = draw(&modal)
+            .iter()
+            .find(|l| l.text.contains(". (this directory)"))
+            .map(|l| l.role);
+        assert_eq!(
+            cursor_role,
+            Some(Role::Cursor),
+            "the highlighted row must carry the cursor role for the shell to colour"
+        );
     }
 
     #[test]
