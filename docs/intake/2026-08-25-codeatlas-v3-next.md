@@ -322,6 +322,27 @@ it found is one layout defect and one absence.
   language, so "plain text" reads as a label rather than as *no grammar
   shipped for this file*. Worth a sentence that says the second thing.
 
+**Resolution, 2026-09-08, same session.** Memnoc confirmed the launcher
+verdict the report left unstated: it ran, fast, and the browser opened
+itself — the `open` spawn's first human run on macOS, **pass**. The
+interaction was judged "way too clunky", and Memnoc chose the modal
+direction on the spot; three shape decisions were put and answered
+(modal owns the launcher only, not the whole run; repo picking is
+browse-plus-type; the two dashboard fixes ride along). Built same day:
+a hand-drawn crossterm modal (no TUI framework — the ADR-0011 call
+again), pure state machine with the plain interview kept as the
+raw-mode-refused fallback, pty-walked end to end. The breadcrumb
+squeeze and the pill wording are fixed as prescribed, each pinned in
+`stylesheet-contract.test.ts` / `open-code.test.tsx`. Still for the
+interview, sharpened rather than closed: the **whole-run owned frame**
+(the modal is its first slice, deliberately not its last), the grammar
+coverage decision and the markdown asymmetry above, and one boundary
+recorded while building: a persisted **recent-repositories list** was
+deliberately not built — it would be CodeAtlas's first file outside the
+scanned repository, a retained record of what the reader scanned, and
+that is a decision with a documented location and a way to clear it,
+not a convenience default.
+
 ## Hand-off
 
 Fresh session, `/adr-with-docs`, this document as the agenda — **when

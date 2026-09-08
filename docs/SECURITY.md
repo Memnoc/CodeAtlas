@@ -78,10 +78,15 @@ paths to fail in the same conditions:
   would produce a 502 just as readily
 
 One entry point sits beside the four commands: a bare `codeatlas` run by a
-human at a terminal starts an interactive launcher that asks for a
-repository path, scans it, and serves it — the same code paths as `scan`
-and plain `serve` (optionally `--open-code`, asked as a question), never a
-provider and never a model flag, identical in a sealed build. It spawns
+human at a terminal starts an interactive launcher — a small terminal
+modal for picking the repository and toggling open code (falling back to
+plain prompts when the terminal refuses raw mode) — then scans and serves
+through the same code paths as `scan` and plain `serve`, never a provider
+and never a model flag, identical in a sealed build. The picker reads
+directory *names* beneath wherever the reader navigates, holds them in
+memory for the frame being drawn, and writes and sends nothing: no
+history, no recent-repositories list, no file outside the repository
+eventually scanned. It spawns
 exactly one program the commands above do not: the operating system's URL
 opener — `open` on macOS, `xdg-open` elsewhere — fixed by name, not
 configurable, handed exactly the served loopback URL as its only argument,

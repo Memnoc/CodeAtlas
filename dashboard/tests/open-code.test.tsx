@@ -424,12 +424,17 @@ describe("the server's spans, the dashboard's styles (ticket 03)", () => {
     let column = await screen.findByLabelText("Source");
     expect(within(column).getByText("TypeScript")).toBeVisible();
 
-    // And the stated fallback, on the default plain-text stub.
+    // And the stated fallback, on the default plain-text stub. Supersedes
+    // the bare "plain text" pin (2026-09-08): the macOS walk read the
+    // bare label as breakage, so the pill now says *why* the file is
+    // uncoloured, not just what it is.
     await user.click(screen.getByRole("button", { name: "Close the source" }));
     servedBy({ open_code: true });
     await user.click(openControl());
     column = await screen.findByLabelText("Source");
-    expect(within(column).getByText("plain text")).toBeVisible();
+    expect(
+      within(column).getByText("plain text — no grammar shipped for this file"),
+    ).toBeVisible();
   });
 });
 

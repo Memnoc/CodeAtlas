@@ -77,10 +77,15 @@ export function SourcePanel({
           )}
         </p>
         {state.phase === "open" && (
-          // What the server highlighted as — or its stated "plain text"
-          // fallback, which is how a reader tells "uncovered" from
-          // "broken" without opening the network tab.
-          <span className="source-language">{state.envelope.language}</span>
+          // What the server highlighted as. The fallback says *why* it is
+          // uncoloured, not just what it is: the macOS walk read a bare
+          // "plain text" pill as breakage, because a language name does
+          // not say "no grammar shipped for this file".
+          <span className="source-language">
+            {state.envelope.language === "plain text"
+              ? "plain text — no grammar shipped for this file"
+              : state.envelope.language}
+          </span>
         )}
         <button
           type="button"

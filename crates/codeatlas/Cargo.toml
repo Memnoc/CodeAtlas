@@ -1,6 +1,6 @@
 [package]
 name = "codeatlas"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 license = "MIT"
 
@@ -36,6 +36,15 @@ tree-sitter-typescript = "0.23.2"
 # openssl, no async runtime. Optional: compiled in only by the `network`
 # feature, so the sealed build (ADR-0006) contains no HTTP client at all.
 ureq = { version = "3.4.0", optional = true }
+# crossterm: raw mode, alternate screen and key events for the launcher's
+# modal — terminal plumbing only, drawn by hand (no TUI framework, the
+# ADR-0011 call again). `events` is the only feature; the notable
+# transitive additions are mio (epoll bindings, used here to poll the
+# tty), signal-hook and rustix (`cargo tree -p crossterm`) — no HTTP
+# client, no TLS, no DNS family anywhere. Unconditional: the modal is
+# part of every build including sealed, and the netns egress suite
+# remains the behavioural proof that nothing leaves the host.
+crossterm = { version = "0.29.0", default-features = false, features = ["events"] }
 
 [features]
 # Networking is opt-out at compile time (ADR-0006): the default build ships

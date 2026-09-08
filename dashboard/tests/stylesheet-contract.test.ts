@@ -41,6 +41,28 @@ function zIndexOf(selector: string): number | null {
   return m?.[1] !== undefined ? Number(m[1]) : null;
 }
 
+describe("the trail survives a squeeze — the caption loses width first", () => {
+  // The macOS walk (2026-09-08 field report): with both side panels open,
+  // the squeeze landed on the back button — the one element that must
+  // stay pressable — while the disposable caption kept its full width.
+  const body = (selector: string) =>
+    blocks().find((b) => b.selector === selector)?.body ?? "";
+
+  it("holds the way out rigid", () => {
+    expect(body(".back")).toMatch(/flex:\s*none/);
+    expect(body(".back")).toMatch(/white-space:\s*nowrap/);
+  });
+
+  it("bounds the trail to its canvas", () => {
+    expect(body(".breadcrumb")).toMatch(/max-width:/);
+  });
+
+  it("lets the caption truncate instead of the controls", () => {
+    expect(body(".crumb-note")).toMatch(/text-overflow:\s*ellipsis/);
+    expect(body(".crumb-note")).toMatch(/min-width:\s*0/);
+  });
+});
+
 describe("story 20 — the walkthrough paints above the page, all of it", () => {
   it("gives the lit element no z-index, ever", () => {
     // The third shipped bug, verbatim. `[data-walkthrough-lit]` at 101 rose

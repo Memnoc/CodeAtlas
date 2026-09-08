@@ -11,6 +11,8 @@
 //! not offered here: the launcher is the no-key path, and it behaves
 //! identically in a sealed build.
 
+pub mod modal;
+
 use std::io::{self, BufRead, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -148,16 +150,25 @@ pub fn run() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let choices = match interview(&mut input, &mut out, home.as_deref(), &cwd) {
+    // The modal first; the plain interview only when the terminal refuses
+    // raw mode — a reader gets one of the two, never neither.
+    let choices = match modal::run_modal(&cwd, home.clone()) {
         Ok(Some(choices)) => choices,
         Ok(None) => {
-            eprintln!("\nno path given — nothing to map");
+            eprintln!("no repository chosen — nothing to map");
             return ExitCode::SUCCESS;
         }
-        Err(err) => {
-            eprintln!("error: {err}");
-            return ExitCode::FAILURE;
-        }
+        Err(_) => match interview(&mut input, &mut out, home.as_deref(), &cwd) {
+            Ok(Some(choices)) => choices,
+            Ok(None) => {
+                eprintln!("\nno path given — nothing to map");
+                return ExitCode::SUCCESS;
+            }
+            Err(err) => {
+                eprintln!("error: {err}");
+                return ExitCode::FAILURE;
+            }
+        },
     };
 
     if let Err(err) = crate::build_and_save_map(&choices.root) {

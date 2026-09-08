@@ -1114,6 +1114,11 @@ body {
   z-index: 10;
   top: 12px;
   left: 12px;
+  /* Bounded to the canvas, so a squeezed layout squeezes the trail's
+   * contents instead of growing the pill past its host (the macOS walk
+   * caught the back button wrapping to three lines while the caption
+   * kept its full width). */
+  max-width: calc(100% - 24px);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1155,6 +1160,12 @@ button.crumb:hover {
   padding-right: 8px;
   color: var(--muted);
   font-size: 11px;
+  /* The longest and most disposable thing in the trail loses width
+   * first: it truncates so the controls beside it never have to. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The one gesture that opens a region in full. It sits in the trail beside
@@ -1449,8 +1460,12 @@ button.crumb:hover {
   opacity: 0.14;
 }
 
-/* The way out, sitting at the head of the trail that says where you are. */
+/* The way out, sitting at the head of the trail that says where you are.
+ * It never gives up width: the one element that must stay pressable is
+ * the last to feel a squeeze, not the first. */
 .back {
+  flex: none;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 6px;

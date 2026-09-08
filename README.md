@@ -67,19 +67,20 @@ end through more clicks.) A `curl` download, as above, never receives
 the quarantine mark — macOS attaches it to what browsers save, not to
 what the terminal fetches.
 
-Or skip the commands entirely: run the binary **bare** and it asks
-instead —
+Or skip the commands entirely: run the binary **bare** and pick instead —
+a small terminal menu lists the directories where you are (`j`/`k` move,
+`Enter` chooses, `l`/`h` descend and climb, `/` types a path, `o` toggles
+opening file source in the dashboard, `q` quits):
 
 ```sh
 ./codeatlas-<tag>-<target>
-# repository path [.]: ~/Code/my-project
-# show mapped files' source in the dashboard? [y/N]: y
 ```
 
 — then it scans, serves, and opens the map in your browser itself. The
-interactive launcher only ever appears when you run it by hand at a
-terminal; in scripts and pipes a bare invocation prints usage, exactly
-as a CLI should.
+menu reads directory names as you navigate and remembers nothing — no
+history, no file written anywhere but the repository you choose. It only
+ever appears when you run the binary by hand at a terminal; in scripts
+and pipes a bare invocation prints usage, exactly as a CLI should.
 
 Scanning, serving, diffing and sharing all run like that: offline, on
 loopback, no credential anywhere. The two flags that do reach a model:
