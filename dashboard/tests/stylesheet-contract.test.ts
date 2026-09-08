@@ -63,6 +63,28 @@ describe("the trail survives a squeeze — the caption loses width first", () =>
   });
 });
 
+describe("the source shows all the code — wrapped in place, or full screen", () => {
+  // Field find (2026-09-08): line 1 of a six-line file arrived cut off,
+  // because the pre's horizontal scrollbar sat at the bottom of a
+  // flex-stretched block — present, and undiscoverable. The remedy is
+  // wrapping, not a better scrollbar.
+  const body = (selector: string) =>
+    blocks().find((b) => b.selector === selector)?.body ?? "";
+
+  it("wraps long lines with a hanging indent past the gutter", () => {
+    expect(body(".source-line")).toMatch(/white-space:\s*pre-wrap/);
+    expect(body(".source-line")).toMatch(/overflow-wrap:\s*anywhere/);
+    expect(body(".source-line")).toMatch(/text-indent:\s*-/);
+  });
+
+  it("full screen really is the viewport", () => {
+    expect(body(".source-expanded")).toMatch(/position:\s*fixed/);
+    expect(body(".source-expanded")).toMatch(/inset:\s*0/);
+    // Its z-index is held below the walkthrough by the stacking sweep in
+    // story 20's suite — every page layer is, so no pin is repeated here.
+  });
+});
+
 describe("story 20 — the walkthrough paints above the page, all of it", () => {
   it("gives the lit element no z-index, ever", () => {
     // The third shipped bug, verbatim. `[data-walkthrough-lit]` at 101 rose

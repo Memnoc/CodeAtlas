@@ -380,6 +380,18 @@ datums, both acted on immediately:
   scanning — the pre-check correctly refuses to open a browser at the
   other instance's server. Whether the launcher should offer another
   port is a small V4 question.
+- **Fourth find, same day, in the dashboard: the source panel cut off
+  line 1 of a six-line file.** `.source-code` had `overflow-x: auto`
+  all along — the scrollbar sat at the bottom of a flex-stretched
+  block, present and undiscoverable, invisible under overlay
+  scrollbars. The remedy is wrapping, not a better scrollbar: lines
+  now soft-wrap with a hanging indent past the painted gutter, so all
+  the code is visible always. And per the same report's ask, the
+  panel gained a **full-screen toggle** (⤢ beside the close control):
+  `position: fixed; inset: 0` at z-index 60 — held below the
+  walkthrough's 100 by the existing stacking sweep — per-reading
+  state that resets on close. Both guarded and tamper-proven
+  (`stylesheet-contract.test.ts`, `open-code.test.tsx`).
 
 ## Hand-off
 

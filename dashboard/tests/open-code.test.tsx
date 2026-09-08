@@ -438,6 +438,38 @@ describe("the server's spans, the dashboard's styles (ticket 03)", () => {
   });
 });
 
+describe("full screen — the reader's option to give the code the room", () => {
+  it("expands on its control, returns on it, and a fresh open starts columned", async () => {
+    const user = userEvent.setup();
+    servedBy({ open_code: true });
+    await servedDashboard();
+    await selectViaSearch(user, "main.ts");
+    await user.click(openControl());
+    const column = await screen.findByLabelText("Source");
+    expect(column.className).not.toContain("source-expanded");
+
+    await user.click(
+      screen.getByRole("button", { name: "Expand the source to fill the screen" }),
+    );
+    expect(column.className).toContain("source-expanded");
+
+    // The same control returns it, renamed for what it now does.
+    await user.click(
+      screen.getByRole("button", { name: "Return the source to its column" }),
+    );
+    expect(column.className).not.toContain("source-expanded");
+
+    // Full screen is a per-reading choice: close expanded, reopen columned.
+    await user.click(
+      screen.getByRole("button", { name: "Expand the source to fill the screen" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Close the source" }));
+    await user.click(openControl());
+    const reopened = await screen.findByLabelText("Source");
+    expect(reopened.className).not.toContain("source-expanded");
+  });
+});
+
 describe("putting the source away", () => {
   it("closes on its own control, keeping the selection, returning focus", async () => {
     const user = userEvent.setup();

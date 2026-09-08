@@ -27,7 +27,7 @@
 // one self-contained element per line — the lit/landing mechanics of
 // ticket 02 carry over unchanged. No highlight library, no parsing here:
 // the dashboard's whole contribution is its stylesheet (ADR-0013).
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { scrollBehaviour } from "./motion.js";
 import type { SourceState } from "./source.js";
 
@@ -38,6 +38,15 @@ export function SourcePanel({
   state: SourceState;
   onDismiss: () => void;
 }) {
+  // Full screen is a per-reading choice, not a setting: it lives here and
+  // resets whenever the panel is not showing source, so the next open
+  // starts back in the column beside the map.
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    if (state.phase !== "open") {
+      setExpanded(false);
+    }
+  }, [state.phase]);
   // The first lit line, or null when a file opened at its top. Scrolled to
   // when the source arrives — an effect, because the line exists only after
   // the open render; guarded, because jsdom (and nothing else this runs on)
@@ -65,7 +74,11 @@ export function SourcePanel({
     // Marked so the walkthrough accounts for the close control, and
     // deliberately without a step of its own: the column exists only after
     // the reader opened something — see `WALKTHROUGH_TRANSIENT`.
-    <section className="source" aria-label="Source" data-walkthrough="source">
+    <section
+      className={expanded ? "source source-expanded" : "source"}
+      aria-label="Source"
+      data-walkthrough="source"
+    >
       <div className="source-head">
         <p className="source-path">
           {state.phase === "open" ? state.envelope.path : state.path}
@@ -86,6 +99,25 @@ export function SourcePanel({
               ? "plain text — no grammar shipped for this file"
               : state.envelope.language}
           </span>
+        )}
+        {state.phase === "open" && (
+          <button
+            type="button"
+            className="source-expand"
+            onClick={() => setExpanded((now) => !now)}
+            aria-label={
+              expanded
+                ? "Return the source to its column"
+                : "Expand the source to fill the screen"
+            }
+            title={
+              expanded
+                ? "Return the source to its column beside the map"
+                : "Expand the source to fill the screen"
+            }
+          >
+            <span aria-hidden="true">{expanded ? "⤡" : "⤢"}</span>
+          </button>
         )}
         <button
           type="button"

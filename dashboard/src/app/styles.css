@@ -677,6 +677,19 @@ body {
   white-space: nowrap;
 }
 
+/* Full screen, on the reader's request: the panel takes the viewport and
+ * the map waits underneath. Its 60 sits below the walkthrough's 100 — a
+ * guided tour outranks a reading — and the stacking test holds every
+ * page layer to that line. */
+.source-expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  width: auto;
+  border-left: none;
+}
+
+.source-expand,
 .source-dismiss {
   flex: none;
   padding: 0 6px;
@@ -689,6 +702,7 @@ body {
   line-height: 1;
 }
 
+.source-expand:hover,
 .source-dismiss:hover {
   color: var(--text);
 }
@@ -734,7 +748,15 @@ body {
 
 .source-line {
   display: block;
-  white-space: pre;
+  /* Long lines wrap instead of hiding behind a sideways scroll the
+   * panel's own vertical axis makes undiscoverable (a field find: line 1
+   * of a six-line file arrived cut off with nothing suggesting more).
+   * All the code is visible, always; the hanging indent keeps wrapped
+   * continuations aligned past the painted gutter. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding-left: 5.5ch;
+  text-indent: -5.5ch;
 }
 
 /* Line numbers from the markup's own `data-line`, painted rather than
