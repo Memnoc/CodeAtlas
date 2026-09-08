@@ -35,10 +35,13 @@ prep done — verified binary at ~/Downloads/codeatlas
 
 THE WALK — the modal's first human run on real macOS
   1. run:   ~/Downloads/codeatlas
-  2. a bordered menu appears, listing the directories where you are:
-       j/k move · Enter choose · l/h descend and climb · / type a path
-       o toggles "open code in dashboard" · q quits
-     navigate to a repo (e.g. ~/Code/omarchy-site), press o, then Enter
+  2. a centred menu appears, listing the directories where you are:
+       Enter OPENS a folder (like a file manager) · h climbs
+       Enter on ". (map this directory)" maps where you stand
+       / types a path · o toggles open code · q quits
+     walk into a repo (e.g. ~/Code/omarchy-site), press Enter on ".",
+     then the confirm screen states OPEN CODE ON/OFF — press o if you
+     want source in the dashboard, then Enter to go
   3. then hands off, and watch for, in order:
        - the terminal restored cleanly (no raw-mode debris, no lost prompt)
        - "scanning: N/N files" standing above "mapped N files"

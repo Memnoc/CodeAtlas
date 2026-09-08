@@ -365,6 +365,16 @@ datums, both acted on immediately:
   the terminal's own 16-colour palette (accent title, highlighted
   cursor row, dim footer, red errors) — the reader's theme, never a
   shipped one.
+- **Third round, same walk: Enter had the wrong meaning.** Memnoc
+  pressed Enter on `Code/` expecting its projects and got a selection —
+  the file-manager convention their fingers know is *Enter opens*. Now
+  Enter walks into folders, and only the pinned `. (map this
+  directory)` row selects, with the second footer line saying so out
+  loud. And per the same round's ask, the frame centres itself and
+  sizes to the terminal (inner width to 72 columns, list rows with
+  terminal height, resize followed live), with clipping moved to the
+  paint layer so text truncates only when the terminal genuinely
+  cannot hold it.
 - Small datum from the same walk, unfixed and noted: a second launcher
   while one serves fails honestly at the bind (port 4173) after
   scanning — the pre-check correctly refuses to open a browser at the

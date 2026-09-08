@@ -184,17 +184,17 @@ impl Modal {
             },
             Key::Out => self.climb(),
             Key::Enter => match &rows[self.cursor] {
-                // Enter on the way up navigates — every picker's
-                // convention; "choosing" a parent is a typo, not a wish.
+                // Enter opens folders — the convention every file manager
+                // taught the reader's fingers (Memnoc pressed Enter on
+                // `Code/` expecting its projects, and got a selection).
+                // The pinned `.` row is the one place Enter means "map
+                // here": every press walks deeper until you have arrived.
                 Row::Up => self.climb(),
                 Row::Here => {
                     self.confirming = Some(self.dir.clone());
                     Step::Stay
                 }
-                Row::Sub(name) => {
-                    self.confirming = Some(self.dir.join(name));
-                    Step::Stay
-                }
+                Row::Sub(name) => Step::List(self.dir.join(name)),
             },
             Key::ToggleOpenCode => {
                 self.open_code = !self.open_code;
@@ -240,11 +240,6 @@ pub struct Line {
     pub text: String,
 }
 
-/// How many list rows the frame shows at once; the window slides to keep
-/// the cursor visible.
-const VISIBLE_ROWS: usize = 9;
-const INNER_WIDTH: usize = 46;
-
 fn clip(text: &str, width: usize) -> String {
     let count = text.chars().count();
     if count <= width {
@@ -257,22 +252,25 @@ fn clip(text: &str, width: usize) -> String {
 fn line(role: Role, content: &str) -> Line {
     Line {
         role,
-        text: clip(content, INNER_WIDTH),
+        text: content.to_string(),
     }
 }
 
 /// Renders the whole modal as roled lines — pure, so tests read text and
-/// roles as data. The shell borders, pads and colours them.
-pub fn draw(modal: &Modal) -> Vec<Line> {
+/// roles as data; clipping is the paint layer's business, so nothing here
+/// is lost until a terminal genuinely cannot hold it. `visible` is how
+/// many list rows the frame shows at once; the window slides to keep the
+/// cursor visible.
+pub fn draw(modal: &Modal, visible: usize) -> Vec<Line> {
     let mut lines = Vec::new();
     lines.push(line(Role::Title, "CODEATLAS — map a repository"));
     lines.push(line(Role::Blank, ""));
 
     if let Some(chosen) = &modal.confirming {
         let open = if modal.open_code {
-            "OPEN CODE ON — the dashboard may show file source"
+            "OPEN CODE ON — dashboard may show file source"
         } else {
-            "OPEN CODE OFF — the dashboard shows the map only"
+            "OPEN CODE OFF — dashboard shows the map only"
         };
         lines.push(line(Role::Where, &format!("ready: {}", chosen.display())));
         lines.push(line(Role::Blank, ""));
@@ -286,15 +284,16 @@ pub fn draw(modal: &Modal) -> Vec<Line> {
     }
 
     lines.push(line(Role::Where, &format!("in {}", modal.dir.display())));
+    lines.push(line(Role::Blank, ""));
     let rows = modal.rows();
     let first = modal
         .cursor
-        .saturating_sub(VISIBLE_ROWS - 1)
-        .min(rows.len().saturating_sub(VISIBLE_ROWS));
-    for (index, row) in rows.iter().enumerate().skip(first).take(VISIBLE_ROWS) {
+        .saturating_sub(visible - 1)
+        .min(rows.len().saturating_sub(visible));
+    for (index, row) in rows.iter().enumerate().skip(first).take(visible) {
         let marker = if index == modal.cursor { "▸" } else { " " };
         let label = match row {
-            Row::Here => ". (this directory)".to_string(),
+            Row::Here => ". (map this directory)".to_string(),
             Row::Up => "../ (up)".to_string(),
             Row::Sub(name) => format!("{name}/"),
         };
@@ -305,10 +304,10 @@ pub fn draw(modal: &Modal) -> Vec<Line> {
         };
         lines.push(line(role, &format!(" {marker} {label}")));
     }
-    if rows.len() > first + VISIBLE_ROWS {
+    if rows.len() > first + visible {
         lines.push(line(
             Role::Row,
-            &format!("   … {} more below", rows.len() - (first + VISIBLE_ROWS)),
+            &format!("   … {} more below", rows.len() - (first + visible)),
         ));
     }
 
@@ -327,12 +326,15 @@ pub fn draw(modal: &Modal) -> Vec<Line> {
     }
 
     lines.push(line(Role::Blank, ""));
-    let footer = if modal.typing.is_some() {
-        "Enter continue · Esc back to list"
+    if modal.typing.is_some() {
+        lines.push(line(Role::Footer, "Enter continue · Esc back to list"));
     } else {
-        "j/k move · Enter choose · l/h in/out · / type · o open code · q quit"
-    };
-    lines.push(line(Role::Footer, footer));
+        lines.push(line(Role::Footer, "j/k move · Enter open · h up · / type"));
+        lines.push(line(
+            Role::Footer,
+            "Enter on . maps here · o open code · q quit",
+        ));
+    }
     lines
 }
 
@@ -397,9 +399,10 @@ fn map_key(event: &event::KeyEvent, typing: bool) -> Option<Key> {
 /// `cyan` and `dark grey` here are whatever the reader's theme says they
 /// are, which is how the frame matches the screenshot taste it came from
 /// without shipping a palette.
-fn paint(l: &Line) -> String {
-    let pad = INNER_WIDTH - l.text.chars().count();
-    let padded = format!("{}{:pad$}", l.text, "");
+fn paint(l: &Line, inner: usize) -> String {
+    let clipped = clip(&l.text, inner);
+    let pad = inner - clipped.chars().count();
+    let padded = format!("{clipped}{:pad$}", "");
     let body = match l.role {
         Role::Title => padded.bold().cyan().to_string(),
         Role::Cursor => padded.black().on_cyan().to_string(),
@@ -435,22 +438,30 @@ pub fn run_modal(start: &Path, home: Option<PathBuf>) -> io::Result<Option<Choic
     let mut modal = Modal::new(start.clone(), list_dirs(&start), home);
 
     loop {
+        // Sized and centred against the terminal as it is *now* — a
+        // resize event falls through the key filter below and lands
+        // back here, so the frame follows the window.
+        let (cols, rows) = terminal::size().unwrap_or((80, 24));
+        let inner = (cols as usize).saturating_sub(8).clamp(24, 72);
+        let visible = (rows as usize).saturating_sub(14).clamp(4, 16);
+        let lines = draw(&modal, visible);
+        let frame_width = inner + 4;
+        let frame_height = lines.len() + 2;
+        let x = (cols as usize).saturating_sub(frame_width) / 2;
+        let y = (rows as usize).saturating_sub(frame_height) / 2;
+
         let mut err = io::stderr();
-        execute!(
-            err,
-            terminal::Clear(terminal::ClearType::All),
-            cursor::MoveTo(0, 0)
-        )?;
-        let top = format!("┌{}┐", "─".repeat(INNER_WIDTH + 2));
-        let bottom = format!("└{}┘", "─".repeat(INNER_WIDTH + 2));
-        execute!(err, cursor::MoveToColumn(0))?;
-        writeln!(err, "{}", top.as_str().dark_grey())?;
-        for l in draw(&modal) {
-            execute!(err, cursor::MoveToColumn(0))?;
-            writeln!(err, "{}", paint(&l))?;
+        execute!(err, terminal::Clear(terminal::ClearType::All))?;
+        let top = format!("┌{}┐", "─".repeat(inner + 2));
+        let bottom = format!("└{}┘", "─".repeat(inner + 2));
+        execute!(err, cursor::MoveTo(x as u16, y as u16))?;
+        write!(err, "{}", top.as_str().dark_grey())?;
+        for (i, l) in lines.iter().enumerate() {
+            execute!(err, cursor::MoveTo(x as u16, (y + 1 + i) as u16))?;
+            write!(err, "{}", paint(l, inner))?;
         }
-        execute!(err, cursor::MoveToColumn(0))?;
-        writeln!(err, "{}", bottom.as_str().dark_grey())?;
+        execute!(err, cursor::MoveTo(x as u16, (y + 1 + lines.len()) as u16))?;
+        write!(err, "{}", bottom.as_str().dark_grey())?;
         err.flush()?;
 
         let event::Event::Key(key_event) = event::read()? else {
@@ -492,7 +503,7 @@ mod tests {
     }
 
     fn frame(modal: &Modal) -> String {
-        draw(modal)
+        draw(modal, 9)
             .iter()
             .map(|l| l.text.clone())
             .collect::<Vec<_>>()
@@ -520,7 +531,7 @@ mod tests {
     }
 
     #[test]
-    fn navigation_clamps_at_both_ends_and_enter_chooses_the_highlighted_dir() {
+    fn navigation_clamps_at_both_ends() {
         let mut modal = modal_over(&["alpha", "beta"]);
         modal.handle(Key::Up); // already at the top
         assert_eq!(modal.cursor, 0);
@@ -528,10 +539,23 @@ mod tests {
             modal.handle(Key::Down); // past the end: ., .., alpha, beta
         }
         assert_eq!(modal.cursor, 3, "cursor ran past the last row");
+    }
+
+    #[test]
+    fn enter_on_a_subdirectory_opens_it_instead_of_choosing_it() {
+        // The file-manager convention, learned from Memnoc pressing Enter
+        // on `Code/` and getting a selection instead of their projects:
+        // Enter walks in; only the pinned `.` row maps here.
+        let mut modal = modal_over(&["alpha", "beta"]);
+        for _ in 0..3 {
+            modal.handle(Key::Down); // onto beta
+        }
         assert_eq!(
-            choose(&mut modal),
-            Step::Choose(PathBuf::from("/repos/beta"))
+            modal.handle(Key::Enter),
+            Step::List(PathBuf::from("/repos/beta")),
+            "Enter on a folder must open it, never select it"
         );
+        assert!(modal.confirming.is_none());
     }
 
     #[test]
@@ -624,12 +648,16 @@ mod tests {
     fn the_frame_carries_the_cursor_marker_and_the_keybind_footer() {
         let modal = modal_over(&["alpha", "beta"]);
         let text = frame(&modal);
-        assert!(text.contains("▸ . (this directory)"));
+        assert!(text.contains("▸ . (map this directory)"));
         assert!(text.contains("alpha/"));
         assert!(text.contains("j/k move"), "footer missing: {text}");
-        let cursor_role = draw(&modal)
+        assert!(
+            text.contains("Enter on . maps here"),
+            "the selection rule must be spoken, not implied: {text}"
+        );
+        let cursor_role = draw(&modal, 9)
             .iter()
-            .find(|l| l.text.contains(". (this directory)"))
+            .find(|l| l.text.contains(". (map this directory)"))
             .map(|l| l.role);
         assert_eq!(
             cursor_role,

@@ -68,9 +68,11 @@ the quarantine mark — macOS attaches it to what browsers save, not to
 what the terminal fetches.
 
 Or skip the commands entirely: run the binary **bare** and pick instead —
-a small terminal menu lists the directories where you are (`j`/`k` move,
-`Enter` chooses, `l`/`h` descend and climb, `/` types a path, `o` toggles
-opening file source in the dashboard, `q` quits):
+a small terminal menu lists the directories where you are. `Enter` opens
+a folder, exactly like a file manager; `Enter` on the pinned `.` row maps
+the directory you're in, after one confirm screen that states plainly
+whether open code is on (`j`/`k` move, `h` climbs, `/` types a path, `o`
+toggles open code, `q` quits):
 
 ```sh
 ./codeatlas-<tag>-<target>
