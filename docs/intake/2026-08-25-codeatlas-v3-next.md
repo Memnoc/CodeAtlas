@@ -244,6 +244,84 @@ From Memnoc's own macOS walk (2026-08-28, `user-supplied`):
 
 Open question 4 anticipated this section; it is now collecting.
 
+## Post-harvest field feedback — 2026-09-08
+
+From Memnoc's macOS binary test (`user-supplied`). The run itself was
+clean: download, dequarantine, scan, serve, dashboard — no failure. What
+it found is one layout defect and one absence.
+
+- **The way out breaks before the caption does.** In the magnify view
+  with both side panels open, the `Back to assets` button wraps its
+  label onto three lines inside its own border, and the breadcrumb pill
+  grows tall around it. Cause, read from the source rather than guessed:
+  `.breadcrumb` (`dashboard/src/app/styles.css:1112`) is
+  `position: absolute` with only `left` set, so its shrink-to-fit width
+  is capped by whatever the canvas has left once the files panel and the
+  source panel have taken theirs. Its children are flex items at the
+  default `flex-shrink: 1`, and `.back` (`styles.css:1453`) sets no
+  `white-space`. So the squeeze lands on the *control* — the one element
+  in the trail that has to stay pressable — while `.crumb-note`
+  (`styles.css:1154`), the longest and most disposable thing in the row
+  ("1 neighbour — what it leans on below, what leans on it above",
+  `MapExplorer.tsx:1112`), keeps its full width. The priority is
+  inverted: the caption should lose first. Ticket-sized, not a decision
+  — hold `.back` at `flex: none; white-space: nowrap`, bound
+  `.breadcrumb` to the canvas width, and let `.crumb-note` truncate.
+  Where the interview should push: the trail already carries a back
+  button, two-to-three crumbs, a note, and up to two `.reveal` controls
+  — whether it survives a narrow canvas by truncating or by dropping
+  parts outright is a design call, not a CSS one.
+- **There is no TUI, and there was never a decision to build one.**
+  Memnoc expected one for the whole run and did not find it. Correctly
+  so: nothing in V1–V3 specified a full-screen terminal interface, and
+  no terminal-UI crate (`ratatui`, `crossterm`, `indicatif`) appears in
+  any manifest. What exists is three separate pieces of terminal
+  courtesy, each shipped for its own reason — scan's standing
+  `scanning: n/N files` counter on a stderr TTY (`scan.rs:53-166`),
+  enrich's `enriching: …` plan and tally lines (`enrich.rs:953`), and
+  the launcher's question-and-answer prompts. Together they read as
+  progress, not as a screen. The open item recorded above — "whether
+  other long-running commands deserve the same line" — is the *small*
+  version of this question; the field feedback raises the large one: a
+  single owned frame for the whole run, scan through serve. That is a
+  V4 candidate for the interview, and it is a decision, not a ticket:
+  a TUI takes over stderr, and every guarantee currently proven at the
+  pipe seam (byte-identical output when stderr is not a terminal) has
+  to survive it.
+- **Open code opened the file but did not colour it.** Memnoc's words:
+  "in open code the ui is not highlighting the code, just opening the
+  file." Read against the source, this is **not a defect** — it is
+  ADR-0013's stated plain-text fallback doing exactly what it says, and
+  the run that produced it was a repository the fallback swallows almost
+  whole. Seven grammars highlight
+  (`crates/codeatlas/src/highlight.rs:131-183`): `ts` `tsx` `js` `jsx`
+  `mjs` `cjs` `rs` `py` `go` `c` `h` `cpp` `cc` `cxx` `hpp` `hh` `hxx`.
+  Everything else — HTML, CSS, SCSS, JSON, YAML, shell, TOML, template
+  languages — comes back escaped and uncoloured with `language:
+  "plain text"`. The tested repository is a static site: its `assets`,
+  `templates`, `themes` and `manual` regions are mostly not in that
+  list, so the one file that *did* colour was the `.js` one. Two things
+  for the interview, and they are different sizes:
+  - **The coverage question (a decision).** Which grammars, if any, V4
+    vendors beyond the scanner's set. It trades binary size against how
+    much of a real repository opens lit, and it is the same zero-egress
+    calculus ADR-0013 already ran — no new principle, only new weight.
+  - **The asymmetry (a ticket, and the sharpest case).** Markdown is
+    *scanned* — `parsers/markdown.rs:26` claims `md` and `markdown`, so
+    `.md` files are map nodes and openable — but no markdown grammar
+    exists in the highlighter. A file the map invited the reader to open
+    is guaranteed to open grey. The `manual` region's 134 files are very
+    likely exactly this. Whatever the coverage decision says, the
+    scanner's languages and the highlighter's should not disagree
+    silently.
+
+  The fallback *is* disclosed — `SourcePanel.tsx:80` renders the
+  envelope's language, and `.source-language` (`styles.css:670`) is a
+  muted 11px pill in the source head. It told the truth and Memnoc still
+  read the result as broken, which is the finding: the pill names a
+  language, so "plain text" reads as a label rather than as *no grammar
+  shipped for this file*. Worth a sentence that says the second thing.
+
 ## Hand-off
 
 Fresh session, `/adr-with-docs`, this document as the agenda — **when
