@@ -9,7 +9,7 @@
 <p align="center">
   <strong>Review the code without reading every line.</strong><br>
   One command turns a repository into an interactive map: files, functions,
-  classes, and the routes between them. You can search, walk, and ask question.
+  classes, and the routes between them. You can search, walk, and ask questions.
 </p>
 
 <picture>
@@ -66,6 +66,9 @@ chmod +x codeatlas-x86_64-unknown-linux-musl && mv codeatlas-x86_64-unknown-linu
 ./codeatlas
 ```
 
+<details>
+<summary><strong>Mac and Linux</strong> — other targets, tag-pinned names, verification</summary>
+
 An Intel Mac or an Arm Linux box swaps the target: `x86_64-apple-darwin`,
 `aarch64-unknown-linux-musl` (the Linux binaries are static musl). The
 `latest` URLs always fetch the newest release; every binary also exists
@@ -74,7 +77,10 @@ under a tag-pinned name, with a `-sealed` variant beside each, and the
 SHA-256 checksums file and GitHub build-provenance attestation to verify
 what you downloaded.
 
-Run it **bare** — `./codeatlas`, will spawn a small terminal menu that guides you through options: `Enter`
+</details>
+
+<details>
+<summary>Run it <strong>bare</strong> — other targets, tag-pinned names, verification</summary>
 opens a folder exactly like a file manager, `h` climbs, `/` types a path,
 `Enter` on the pinned `.` row maps the directory you are in — one confirm
 screen states plainly whether open code is on (`o` toggles it), then it
@@ -84,7 +90,10 @@ repository you choose, and only ever appears when you run the binary by
 hand at a terminal; in scripts and pipes a bare invocation prints usage,
 exactly as a CLI should.
 
-The explicit and basic commands are:
+</details>
+
+`./codeatlas`, will spawn a small terminal menu that guides you through options: `Enter`
+The commands to remember are:
 
 ```sh
 ./codeatlas scan .     # writes .codeatlas/knowledge-graph.json
@@ -123,7 +132,7 @@ cargo build --release
 <details>
 <summary><strong>Optional: shell aliases</strong></summary>
 
-Point the first path at wherever your binary lives, wether that is the downloaded file or
+Point the first path at wherever your binary lives, whether that is the downloaded file or
 your clone's build. The model-touching pair carry `--provider cli:claude` on
 purpose: baking the flag in makes the bare-flag trap described in
 [Enrichment](#enrichment-optional) impossible to hit from muscle memory.
@@ -358,8 +367,8 @@ a structural one, because the answer is drawn from the map's own prose.
 
 ## Security
 
-> CodeAtlas has exactly two ways to reach a model: 1) an HTTPS POST to
-> `api.anthropic.com`, 2) spawning the already-authenticated `claude` CLI.
+> CodeAtlas has exactly two ways to reach a model — an HTTPS POST to
+> `api.anthropic.com`, and spawning the already-authenticated `claude` CLI.
 > Each sits behind its own Cargo feature; each is reachable only from
 > `scan --enrich` and `serve --ask`. The sealed build has neither.
 
