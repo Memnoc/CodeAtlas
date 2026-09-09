@@ -40,13 +40,11 @@
 
 In the era of AI we write more code than anyone can read, and I am a strong
 advocate of knowing what is going on in the software you release into the
-world. CodeAtlas is the tool I built for that: review the code, without
-having to read every single line of it. It draws an unfamiliar codebase all
-at once — and works just as well on the repo you know by heart, when you
+world. Easier said than done when AI produces thousands of lines of code in few hours, sometimes less.
+CodeAtlas helps you review the code, without having to read every single line of it.
+It draws an unfamiliar codebase all at once and works just as well on the repo you know by heart, when you
 only want one function or one slice of domain logic. The map itself needs no
-model and no key; enrichment and questions are opt-in flags on top. The
-counts on the map belong to whatever the repository is on the day you run
-it, so none are written down here.
+model and no key; enrichment and questions are opt-in flags on top.
 
 ## Install
 
