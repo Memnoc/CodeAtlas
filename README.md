@@ -1,5 +1,9 @@
 <!-- Head slot reserved for the screen recording. -->
 
+<p align="center">
+  <img src="docs/images/brand/codeatlas-logo.svg" width="128" alt="CodeAtlas: the titan Atlas kneeling in a rose-and-iris seal, holding the knowledge graph overhead.">
+</p>
+
 <h1 align="center">CodeAtlas</h1>
 
 <p align="center">
@@ -426,6 +430,11 @@ carries its own story-by-story Verification section
 ## License
 
 MIT — see [`LICENSE`](LICENSE). Copyright (c) 2026 Matteo Stara (Memnoc).
+
+The seal — the kneeling titan in [`docs/images/brand/`](docs/images/brand/)
+— is AI-generated imagery: Claude drew it in a design session on
+2026-09-09, and the SVG says so inside the file. No copyright is claimed
+over it.
 
 ## Thanks
 
