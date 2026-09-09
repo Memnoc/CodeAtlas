@@ -80,8 +80,11 @@ what you downloaded.
 </details>
 
 <details>
-<summary>Run it <strong>bare</strong> — other targets, tag-pinned names, verification</summary>
-opens a folder exactly like a file manager, `h` climbs, `/` types a path,
+<summary>Run it <strong>bare</strong> — the terminal menu, key by key</summary>
+
+`./codeatlas` will spawn a small terminal menu that guides you through
+options: `Enter` opens a folder exactly like a file manager, `h` climbs,
+`/` types a path,
 `Enter` on the pinned `.` row maps the directory you are in — one confirm
 screen states plainly whether open code is on (`o` toggles it), then it
 scans, serves, and opens the map at `http://127.0.0.1:4173/` itself. The
@@ -92,7 +95,6 @@ exactly as a CLI should.
 
 </details>
 
-`./codeatlas`, will spawn a small terminal menu that guides you through options: `Enter`
 The commands to remember are:
 
 ```sh
