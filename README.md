@@ -7,7 +7,7 @@
 <h1 align="center">CodeAtlas</h1>
 
 <p align="center">
-  <strong>Review the code without reading every line.</strong><br>
+  <strong>Know what you or others have built.</strong><br>
   One command turns a repository into an interactive map: files, functions,
   classes, and the routes between them. You can search, walk, and ask questions.
 </p>
@@ -38,13 +38,11 @@
   Offline by default: loopback only, no key, no account needed.
 </p>
 
-In the era of AI we write more code than anyone can read, and I am a strong
-advocate of knowing what is going on in the software you release into the
-world. Easier said than done when AI produces thousands of lines of code in few hours, sometimes less.
-CodeAtlas helps you review the code, without having to read every single line of it.
-It draws an unfamiliar codebase all at once and works just as well on the repo you know by heart, when you
-only want one function or one slice of domain logic. The map itself needs no
-model and no key; enrichment and questions are opt-in flags on top.
+In the era of AI we write more code than anyone can read; that doesn't excuse us engineers from understanding that code and even more so, from having a solid
+grasp on the architecture, decisions and trade-offs.
+CodeAtlas is a visualization tool that helps you review the code, without having to read every single line of it.
+It draws in a clear way any codebase (best with the supported ones) and works just as well on the repo you know by heart, when you
+only want one function or one slice of domain logic. The map itself doesn't need a specific AI model or API key; AI-driven enrichment and questions are opt-in signaled by flags on the UX.
 
 ## Install
 
