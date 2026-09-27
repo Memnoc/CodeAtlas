@@ -21,12 +21,6 @@
   classes, and the routes between them. You can search, walk, and ask questions.
 </p>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/plate-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/plate-light.png">
-  <img alt="CodeAtlas — a map of your codebase: regions, routes between them, and the elevation of what everything rests on" src="docs/images/plate-dark.png" width="100%">
-</picture>
-
 <p align="center">
   <a href="#install"><strong>Install</strong></a> ·
   <a href="#how-it-works">Overview</a> ·

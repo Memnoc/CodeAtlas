@@ -10,7 +10,7 @@ drop-in replacement and no document changes. A renamed one is a broken slot.
 
 | Pair | What it shows | Where it lives |
 | --- | --- | --- |
-| `plate-{dark,light}.png` | Nameplate: the pitch and the day's map counts. | Intro, after the first paragraph (the head slot belongs to the screen recording). |
+| `plate-{dark,light}.png` | Nameplate: the pitch and the day's map counts. | Nowhere, since 2026-09-27: the README dropped the banner. Kept on disk in case it returns. |
 | `viz-{dark,light}.png` | Why a map: the code on the left becomes the picture on the right. Concept card, illustrative code. | After the intro. |
 | `pipeline-{dark,light}.png` | How it works: scan → map.json → optional `--enrich` → read or share. | How it works. |
 | `legend-{dark,light}.png` | How to read the map: region, edge, elevation, provenance. | Opens the tour. |
