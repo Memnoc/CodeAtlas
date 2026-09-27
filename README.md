@@ -16,18 +16,18 @@
 </p>
 
 <p align="center">
-  <strong>Know what you or others have built.</strong><br>
-  One command turns a repository into an interactive map: files, functions,
-  classes, and the routes between them. You can search, walk, and ask questions.
-</p>
-
-<p align="center">
   <a href="#install"><strong>Install</strong></a> ·
   <a href="#how-it-works">Overview</a> ·
   <a href="#commands">Commands</a> ·
   <a href="#enrichment-optional">Enrichment</a> ·
   <a href="#security">Security</a> ·
   <a href="https://github.com/Memnoc/CodeAtlas/releases">Releases</a>
+</p>
+
+<p align="center">
+  <strong>Know what you or others have built.</strong><br>
+  One command turns a repository into an interactive map: files, functions,
+  classes, and the routes between them. You can search, walk, and ask questions.
 </p>
 
 <p align="center">
