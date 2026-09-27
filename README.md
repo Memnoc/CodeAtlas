@@ -22,6 +22,9 @@
   <a href="https://github.com/Memnoc/CodeAtlas/releases"><img src="https://img.shields.io/github/v/release/Memnoc/CodeAtlas?color=ebbcba&label=release" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-c4a7e7" alt="License: MIT"></a>
   <a href="#install"><img src="https://img.shields.io/badge/platforms-Linux_%C2%B7_macOS-9ccfd8" alt="Platforms: Linux and macOS"></a>
+  <a href="https://github.com/Memnoc/CodeAtlas/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Memnoc/CodeAtlas/ci.yml?branch=main&label=CI" alt="CI status on main"></a>
+  <a href="contract/README.md"><img src="https://img.shields.io/badge/map_contract-0.5.0-f6c177" alt="Map contract version 0.5.0"></a>
+  <a href="#development"><img src="https://img.shields.io/badge/Rust-edition_2024-31748f" alt="Rust edition 2024"></a>
 </p>
 
 <p align="center">
