@@ -463,6 +463,11 @@ headings, each option row led by its key in the terminal's accent colour,
 lit checkboxes accented and unlit ones dim, ON states lit and OFF states
 dim on the confirm frame. Still the terminal's own palette, no shipped
 theme; the painters are pure and tested by their escape codes.
+v0.1.7's first frame on the Mac bent the right border on one row:
+`Übersicht.app/`, which macOS hands over decomposed (`U` + combining
+diaeresis, two chars for one cell) while the frame padded by character
+count. v0.1.8: padding and clipping measure terminal cells
+(`unicode-width`) and listed names are folded to NFC on the way in.
 
 The walk also proved, in passing, that v0.1.5's tag-free `latest`
 download names in the README (`d218a3a`, committed after the tag) had

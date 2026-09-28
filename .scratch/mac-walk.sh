@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mac-walk.sh — prep + test walk for the v0.1.7 launcher on macOS.
+# mac-walk.sh — prep + test walk for the v0.1.8 launcher on macOS.
 #
 # On the Mac:
 #     cd ~/Code/CodeAtlas && git pull && bash .scratch/mac-walk.sh
@@ -11,7 +11,7 @@
 # hands — your hands are the test — and the checklist prints at the end.
 set -euo pipefail
 
-TAG="v0.1.7"
+TAG="v0.1.8"
 
 case "$(uname -m)" in
   arm64)  TARGET=aarch64-apple-darwin ;;
@@ -33,7 +33,9 @@ cat <<'WALK'
 prep done — verified binary at ~/Downloads/codeatlas
 (a curl download carries no quarantine mark: Gatekeeper will not block it)
 
-THE WALK — v0.1.7 on real macOS: the 2026-09-28 findings, dry run, the new look
+THE WALK — v0.1.8 on real macOS: the 2026-09-28 findings, dry run, the new look
+  0. in ~/Downloads the frame's right border must be straight on every
+     row, the Übersicht.app/ one included (v0.1.7 bent it there)
   1. run:   ~/Downloads/codeatlas
   2. a centred menu appears, listing the directories where you are:
        Enter OPENS a folder (like a file manager) · h climbs
