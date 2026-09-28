@@ -79,8 +79,12 @@ what you downloaded.
 options: `Enter` opens a folder exactly like a file manager, `h` climbs,
 `/` types a path,
 `Enter` on the pinned `.` row maps the directory you are in — one confirm
-screen states plainly whether open code is on (`o` toggles it), then it
-scans, serves, and opens the map at `http://127.0.0.1:4173/` itself. The
+screen states plainly whether open code is on (`o` toggles it), and, on a
+build with the CLI backend, whether it will enrich first (`e`) and serve
+with Ask (`a`): both go through your own `claude` login and nothing else,
+so there is no key to configure and no flag to get wrong. Then it scans,
+serves, and opens the map at `http://127.0.0.1:4173/` itself. If the port
+is already taken it says so before scanning anything. The
 menu remembers nothing: no history, no file written anywhere but the
 repository you choose, and only ever appears when you run the binary by
 hand at a terminal; in scripts and pipes a bare invocation prints usage,
@@ -272,6 +276,10 @@ a toggle that distinguishes changed nodes from the ones they affect.
 | C++        | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`                 |
 | Markdown   | `.md`, `.markdown` — relative links become edges; no symbols |
 
+Open code highlights every language above except Markdown, plus CSS,
+which the scanner does not parse but the dashboard still shows in colour.
+Anything else opens as plain text, and the source panel says so.
+
 ## Enrichment (optional)
 
 `scan --enrich` fills the map's prose slots: node summaries, layer names,
@@ -365,7 +373,8 @@ a structural one, because the answer is drawn from the map's own prose.
 > CodeAtlas has exactly two ways to reach a model — an HTTPS POST to
 > `api.anthropic.com`, and spawning the already-authenticated `claude` CLI.
 > Each sits behind its own Cargo feature; each is reachable only from
-> `scan --enrich` and `serve --ask`. The sealed build has neither.
+> `scan --enrich`, `serve --ask`, and the launcher's enrich and ask
+> toggles, which select the CLI alone. The sealed build has neither.
 
 For the HTTPS route the destination is a hardcoded constant, and redirects
 and environment proxies are disabled at the transport level, so the

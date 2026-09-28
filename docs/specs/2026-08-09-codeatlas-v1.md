@@ -109,9 +109,15 @@ guessing at names, and be shown where in the code the answer lives.
    *CodeAtlas has exactly two ways to reach a model — an HTTPS POST to
    `api.anthropic.com`, and spawning the already-authenticated `claude` CLI.
    Each sits behind its own Cargo feature; each is reachable only from
-   `scan --enrich` and `serve --ask`. The sealed build has neither.* Three
-   build configurations are therefore auditable, not two: both features,
-   neither, and the CLI without the HTTP client
+   `scan --enrich`, `serve --ask`, and the launcher's enrich and ask
+   toggles, which select the CLI alone. The sealed build has neither.*
+   Three build configurations are therefore auditable, not two: both
+   features, neither, and the CLI without the HTTP client.
+   **Amended 2026-09-28**, at Memnoc's direction after their macOS walk:
+   the launcher's two toggles join the sentence's entry points. They reach
+   the subprocess route only — the reader's own `claude` login, never the
+   API key — and do not exist in a build without that backend, so the
+   count of ways stays two and the sealed build stays sealed.
 10. As a recipient of a shared map, I want the artifact to disclose what was
     redacted from it, so that I know what I am and am not seeing
 11. As the CLI, I want to rebuild the structural graph from scratch on every

@@ -7,9 +7,14 @@
 //! once the served port actually answers. Everything about it is gated on
 //! that audience: in any non-terminal context — scripts, pipes, CI —
 //! [`should_run`] declines and bare invocation prints clap's usage exactly
-//! as it did before this module existed. The model flags are deliberately
-//! not offered here: the launcher is the no-key path, and it behaves
-//! identically in a sealed build.
+//! as it did before this module existed.
+//!
+//! The launcher offers enrich and ask (since 0.1.6, from Memnoc's macOS
+//! walk) through one backend only: the reader's own `claude` login,
+//! `cli:claude`, so CodeAtlas still never handles a credential here and
+//! there is no flag to pick the API-key path. In a build without that
+//! backend the two rows do not exist and the launcher is exactly the
+//! no-key path it was — identical in a sealed build.
 
 pub mod modal;
 
@@ -41,16 +46,48 @@ pub fn should_run(arg_count: usize, stdin_is_tty: bool, stderr_is_tty: bool) -> 
 pub struct Choices {
     pub root: PathBuf,
     pub open_code: bool,
+    /// Buy prose through the reader's `claude` login before serving.
+    /// Only ever true in a build with the `agent-cli` feature.
+    pub enrich: bool,
+    /// Serve with Ask, through the same login. Same rule.
+    pub ask: bool,
 }
 
-/// The two questions, over injectable ends so tests drive them with
-/// buffers where a real run holds the terminal. `None` means the reader
-/// closed stdin — backing out is not an error.
+/// The one provider the launcher can ever select: the reader's own CLI
+/// login. Fixed here rather than chosen, which is the whole point.
+#[cfg(feature = "agent-cli")]
+fn cli_choice() -> crate::enrich::ProviderChoice<'static> {
+    crate::enrich::ProviderChoice {
+        spec: Some(crate::enrich::agent_cli::SPEC),
+        model: None,
+    }
+}
+
+/// What the launcher says when the port is already taken, *before* it
+/// spends a scan on a repository it will then fail to serve: the
+/// 2026-09-08 walk recorded the honest bind failure after the scan, and
+/// the 2026-09-28 one asked why the browser opened at all. Now neither
+/// happens — the reader is told first, and told what to do.
+pub fn port_in_use_message(port: u16) -> String {
+    format!(
+        "port {port} on 127.0.0.1 is already in use — most likely another \
+         codeatlas is serving there. Stop it (Ctrl-C in its terminal, or \
+         `pkill -x codeatlas`) and run this again, or open \
+         http://127.0.0.1:{port}/ to see what is already being served."
+    )
+}
+
+/// The questions, over injectable ends so tests drive them with buffers
+/// where a real run holds the terminal. `None` means the reader closed
+/// stdin — backing out is not an error. `offers_model` adds the enrich and
+/// ask questions, exactly as the modal adds its rows, and is the compiled
+/// truth in a real run.
 pub fn interview(
     input: &mut dyn BufRead,
     out: &mut dyn Write,
     home: Option<&Path>,
     cwd: &Path,
+    offers_model: bool,
 ) -> io::Result<Option<Choices>> {
     let _ = writeln!(out, "CodeAtlas — map a repository and serve its dashboard");
     let root = loop {
@@ -77,7 +114,33 @@ pub fn interview(
         Some(line) => parse_yes(&line),
         None => return Ok(None),
     };
-    Ok(Some(Choices { root, open_code }))
+    let (mut enrich, mut ask) = (false, false);
+    if offers_model {
+        let _ = write!(
+            out,
+            "enrich first — buy prose through your `claude` login? [y/N]: "
+        );
+        let _ = out.flush();
+        enrich = match read_line(input)? {
+            Some(line) => parse_yes(&line),
+            None => return Ok(None),
+        };
+        let _ = write!(
+            out,
+            "ask — answer questions in the dashboard through the same login? [y/N]: "
+        );
+        let _ = out.flush();
+        ask = match read_line(input)? {
+            Some(line) => parse_yes(&line),
+            None => return Ok(None),
+        };
+    }
+    Ok(Some(Choices {
+        root,
+        open_code,
+        enrich,
+        ask,
+    }))
 }
 
 fn read_line(input: &mut dyn BufRead) -> io::Result<Option<String>> {
@@ -129,15 +192,19 @@ pub fn opener(url: &str) -> Command {
 }
 
 fn port_answers() -> bool {
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, PORT));
+    port_answers_at(PORT)
+}
+
+fn port_answers_at(port: u16) -> bool {
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok()
 }
 
-/// The whole flow: interview → scan → serve, with the browser opened by a
-/// helper thread once the served port genuinely answers. If the port
-/// already answers *before* serve starts, something else owns it — serve
-/// will refuse with its own port-in-use message, and no browser opens at
-/// someone else's server.
+/// The whole flow: interview → scan → (enrich) → serve, with the browser
+/// opened by a helper thread once the served port genuinely answers. If
+/// the port already answers *before* the scan, something else owns it —
+/// the launcher says so and stops, spending nothing and opening nothing
+/// at someone else's server.
 pub fn run() -> ExitCode {
     let stdin = io::stdin();
     let mut input = stdin.lock();
@@ -158,7 +225,13 @@ pub fn run() -> ExitCode {
             eprintln!("no repository chosen — nothing to map");
             return ExitCode::SUCCESS;
         }
-        Err(_) => match interview(&mut input, &mut out, home.as_deref(), &cwd) {
+        Err(_) => match interview(
+            &mut input,
+            &mut out,
+            home.as_deref(),
+            &cwd,
+            cfg!(feature = "agent-cli"),
+        ) {
             Ok(Some(choices)) => choices,
             Ok(None) => {
                 eprintln!("\nno path given — nothing to map");
@@ -171,27 +244,55 @@ pub fn run() -> ExitCode {
         },
     };
 
-    if let Err(err) = crate::build_and_save_map(&choices.root) {
-        eprintln!("error: {err:#}");
+    if port_answers() {
+        eprintln!("error: {}", port_in_use_message(PORT));
         return ExitCode::FAILURE;
     }
 
-    if !port_answers() {
-        let url = format!("http://{}:{PORT}/", Ipv4Addr::LOCALHOST);
-        std::thread::spawn(move || {
-            let deadline = Instant::now() + OPEN_BUDGET;
-            while Instant::now() < deadline {
-                if port_answers() {
-                    let _ = opener(&url).spawn();
-                    return;
-                }
-                std::thread::sleep(OPEN_POLL);
+    let graph = match crate::build_and_save_map(&choices.root) {
+        Ok(graph) => graph,
+        Err(err) => {
+            eprintln!("error: {err:#}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Enrichment through the reader's own login, the same call `scan
+    // --enrich --provider cli:claude` makes. A failure leaves the
+    // structural map intact (story 14), and the launcher says so and
+    // serves it anyway: the reader asked for a dashboard, and a map
+    // without prose is still that.
+    #[cfg(feature = "agent-cli")]
+    if choices.enrich {
+        let mut graph = graph;
+        match crate::enrich::run(&choices.root, &mut graph, cli_choice()) {
+            Ok(crate::enrich::Outcome::NothingToEnrich) => {
+                eprintln!("nothing to enrich: every slot is already enriched or the map is empty");
             }
-        });
+            Ok(crate::enrich::Outcome::Enriched(count)) => eprintln!("enriched {count} slots"),
+            Err(err) => eprintln!("error: {err:#} (the structural map is intact — serving it)"),
+        }
     }
+    #[cfg(not(feature = "agent-cli"))]
+    let _ = graph;
+
+    let url = format!("http://{}:{PORT}/", Ipv4Addr::LOCALHOST);
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + OPEN_BUDGET;
+        while Instant::now() < deadline {
+            if port_answers() {
+                let _ = opener(&url).spawn();
+                return;
+            }
+            std::thread::sleep(OPEN_POLL);
+        }
+    });
 
     let options = crate::serve::ServeOptions {
         port: PORT,
+        #[cfg(feature = "agent-cli")]
+        ask: choices.ask.then(cli_choice),
+        #[cfg(not(feature = "agent-cli"))]
         ask: None,
         open_code: choices.open_code,
     };
@@ -216,8 +317,55 @@ mod tests {
     ) -> (io::Result<Option<Choices>>, String) {
         let mut input = Cursor::new(script.to_string());
         let mut out: Vec<u8> = Vec::new();
-        let result = interview(&mut input, &mut out, home, cwd);
+        let result = interview(&mut input, &mut out, home, cwd, false);
         (result, String::from_utf8(out).unwrap())
+    }
+
+    #[test]
+    fn with_the_cli_backend_offered_two_more_questions_follow_and_default_to_no() {
+        let repo = tempfile::tempdir().unwrap();
+        let ask = |script: String| {
+            let mut input = Cursor::new(script);
+            let mut out: Vec<u8> = Vec::new();
+            let result = interview(&mut input, &mut out, None, Path::new("/"), true);
+            (result.unwrap(), String::from_utf8(out).unwrap())
+        };
+        let (choices, prompts) = ask(format!("{}\nn\ny\ny\n", repo.path().display()));
+        let choices = choices.unwrap();
+        assert!(choices.enrich && choices.ask);
+        assert!(
+            prompts.contains("`claude` login"),
+            "each question must say what it reaches a model through: {prompts:?}"
+        );
+        let (choices, _) = ask(format!("{}\n\n\n\n", repo.path().display()));
+        let choices = choices.unwrap();
+        assert!(
+            !choices.enrich && !choices.ask,
+            "an empty answer must not opt in"
+        );
+        // Closing stdin at either new question backs out like the others.
+        let (choices, _) = ask(format!("{}\nn\n", repo.path().display()));
+        assert!(choices.is_none());
+    }
+
+    #[test]
+    fn a_taken_port_is_named_before_anything_is_scanned() {
+        // The check itself, against a real listener on an OS-chosen port,
+        // and the sentence the launcher prints: it names the port, the
+        // likely owner, and both ways out.
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(port_answers_at(port));
+        drop(listener);
+        assert!(!port_answers_at(port));
+        let message = port_in_use_message(port);
+        assert!(message.contains(&format!("port {port}")));
+        assert!(message.contains("another"), "{message}");
+        assert!(message.contains("pkill -x codeatlas"), "{message}");
+        assert!(
+            message.contains(&format!("http://127.0.0.1:{port}/")),
+            "{message}"
+        );
     }
 
     #[test]

@@ -17,7 +17,8 @@ every push and pull request.
 > CodeAtlas has exactly two ways to reach a model — an HTTPS POST to
 > `api.anthropic.com`, and spawning the already-authenticated `claude` CLI.
 > Each sits behind its own Cargo feature; each is reachable only from
-> `scan --enrich` and `serve --ask`. The sealed build has neither.
+> `scan --enrich`, `serve --ask`, and the launcher's enrich and ask
+> toggles, which select the CLI alone. The sealed build has neither.
 
 Everything below is that sentence in parts, each part with the test that
 holds it. Three build configurations are therefore auditable rather than two
@@ -81,8 +82,18 @@ One entry point sits beside the four commands: a bare `codeatlas` run by a
 human at a terminal starts an interactive launcher — a small terminal
 modal for picking the repository and toggling open code (falling back to
 plain prompts when the terminal refuses raw mode) — then scans and serves
-through the same code paths as `scan` and plain `serve`, never a provider
-and never a model flag, identical in a sealed build. The picker reads
+through the same code paths as `scan` and `serve`. Since 0.1.6 it also
+offers enrich and ask, and offers them through exactly one backend: the
+reader's own `claude` login (`cli:claude`, the subprocess route below),
+selected by the launcher itself with no flag and no way to name the
+HTTPS route or an API key. In a build without the `agent-cli` feature the
+two rows do not exist and the launcher is the no-key path it always was,
+identical in a sealed build (`the_list_frame_carries_the_two_model_rows_only_when_offered`,
+`the_model_rows_are_offered_exactly_when_the_cli_backend_is_compiled` in
+`crates/codeatlas/src/launcher/modal.rs`). Before scanning it checks the
+port and stops with a message if something already answers there, so it
+never scans for a server it cannot start and never opens a browser at
+someone else's. The picker reads
 directory *names* beneath wherever the reader navigates, holds them in
 memory for the frame being drawn, and writes and sends nothing: no
 history, no recent-repositories list, no file outside the repository

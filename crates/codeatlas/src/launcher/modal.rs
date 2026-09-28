@@ -6,6 +6,13 @@
 //! before launch, because the passive checkbox let its own author sail
 //! past open code — the forced decision the old interview had, restored.
 //!
+//! Since 0.1.6 the frame also offers the two model-touching runs, enrich
+//! and ask — Memnoc's macOS walk of 2026-09-28 asked for "a menu much like
+//! the initial one" for them — and offers them through exactly one door:
+//! the reader's own `claude` login (`cli:claude`), never an API key. In a
+//! build without that backend the rows do not exist, so the launcher there
+//! is what it always was, the no-key path. See [`Modal::offers_model`].
+//!
 //! Drawn by hand over `crossterm`, no TUI framework — the same call
 //! ADR-0011 made for the dashboard: one small surface does not buy a
 //! layout engine. The modal is a pure state machine ([`Modal::handle`])
@@ -41,6 +48,8 @@ pub enum Key {
     Out,
     Enter,
     ToggleOpenCode,
+    ToggleEnrich,
+    ToggleAsk,
     TypePath,
     Char(char),
     Backspace,
@@ -77,6 +86,16 @@ pub struct Modal {
     pub entries: Vec<String>,
     pub cursor: usize,
     pub open_code: bool,
+    /// Buy prose for the map through the reader's `claude` login before
+    /// serving. Never true unless [`Modal::offers_model`].
+    pub enrich: bool,
+    /// Serve with the Ask button, answered through the same login. Never
+    /// true unless [`Modal::offers_model`].
+    pub ask: bool,
+    /// Whether this build can reach a model through the CLI backend at
+    /// all. Read from the compiled feature set, so a sealed build — or a
+    /// network-only one — draws no model rows and ignores their keys.
+    pub offers_model: bool,
     pub typing: Option<String>,
     pub error: Option<String>,
     /// `Some` while the confirm frame is up: the path awaiting a final
@@ -92,10 +111,31 @@ impl Modal {
             entries,
             cursor: 0,
             open_code: false,
+            enrich: false,
+            ask: false,
+            offers_model: cfg!(feature = "agent-cli"),
             typing: None,
             error: None,
             confirming: None,
             home,
+        }
+    }
+
+    /// Tests set this both ways; a real run keeps the compiled truth.
+    pub fn offering_model(mut self, offers: bool) -> Self {
+        self.offers_model = offers;
+        self
+    }
+
+    fn flip_enrich(&mut self) {
+        if self.offers_model {
+            self.enrich = !self.enrich;
+        }
+    }
+
+    fn flip_ask(&mut self) {
+        if self.offers_model {
+            self.ask = !self.ask;
         }
     }
 
@@ -131,6 +171,14 @@ impl Modal {
                 Key::Enter => Step::Choose(chosen),
                 Key::ToggleOpenCode => {
                     self.open_code = !self.open_code;
+                    Step::Stay
+                }
+                Key::ToggleEnrich => {
+                    self.flip_enrich();
+                    Step::Stay
+                }
+                Key::ToggleAsk => {
+                    self.flip_ask();
                     Step::Stay
                 }
                 Key::Quit | Key::Out => {
@@ -198,6 +246,14 @@ impl Modal {
             },
             Key::ToggleOpenCode => {
                 self.open_code = !self.open_code;
+                Step::Stay
+            }
+            Key::ToggleEnrich => {
+                self.flip_enrich();
+                Step::Stay
+            }
+            Key::ToggleAsk => {
+                self.flip_ask();
                 Step::Stay
             }
             Key::TypePath => {
@@ -275,11 +331,39 @@ pub fn draw(modal: &Modal, visible: usize) -> Vec<Line> {
         lines.push(line(Role::Where, &format!("ready: {}", chosen.display())));
         lines.push(line(Role::Blank, ""));
         lines.push(line(Role::Confirm, open));
+        if modal.offers_model {
+            // Stated as loudly as open code, because each one reaches a
+            // model — through the reader's own `claude` login, and that is
+            // said on the line so the decision is informed.
+            lines.push(line(
+                Role::Confirm,
+                if modal.enrich {
+                    "ENRICH ON — buys prose through your `claude` login first"
+                } else {
+                    "ENRICH OFF — the map stays structural"
+                },
+            ));
+            lines.push(line(
+                Role::Confirm,
+                if modal.ask {
+                    "ASK ON — dashboard gains Ask, through your `claude` login"
+                } else {
+                    "ASK OFF — no questions, nothing reaches a model"
+                },
+            ));
+        }
         if let Some(error) = &modal.error {
             lines.push(line(Role::Error, &format!("! {error}")));
         }
         lines.push(line(Role::Blank, ""));
-        lines.push(line(Role::Footer, "Enter go · o flip open code · Esc back"));
+        lines.push(line(
+            Role::Footer,
+            if modal.offers_model {
+                "Enter go · o open code · e enrich · a ask · Esc back"
+            } else {
+                "Enter go · o flip open code · Esc back"
+            },
+        ));
         return lines;
     }
 
@@ -312,11 +396,27 @@ pub fn draw(modal: &Modal, visible: usize) -> Vec<Line> {
     }
 
     lines.push(line(Role::Blank, ""));
-    let checkbox = if modal.open_code { "[x]" } else { "[ ]" };
+    let checkbox = |on: bool| if on { "[x]" } else { "[ ]" };
     lines.push(line(
         Role::Option,
-        &format!("{checkbox} open code in dashboard"),
+        &format!("{} open code in dashboard", checkbox(modal.open_code)),
     ));
+    if modal.offers_model {
+        lines.push(line(
+            Role::Option,
+            &format!(
+                "{} enrich — buy prose through your `claude` login",
+                checkbox(modal.enrich)
+            ),
+        ));
+        lines.push(line(
+            Role::Option,
+            &format!(
+                "{} ask — questions in the dashboard, same login",
+                checkbox(modal.ask)
+            ),
+        ));
+    }
 
     if let Some(buffer) = &modal.typing {
         lines.push(line(Role::Input, &format!("path: {buffer}▏")));
@@ -332,7 +432,11 @@ pub fn draw(modal: &Modal, visible: usize) -> Vec<Line> {
         lines.push(line(Role::Footer, "j/k move · Enter open · h up · / type"));
         lines.push(line(
             Role::Footer,
-            "Enter on . maps here · o open code · q quit",
+            if modal.offers_model {
+                "Enter on . maps here · o open code · e enrich · a ask · q quit"
+            } else {
+                "Enter on . maps here · o open code · q quit"
+            },
         ));
     }
     lines
@@ -389,6 +493,8 @@ fn map_key(event: &event::KeyEvent, typing: bool) -> Option<Key> {
         KeyCode::Left | KeyCode::Char('h') => Some(Key::Out),
         KeyCode::Enter => Some(Key::Enter),
         KeyCode::Char('o') => Some(Key::ToggleOpenCode),
+        KeyCode::Char('e') => Some(Key::ToggleEnrich),
+        KeyCode::Char('a') => Some(Key::ToggleAsk),
         KeyCode::Char('/') => Some(Key::TypePath),
         KeyCode::Esc | KeyCode::Char('q') => Some(Key::Quit),
         _ => None,
@@ -481,6 +587,8 @@ pub fn run_modal(start: &Path, home: Option<PathBuf>) -> io::Result<Option<Choic
                     return Ok(Some(Choices {
                         root: dir,
                         open_code: modal.open_code,
+                        enrich: modal.enrich,
+                        ask: modal.ask,
                     }));
                 }
                 _ => modal.reject(&path),
@@ -587,6 +695,68 @@ mod tests {
             Step::Choose(PathBuf::from("/repos"))
         );
         assert!(modal.open_code, "the flip did not survive the confirm");
+    }
+
+    #[test]
+    fn the_confirm_frame_states_enrich_and_ask_and_their_keys_flip_them_there() {
+        let mut modal = modal_over(&[]).offering_model(true);
+        modal.handle(Key::Enter);
+        let text = frame(&modal);
+        assert!(text.contains("ENRICH OFF"), "{text}");
+        assert!(text.contains("ASK OFF"), "{text}");
+        assert!(
+            text.contains("e enrich · a ask"),
+            "the keys must be in the footer, not just bound: {text}"
+        );
+        modal.handle(Key::ToggleEnrich);
+        modal.handle(Key::ToggleAsk);
+        let text = frame(&modal);
+        assert!(text.contains("ENRICH ON"), "{text}");
+        assert!(text.contains("ASK ON"), "{text}");
+        assert!(
+            text.contains("`claude` login"),
+            "each ON line must say what it reaches a model through: {text}"
+        );
+        assert_eq!(
+            modal.handle(Key::Enter),
+            Step::Choose(PathBuf::from("/repos"))
+        );
+        assert!(
+            modal.enrich && modal.ask,
+            "the flips did not survive the confirm"
+        );
+    }
+
+    #[test]
+    fn the_list_frame_carries_the_two_model_rows_only_when_offered() {
+        let offered = modal_over(&["alpha"]).offering_model(true);
+        let text = frame(&offered);
+        assert!(text.contains("[ ] enrich"), "{text}");
+        assert!(text.contains("[ ] ask"), "{text}");
+        assert!(text.contains("e enrich · a ask"), "{text}");
+
+        // A build without the CLI backend: no rows, no footer keys, and the
+        // keys themselves are inert — the launcher stays the no-key path.
+        let mut sealed = modal_over(&["alpha"]).offering_model(false);
+        let text = frame(&sealed);
+        assert!(!text.contains("enrich"), "{text}");
+        assert!(!text.contains("ask"), "{text}");
+        sealed.handle(Key::ToggleEnrich);
+        sealed.handle(Key::ToggleAsk);
+        assert!(!sealed.enrich && !sealed.ask, "an unoffered toggle flipped");
+        sealed.handle(Key::Enter);
+        let text = frame(&sealed);
+        assert!(!text.contains("ENRICH"), "{text}");
+        assert!(!text.contains("ASK"), "{text}");
+    }
+
+    #[test]
+    fn the_model_rows_are_offered_exactly_when_the_cli_backend_is_compiled() {
+        assert_eq!(
+            modal_over(&[]).offers_model,
+            cfg!(feature = "agent-cli"),
+            "the offer must be the compiled truth, not a default"
+        );
     }
 
     #[test]
