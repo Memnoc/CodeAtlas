@@ -121,9 +121,12 @@ impl Modal {
         }
     }
 
-    /// Tests set this both ways; a real run keeps the compiled truth.
+    /// Tests set this both ways; a real run keeps the compiled truth. A
+    /// build without the backend cannot be talked into offering: the
+    /// wording below is compiled out there (the sealed byte-probe scans
+    /// the binary for the CLI's name), so there would be nothing to draw.
     pub fn offering_model(mut self, offers: bool) -> Self {
-        self.offers_model = offers;
+        self.offers_model = offers && cfg!(feature = "agent-cli");
         self
     }
 
@@ -331,10 +334,12 @@ pub fn draw(modal: &Modal, visible: usize) -> Vec<Line> {
         lines.push(line(Role::Where, &format!("ready: {}", chosen.display())));
         lines.push(line(Role::Blank, ""));
         lines.push(line(Role::Confirm, open));
+        // Stated as loudly as open code, because each one reaches a model —
+        // through the reader's own `claude` login, and that is said on the
+        // line so the decision is informed. Compiled only with the backend:
+        // a sealed binary must not even carry the program's name.
+        #[cfg(feature = "agent-cli")]
         if modal.offers_model {
-            // Stated as loudly as open code, because each one reaches a
-            // model — through the reader's own `claude` login, and that is
-            // said on the line so the decision is informed.
             lines.push(line(
                 Role::Confirm,
                 if modal.enrich {
@@ -401,6 +406,7 @@ pub fn draw(modal: &Modal, visible: usize) -> Vec<Line> {
         Role::Option,
         &format!("{} open code in dashboard", checkbox(modal.open_code)),
     ));
+    #[cfg(feature = "agent-cli")]
     if modal.offers_model {
         lines.push(line(
             Role::Option,
@@ -697,6 +703,7 @@ mod tests {
         assert!(modal.open_code, "the flip did not survive the confirm");
     }
 
+    #[cfg(feature = "agent-cli")]
     #[test]
     fn the_confirm_frame_states_enrich_and_ask_and_their_keys_flip_them_there() {
         let mut modal = modal_over(&[]).offering_model(true);
@@ -729,11 +736,18 @@ mod tests {
 
     #[test]
     fn the_list_frame_carries_the_two_model_rows_only_when_offered() {
-        let offered = modal_over(&["alpha"]).offering_model(true);
-        let text = frame(&offered);
-        assert!(text.contains("[ ] enrich"), "{text}");
-        assert!(text.contains("[ ] ask"), "{text}");
-        assert!(text.contains("e enrich · a ask"), "{text}");
+        // The offered half exists only where the backend is compiled in —
+        // and so does the wording, which is what the sealed probe checks.
+        if cfg!(feature = "agent-cli") {
+            let offered = modal_over(&["alpha"]).offering_model(true);
+            let text = frame(&offered);
+            assert!(text.contains("[ ] enrich"), "{text}");
+            assert!(text.contains("[ ] ask"), "{text}");
+            assert!(text.contains("e enrich · a ask"), "{text}");
+        } else {
+            let asked = modal_over(&["alpha"]).offering_model(true);
+            assert!(!asked.offers_model, "a sealed build accepted the offer");
+        }
 
         // A build without the CLI backend: no rows, no footer keys, and the
         // keys themselves are inert — the launcher stays the no-key path.

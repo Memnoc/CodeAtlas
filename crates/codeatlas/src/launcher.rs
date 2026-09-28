@@ -114,33 +114,53 @@ pub fn interview(
         Some(line) => parse_yes(&line),
         None => return Ok(None),
     };
-    let (mut enrich, mut ask) = (false, false);
-    if offers_model {
-        let _ = write!(
-            out,
-            "enrich first — buy prose through your `claude` login? [y/N]: "
-        );
-        let _ = out.flush();
-        enrich = match read_line(input)? {
-            Some(line) => parse_yes(&line),
-            None => return Ok(None),
-        };
-        let _ = write!(
-            out,
-            "ask — answer questions in the dashboard through the same login? [y/N]: "
-        );
-        let _ = out.flush();
-        ask = match read_line(input)? {
-            Some(line) => parse_yes(&line),
-            None => return Ok(None),
-        };
-    }
+    #[cfg(feature = "agent-cli")]
+    let Some((enrich, ask)) = model_questions(input, out, offers_model)? else {
+        return Ok(None);
+    };
+    #[cfg(not(feature = "agent-cli"))]
+    let (enrich, ask) = {
+        let _ = offers_model;
+        (false, false)
+    };
     Ok(Some(Choices {
         root,
         open_code,
         enrich,
         ask,
     }))
+}
+
+/// The enrich and ask questions, compiled only with the backend like the
+/// modal's rows: the sealed byte-probe must find no trace of the CLI's
+/// name. `None` means stdin closed at one of them.
+#[cfg(feature = "agent-cli")]
+fn model_questions(
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+    offers_model: bool,
+) -> io::Result<Option<(bool, bool)>> {
+    if !offers_model {
+        return Ok(Some((false, false)));
+    }
+    let _ = write!(
+        out,
+        "enrich first — buy prose through your `claude` login? [y/N]: "
+    );
+    let _ = out.flush();
+    let Some(line) = read_line(input)? else {
+        return Ok(None);
+    };
+    let enrich = parse_yes(&line);
+    let _ = write!(
+        out,
+        "ask — answer questions in the dashboard through the same login? [y/N]: "
+    );
+    let _ = out.flush();
+    let Some(line) = read_line(input)? else {
+        return Ok(None);
+    };
+    Ok(Some((enrich, parse_yes(&line))))
 }
 
 fn read_line(input: &mut dyn BufRead) -> io::Result<Option<String>> {
@@ -321,6 +341,7 @@ mod tests {
         (result, String::from_utf8(out).unwrap())
     }
 
+    #[cfg(feature = "agent-cli")]
     #[test]
     fn with_the_cli_backend_offered_two_more_questions_follow_and_default_to_no() {
         let repo = tempfile::tempdir().unwrap();
