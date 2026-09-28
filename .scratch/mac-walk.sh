@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mac-walk.sh — prep + test walk for the v0.1.6 launcher on macOS.
+# mac-walk.sh — prep + test walk for the v0.1.7 launcher on macOS.
 #
 # On the Mac:
 #     cd ~/Code/CodeAtlas && git pull && bash .scratch/mac-walk.sh
@@ -11,7 +11,7 @@
 # hands — your hands are the test — and the checklist prints at the end.
 set -euo pipefail
 
-TAG="v0.1.6"
+TAG="v0.1.7"
 
 case "$(uname -m)" in
   arm64)  TARGET=aarch64-apple-darwin ;;
@@ -33,15 +33,21 @@ cat <<'WALK'
 prep done — verified binary at ~/Downloads/codeatlas
 (a curl download carries no quarantine mark: Gatekeeper will not block it)
 
-THE WALK — v0.1.6 on real macOS: the four 2026-09-28 findings, and enrich
+THE WALK — v0.1.7 on real macOS: the 2026-09-28 findings, dry run, the new look
   1. run:   ~/Downloads/codeatlas
   2. a centred menu appears, listing the directories where you are:
        Enter OPENS a folder (like a file manager) · h climbs
        Enter on ". (map this directory)" maps where you stand
        / types a path · o toggles open code · q quits
      walk into a repo (e.g. ~/Code/labotteghina-art), press Enter on ".",
-     then the confirm screen states OPEN CODE / ENRICH / ASK ON/OFF —
-     press o, e and a to turn all three on, then Enter to go
+     the frame now has REPOSITORY / OPTIONS / KEYS headings, each
+     option row leads with its key in the accent colour, and a lit
+     [x] is accented while an unlit [ ] is dim — say if any of that
+     reads worse than the plain frame did.
+     Press e then d: the enrich row and the confirm line should read
+     ENRICH DRY RUN; Enter -> expect one "would enrich: N slots in M
+     calls: roughly …" line, nothing bought, the structural map served.
+     Then run again: o, e and a on (d off), Enter to go
   3. then hands off, and watch for, in order:
        - the terminal restored cleanly (no raw-mode debris, no lost prompt)
        - "scanning: N/N files" standing above "mapped N files"

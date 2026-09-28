@@ -454,6 +454,16 @@ the same day at Memnoc's direction and shipped as v0.1.6:
   (step 4b). If it recurs it is a different bug — the `open` spawn
   reaching a stale URL — and reopens here.
 
+Two more asks from the same walk, once v0.1.6 was in hand, shipped as
+v0.1.7: a **dry-run toggle** in the menu (`d`, rides on enrich: the
+confirm line reads ENRICH DRY RUN, the launcher prints the same "would
+enrich" sentence `scan --enrich --dry-run` does and serves the structural
+map), and **a less barebones frame** — REPOSITORY / OPTIONS / KEYS
+headings, each option row led by its key in the terminal's accent colour,
+lit checkboxes accented and unlit ones dim, ON states lit and OFF states
+dim on the confirm frame. Still the terminal's own palette, no shipped
+theme; the painters are pure and tested by their escape codes.
+
 The walk also proved, in passing, that v0.1.5's tag-free `latest`
 download names in the README (`d218a3a`, committed after the tag) had
 never shipped: both install commands 404'd until v0.1.6.
