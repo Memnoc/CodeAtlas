@@ -54,7 +54,7 @@ servers, and a working directory outside the repository. Without that, the CLI
 could read files through its own tooling and quietly void `docs/SECURITY.md`'s
 standing promise that the model receives "never file contents".
 
-Its environment is an explicit allowlist (`PATH`, `HOME`, `XDG_*`) rather than
+Its environment is an explicit allowlist (`PATH`, `HOME`, `USER`, `XDG_*`) rather than
 an inherited one, and deliberately excludes `ANTHROPIC_API_KEY` so that `cli:`
 unambiguously means the CLI's own credential rather than silently billing the
 API through a subprocess. A security document's worth is bounded answers, and

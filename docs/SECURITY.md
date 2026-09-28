@@ -227,7 +227,7 @@ dev-dependency on itself, so no released build carries it.
 
 The child is a completion and not an agent: no tools, no MCP servers, no
 hooks, a fresh empty working directory outside the repository, and an
-allowlisted environment (`PATH`, `HOME`, `XDG_*`) that deliberately excludes
+allowlisted environment (`PATH`, `HOME`, `USER`, `XDG_*`) that deliberately excludes
 `ANTHROPIC_API_KEY`.
 
 This is the clause [ADR-0006] had to correct on 2026-08-11. Its Decision once

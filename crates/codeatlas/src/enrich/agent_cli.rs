@@ -81,7 +81,11 @@ pub const SPEC: &str = "cli:claude";
 /// `HOME` and `XDG_CONFIG_HOME` are how the CLI finds the credentials that
 /// are the entire point; `PATH` is how the OS finds the CLI. `ANTHROPIC_API_KEY`
 /// is conspicuously absent — see the module header.
-const INHERITED_VARS: &[&str] = &["PATH", "HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"];
+/// `USER` is there for macOS alone: the CLI keeps its login in the Keychain
+/// and looks it up by account name, read from that variable. Without it
+/// every call on a logged-in Mac fails as "not logged in" (found by hand on
+/// 2026-09-28). It names the reader, not a secret.
+const INHERITED_VARS: &[&str] = &["PATH", "HOME", "USER", "XDG_CONFIG_HOME", "XDG_DATA_HOME"];
 
 /// Every flag the child is given except the model, which is optional, and the
 /// prompt, which is positional. `--flag=value` form throughout: several of
@@ -353,11 +357,20 @@ fn structured_output(
 ) -> Result<(serde_json::Value, Option<ask::Usage>)> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     if !output.status.success() {
+        // The CLI reports some failures — "Not logged in" among them — as a
+        // JSON envelope on stdout with an empty stderr. Quote whichever
+        // channel actually said something.
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let envelope_words = serde_json::from_str::<CliResult>(stdout.trim())
+            .ok()
+            .and_then(|result| result.result)
+            .and_then(|words| first_line(&words));
         bail!(
             "`{program}` exited with {}: {}",
             output.status,
-            first_line(stderr.trim()).unwrap_or_else(|| "no diagnostic on stderr".to_string()),
+            first_line(stderr.trim())
+                .or(envelope_words)
+                .unwrap_or_else(|| "no diagnostic on stderr".to_string()),
         );
     }
     let result: CliResult = serde_json::from_str(stdout.trim())
@@ -679,6 +692,49 @@ mod tests {
                 "{name} reached the child without being on the allowlist"
             );
         }
+    }
+
+    /// Memnoc's macOS walk, 2026-09-28: with only `PATH`, `HOME` and the
+    /// XDG pair passed through, the child answered "Not logged in" on a Mac
+    /// whose CLI was logged in. Bisected by hand to one variable: the
+    /// Keychain lookup the CLI does on macOS is keyed by the account name it
+    /// reads from `USER`. Linux never showed it because there the
+    /// credential is a file under `HOME`.
+    #[test]
+    fn the_child_learns_the_account_name_for_the_keychain() {
+        assert!(
+            INHERITED_VARS.contains(&"USER"),
+            "without USER the macOS Keychain read finds no credential and \
+             every cli:claude call fails as not logged in"
+        );
+    }
+
+    /// The same walk's first symptom: the CLI put its diagnostic *inside*
+    /// the JSON envelope on stdout and exited 1 with an empty stderr, and
+    /// the error said "no diagnostic on stderr". A failed exit must quote
+    /// the envelope's own words when it has them.
+    #[test]
+    fn a_failed_exit_quotes_the_envelope_on_stdout() {
+        let out = output(
+            1,
+            r#"{"type":"result","subtype":"success","is_error":true,
+                "result":"Not logged in \u00b7 Please run /login"}"#,
+            "",
+        );
+        let err = structured_output(PROGRAM, &out).unwrap_err().to_string();
+        assert!(err.contains("Not logged in"), "{err}");
+        assert!(!err.contains("no diagnostic"), "{err}");
+
+        // stderr still wins when it says something, and the fallback still
+        // names the silence when neither channel does.
+        let err = structured_output(PROGRAM, &output(1, "", "boom"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("boom"), "{err}");
+        let err = structured_output(PROGRAM, &output(1, "", ""))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no diagnostic"), "{err}");
     }
 
     /// The child's whole view of the filesystem. It lives in the system temp
