@@ -685,18 +685,24 @@ body {
 
 .source-head {
   display: flex;
+  /* With both side panels open the column narrows until the path broke
+   * at every slash and the pill sat past the edge (2026-09-28 walk). The
+   * pill may take its own row; the path keeps whole segments together
+   * and breaks only a segment that is itself too long for the column. */
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 10px;
+  gap: 4px 10px;
 }
 
 .source-path {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   margin: 0;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--muted);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .source-lit-note {
@@ -709,6 +715,9 @@ body {
    rather than broken (ADR-0013). */
 .source-language {
   flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
   font-size: 11px;
   color: var(--muted);
   border: 1px solid var(--border);
@@ -1182,8 +1191,13 @@ body {
    * kept its full width). */
   max-width: calc(100% - 24px);
   display: flex;
+  /* A second row before a squeeze: the 2026-09-28 walk had the trail
+   * break "Project overview" in two and clip the file count to a digit
+   * while every control fought for one row. Wrapping keeps each crumb
+   * whole; the caption still truncates when even its own row is short. */
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 4px 6px;
   padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -1201,6 +1215,8 @@ body {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+  /* A crumb is a name; a name on two lines is two names. */
+  white-space: nowrap;
 }
 
 .crumb-on {

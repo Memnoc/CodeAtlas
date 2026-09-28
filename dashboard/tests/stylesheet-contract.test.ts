@@ -61,6 +61,44 @@ describe("the trail survives a squeeze — the caption loses width first", () =>
     expect(body(".crumb-note")).toMatch(/text-overflow:\s*ellipsis/);
     expect(body(".crumb-note")).toMatch(/min-width:\s*0/);
   });
+
+  // The second macOS walk (2026-09-28), same squeeze, next layer down:
+  // "Project overview" broke onto two lines, the file count clipped to
+  // one digit behind the show-all chip, and the controls still fought
+  // for one row. A trail that can start a second row never has to
+  // squeeze a crumb; a crumb that cannot wrap never breaks a label.
+  it("lets the trail take a second row before it squeezes a crumb", () => {
+    expect(body(".breadcrumb")).toMatch(/flex-wrap:\s*wrap/);
+  });
+
+  it("keeps every crumb on one line", () => {
+    expect(body(".crumb")).toMatch(/white-space:\s*nowrap/);
+  });
+});
+
+describe("the source head survives the same squeeze", () => {
+  // Same walk, same screenshot: with both side panels open the source
+  // column narrows until the path breaks at every slash and the language
+  // pill is pushed past the panel's edge. The pill drops to its own row
+  // instead, and never grows past the head.
+  const body = (selector: string) =>
+    blocks().find((b) => b.selector === selector)?.body ?? "";
+
+  it("lets the head wrap so the pill lands on its own row", () => {
+    expect(body(".source-head")).toMatch(/flex-wrap:\s*wrap/);
+  });
+
+  it("keeps the pill inside the head and truncates it there", () => {
+    expect(body(".source-language")).toMatch(/max-width:\s*100%/);
+    expect(body(".source-language")).toMatch(/overflow:\s*hidden/);
+    expect(body(".source-language")).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
+  it("lets the path keep whole segments together", () => {
+    expect(body(".source-path")).toMatch(/min-width:\s*0/);
+    expect(body(".source-path")).not.toMatch(/overflow-wrap:\s*anywhere/);
+    expect(body(".source-path")).toMatch(/overflow-wrap:\s*break-word/);
+  });
 });
 
 describe("the source shows all the code — wrapped in place, or full screen", () => {
