@@ -1,11 +1,13 @@
 //! Server-side syntax highlighting for open code (ADR-0013, V3 ticket 03).
 //!
 //! The seven grammars the scanner already vendors — C, C++, Go, JavaScript,
-//! Python, Rust, TypeScript — drive their own bundled highlight queries
+//! Python, Rust, TypeScript — plus CSS, vendored for reading alone since
+//! the scanner has no symbols to take from a stylesheet, drive their own
+//! bundled highlight queries
 //! in-process, through upstream's `tree-sitter-highlight` pinned in lockstep
 //! with the repository's `tree-sitter` (0.26.12 beside 0.26.12). Nothing is
-//! downloaded, nothing leaves the host, and no new grammar rides in: this is
-//! the stale-blocker correction ADR-0013 records, made code.
+//! downloaded and nothing leaves the host: this is the stale-blocker
+//! correction ADR-0013 records, made code.
 //!
 //! The seam is one function: [`highlight`] takes a repo-relative path and
 //! the text actually being served — the *clipped* text, when the size cap
@@ -177,6 +179,16 @@ fn registry() -> &'static Registry {
                     &[tree_sitter_c::HIGHLIGHT_QUERY],
                     "",
                 ),
+                // The one grammar the scanner does not parse: CSS files are
+                // nodes without symbols, and open code shows them all the
+                // same (asked for on the 2026-09-28 macOS walk).
+                grammar(
+                    "CSS",
+                    &["css"],
+                    tree_sitter_css::LANGUAGE.into(),
+                    &[tree_sitter_css::HIGHLIGHTS_QUERY],
+                    "",
+                ),
                 grammar(
                     "C++",
                     &["cpp", "cc", "cxx", "hpp", "hh", "hxx"],
@@ -204,8 +216,8 @@ pub struct Highlighted {
 }
 
 /// Highlights `source` as the language `path`'s extension names, falling
-/// back to escaped plain text — stated as such — for anything the seven
-/// vendored grammars do not cover. `source` must be the text actually being
+/// back to escaped plain text — stated as such — for anything the vendored
+/// grammars do not cover. `source` must be the text actually being
 /// served: the caller clips first, so a truncated file is highlighted
 /// exactly as served.
 pub fn highlight(path: &str, source: &str) -> Highlighted {
@@ -316,7 +328,7 @@ mod tests {
     /// and a string or type so the bundled queries have something to catch.
     /// The paths carry the extensions the scanner itself maps (see
     /// `parsers::registry`), so this table is the module's coverage claim.
-    fn seven_grammars() -> Vec<(&'static str, &'static str, &'static str)> {
+    fn vendored_grammars() -> Vec<(&'static str, &'static str, &'static str)> {
         vec![
             (
                 "C",
@@ -339,6 +351,16 @@ mod tests {
                 "const greeting = \"hi\";\nfunction main() {\n  return greeting;\n}\n",
             ),
             ("Python", "src/main.py", "def main():\n    return \"hi\"\n"),
+            // Memnoc's macOS walk, 2026-09-28: a stylesheet opened as plain
+            // text and the first thing asked for was colour. CSS is the one
+            // grammar the scanner does not parse for symbols — its files are
+            // nodes without children — but open code reads them all the
+            // same, so the highlighter covers it on its own.
+            (
+                "CSS",
+                "src/app/styles.css",
+                ".card {\n  color: #ebbcba; /* rose */\n  padding: 4px 6px;\n}\n",
+            ),
             (
                 "Rust",
                 "src/main.rs",
@@ -354,11 +376,11 @@ mod tests {
 
     #[test]
     fn every_vendored_grammar_yields_spans_and_names_its_language() {
-        // The rule beside the wire (spec seam 2): each of the seven grammars
+        // The rule beside the wire (spec seam 2): each vendored grammar
         // produces token spans through its own bundled highlight query, the
         // envelope-bound language is the grammar's name, and the text under
         // the markup is exactly the source that went in.
-        for (language, path, source) in seven_grammars() {
+        for (language, path, source) in vendored_grammars() {
             let highlighted = highlight(path, source);
             assert_eq!(
                 highlighted.language, language,
