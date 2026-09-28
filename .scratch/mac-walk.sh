@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mac-walk.sh — prep + test walk for the v0.1.3 launcher on macOS.
+# mac-walk.sh — prep + test walk for the v0.1.6 launcher on macOS.
 #
 # On the Mac:
 #     cd ~/Code/CodeAtlas && git pull && bash .scratch/mac-walk.sh
@@ -11,7 +11,7 @@
 # hands — your hands are the test — and the checklist prints at the end.
 set -euo pipefail
 
-TAG="v0.1.5"
+TAG="v0.1.6"
 
 case "$(uname -m)" in
   arm64)  TARGET=aarch64-apple-darwin ;;
@@ -33,19 +33,29 @@ cat <<'WALK'
 prep done — verified binary at ~/Downloads/codeatlas
 (a curl download carries no quarantine mark: Gatekeeper will not block it)
 
-THE WALK — the modal's first human run on real macOS
+THE WALK — v0.1.6 on real macOS: the four 2026-09-28 findings, and enrich
   1. run:   ~/Downloads/codeatlas
   2. a centred menu appears, listing the directories where you are:
        Enter OPENS a folder (like a file manager) · h climbs
        Enter on ". (map this directory)" maps where you stand
        / types a path · o toggles open code · q quits
-     walk into a repo (e.g. ~/Code/omarchy-site), press Enter on ".",
-     then the confirm screen states OPEN CODE ON/OFF — press o if you
-     want source in the dashboard, then Enter to go
+     walk into a repo (e.g. ~/Code/labotteghina-art), press Enter on ".",
+     then the confirm screen states OPEN CODE / ENRICH / ASK ON/OFF —
+     press o, e and a to turn all three on, then Enter to go
   3. then hands off, and watch for, in order:
        - the terminal restored cleanly (no raw-mode debris, no lost prompt)
        - "scanning: N/N files" standing above "mapped N files"
+       - "enriching: N slots in M calls" then one "batch i/M" line per
+         batch and "enriched N slots" — this is the USER fix: on
+         v0.1.5 every cli:claude call on a Mac died as "not logged in"
        - the browser opening itself at http://127.0.0.1:4173/
+       - the search field has an Ask button; one question comes back
+         citing node IDs
+       - open a .css file: coloured, and the pill names CSS
+       - in magnify with BOTH side panels open: the trail may take a
+         second row but no crumb breaks mid-name and the file count is
+         whole; the source head's path keeps whole segments and the
+         language pill sits inside the panel, on its own row if it must
        - in the dashboard: select a symbol -> Open code -> source lit
          at its own lines, and the language pill on a non-highlighted
          file now says "plain text — no grammar shipped for this file"
@@ -58,6 +68,9 @@ EDGE POKES (30 seconds)
   4. run it again; press / and type a garbage path -> expect
      "no directory at ..." inside the frame, and a real path still
      lands after
+  4b. with the first server STILL RUNNING in another terminal, run it
+     again and choose any repo -> expect "port 4173 ... already in use"
+     before any scanning line, no browser, exit
   5. run it once more; press Enter immediately -> maps the directory
      you are standing in (the pinned ". (this directory)" row)
   6. press q on a fresh run -> clean exit, "no repository chosen"

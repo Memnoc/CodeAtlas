@@ -400,6 +400,64 @@ datums, both acted on immediately:
   state that resets on close. Both guarded and tamper-proven
   (`stylesheet-contract.test.ts`, `open-code.test.tsx`).
 
+## Post-harvest field feedback — 2026-09-28
+
+Memnoc's macOS walk of v0.1.5 (`user-supplied`, their M4, the first human
+run of the modal on real macOS). The launcher, the modal, open code and
+the dashboard all passed with no UI errors. Five datums, four acted on
+the same day at Memnoc's direction and shipped as v0.1.6:
+
+- **Enrichment was broken on every Mac since v0.1.0.** `scan --enrich
+  --provider cli:claude` died as `` `claude` exited with exit status 1:
+  no diagnostic on stderr ``. Bisected by hand in the session: the
+  child's allowlisted environment (`PATH`, `HOME`, `XDG_*`) was missing
+  `USER`, and the macOS CLI keeps its login in the Keychain keyed by that
+  account name. Linux never showed it because there the credential is a
+  file under `HOME`, and every enrichment walk before this one was on
+  Linux. Fixed (`0de366d`): `USER` joins the allowlist, SECURITY.md and
+  ADR-0008 name it. The second half of the same datum: the diagnostic
+  was on stdout all along, inside the JSON envelope, and the error path
+  only quoted stderr — a failed exit now quotes whichever channel spoke.
+  Both pinned in `agent_cli`'s unit tests.
+- **CSS wanted colour.** A stylesheet opened as "plain text — no grammar
+  shipped for this file" and the first ask was highlighting. Shipped:
+  `tree-sitter-css` joins the highlighter for reading alone (the scanner
+  still takes no symbols from a stylesheet). A second vote for the
+  grammar-coverage question, which stays open for the interview: the
+  scanner's languages and the highlighter's now differ in both
+  directions (Markdown scanned but not highlighted, CSS the reverse).
+- **The trail and the source head squeezed again**, one layer below the
+  2026-09-08 fix: with both side panels open "Project overview" broke
+  onto two lines, the file count clipped to one digit behind the
+  show-all chip, the source path broke at every slash, and the language
+  pill was pushed past the panel's edge. Fixed in the stylesheet, five
+  new assertions in `stylesheet-contract.test.ts`: the trail wraps to a
+  second row before any crumb squeezes and no crumb wraps; the source
+  head wraps so the pill takes its own row, the pill truncates inside
+  the head, and the path breaks only a segment too long for the column.
+- **"A menu much like the initial one" for enrich and ask.** Memnoc's
+  words, and a vote for the whole-run frame. Built as the modal's next
+  slice, with one decision put and answered in-session: the toggles
+  select `cli:claude` alone — the reader's own login, never a key — and
+  do not exist in a build without that backend, so the launcher stays
+  the no-key path there. This required amending V1 story 9's pinned
+  sentence (the launcher's toggles join its entry points; the count of
+  ways stays two), approved by Memnoc; the spec carries the dated
+  amendment and the drift test holds README and SECURITY.md to it.
+  Ride-along: the launcher now checks the port *before* scanning and
+  stops with a message naming the likely owner and both ways out.
+- **A second launcher opened a browser while one already served** —
+  Memnoc's report, which contradicts the recorded pre-check (the
+  2026-09-08 datum: bind fails honestly after the scan, no browser).
+  Not reproduced in-session; the pre-check moved ahead of the scan
+  regardless, and the v0.1.6 walk script carries the explicit re-check
+  (step 4b). If it recurs it is a different bug — the `open` spawn
+  reaching a stale URL — and reopens here.
+
+The walk also proved, in passing, that v0.1.5's tag-free `latest`
+download names in the README (`d218a3a`, committed after the tag) had
+never shipped: both install commands 404'd until v0.1.6.
+
 ## Hand-off
 
 Fresh session, `/adr-with-docs`, this document as the agenda — **when
