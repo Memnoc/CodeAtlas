@@ -35,6 +35,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crossterm::{cursor, event, execute, style::Stylize, terminal};
+use unicode_normalization::UnicodeNormalization;
+use unicode_width::UnicodeWidthStr;
 
 use super::{Choices, resolve_path};
 
@@ -138,9 +140,16 @@ impl Modal {
         self
     }
 
+    /// Dry run is enrich's own switch, so the two move together: `d`
+    /// alone means "enrich, but only price it" (Memnoc pressed it alone
+    /// and asked what should happen), and switching enrich off takes
+    /// dry run with it — an orphaned dry run would be a silent no-op.
     fn flip_enrich(&mut self) {
         if self.offers_model {
             self.enrich = !self.enrich;
+            if !self.enrich {
+                self.dry_run = false;
+            }
         }
     }
 
@@ -153,6 +162,9 @@ impl Modal {
     fn flip_dry_run(&mut self) {
         if self.offers_model {
             self.dry_run = !self.dry_run;
+            if self.dry_run {
+                self.enrich = true;
+            }
         }
     }
 
@@ -324,13 +336,31 @@ pub struct Line {
     pub text: String,
 }
 
+/// Clips to `width` terminal *cells*, not characters: a name like
+/// `Übersicht` may arrive from macOS as `U` plus a combining mark — two
+/// characters, one cell — and counting characters padded that row one
+/// short, so the frame's right border stepped out of line (Memnoc's
+/// 2026-09-28 walk). Names are also folded to NFC on listing, so the
+/// common case is one character per cell before width is even measured.
 fn clip(text: &str, width: usize) -> String {
-    let count = text.chars().count();
-    if count <= width {
+    if text.width() <= width {
         return text.to_string();
     }
-    let kept: String = text.chars().take(width.saturating_sub(1)).collect();
+    let mut kept = String::new();
+    let budget = width.saturating_sub(1);
+    for c in text.chars() {
+        let next = format!("{kept}{c}");
+        if next.width() > budget {
+            break;
+        }
+        kept = next;
+    }
     format!("{kept}…")
+}
+
+/// The cells a line takes on screen — the padding's ruler.
+fn cells(text: &str) -> usize {
+    text.width()
 }
 
 fn line(role: Role, content: &str) -> Line {
@@ -497,7 +527,8 @@ pub fn list_dirs(path: &Path) -> Vec<String> {
         .filter_map(|entry| entry.ok())
         .filter(|entry| entry.file_type().is_ok_and(|t| t.is_dir()))
         .filter_map(|entry| {
-            let name = entry.file_name().to_string_lossy().into_owned();
+            // NFC, so a decomposed macOS name is one char per cell.
+            let name: String = entry.file_name().to_string_lossy().nfc().collect();
             (!name.starts_with('.')).then_some(name)
         })
         .collect();
@@ -553,7 +584,7 @@ fn map_key(event: &event::KeyEvent, typing: bool) -> Option<Key> {
 /// without shipping a palette.
 fn paint(l: &Line, inner: usize) -> String {
     let clipped = clip(&l.text, inner);
-    let pad = " ".repeat(inner - clipped.chars().count());
+    let pad = " ".repeat(inner.saturating_sub(cells(&clipped)));
     let body = match l.role {
         Role::Title => format!("{}{pad}", clipped.as_str().bold().cyan()),
         Role::Cursor => format!("{clipped}{pad}").black().on_cyan().to_string(),
@@ -993,6 +1024,71 @@ mod tests {
         assert!(off.contains(dim), "an unlit box dims: {off:?}");
         assert!(paint_setting("ENRICH OFF — the map stays structural").contains(dim));
         assert!(paint_setting("ENRICH ON — buys prose").contains(cyan));
+    }
+
+    #[cfg(feature = "agent-cli")]
+    #[test]
+    fn dry_run_alone_means_enrich_priced_and_enrich_off_takes_dry_run_along() {
+        let mut modal = modal_over(&[]).offering_model(true);
+        modal.handle(Key::ToggleDryRun);
+        assert!(
+            modal.enrich && modal.dry_run,
+            "d alone must switch enrich on"
+        );
+        modal.handle(Key::Enter);
+        assert!(
+            frame(&modal).contains("ENRICH DRY RUN"),
+            "{}",
+            frame(&modal)
+        );
+        modal.handle(Key::ToggleEnrich);
+        assert!(
+            !modal.enrich && !modal.dry_run,
+            "enrich off must clear dry run"
+        );
+        assert!(frame(&modal).contains("ENRICH OFF"), "{}", frame(&modal));
+    }
+
+    #[test]
+    fn padding_measures_cells_so_a_combining_mark_cannot_bend_the_border() {
+        // Decomposed: U + combining diaeresis. Two chars, one cell.
+        let decomposed = "U\u{0308}bersicht.app/";
+        assert_eq!(decomposed.chars().count(), 15);
+        assert_eq!(cells(decomposed), 14);
+        let l = line(Role::Row, decomposed);
+        let painted = paint(&l, 20);
+        // Strip escapes and count the cells between the two border bars:
+        // exactly inner + 2 spaces, whatever the text's char count.
+        let plain: String = strip_escapes(&painted);
+        let inside = plain.trim_start_matches('│').trim_end_matches('│');
+        assert_eq!(cells(inside), 22, "{plain:?}");
+        // Clipping, too, is by cell: a wide char never lets a line overrun.
+        assert_eq!(cells(&clip("日本語のパス/", 5)), 5);
+        assert!(clip("日本語のパス/", 5).ends_with('…'));
+    }
+
+    fn strip_escapes(s: &str) -> String {
+        let mut out = String::new();
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn listed_names_are_folded_to_nfc() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("U\u{0308}bersicht")).unwrap();
+        assert_eq!(list_dirs(root.path()), vec!["\u{00dc}bersicht"]);
     }
 
     #[test]
