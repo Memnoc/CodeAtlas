@@ -50,6 +50,9 @@ pub enum Key {
     ToggleOpenCode,
     ToggleEnrich,
     ToggleAsk,
+    /// Price the enrichment and spend nothing — `scan --enrich --dry-run`
+    /// from the menu (asked for on the same walk, once enrich existed).
+    ToggleDryRun,
     TypePath,
     Char(char),
     Backspace,
@@ -92,6 +95,10 @@ pub struct Modal {
     /// Serve with the Ask button, answered through the same login. Never
     /// true unless [`Modal::offers_model`].
     pub ask: bool,
+    /// With enrich: print what the run would cost and buy nothing, then
+    /// serve the structural map. Meaningless without enrich, and drawn
+    /// only beside it. Never true unless [`Modal::offers_model`].
+    pub dry_run: bool,
     /// Whether this build can reach a model through the CLI backend at
     /// all. Read from the compiled feature set, so a sealed build — or a
     /// network-only one — draws no model rows and ignores their keys.
@@ -113,6 +120,7 @@ impl Modal {
             open_code: false,
             enrich: false,
             ask: false,
+            dry_run: false,
             offers_model: cfg!(feature = "agent-cli"),
             typing: None,
             error: None,
@@ -139,6 +147,12 @@ impl Modal {
     fn flip_ask(&mut self) {
         if self.offers_model {
             self.ask = !self.ask;
+        }
+    }
+
+    fn flip_dry_run(&mut self) {
+        if self.offers_model {
+            self.dry_run = !self.dry_run;
         }
     }
 
@@ -182,6 +196,10 @@ impl Modal {
                 }
                 Key::ToggleAsk => {
                     self.flip_ask();
+                    Step::Stay
+                }
+                Key::ToggleDryRun => {
+                    self.flip_dry_run();
                     Step::Stay
                 }
                 Key::Quit | Key::Out => {
@@ -259,6 +277,10 @@ impl Modal {
                 self.flip_ask();
                 Step::Stay
             }
+            Key::ToggleDryRun => {
+                self.flip_dry_run();
+                Step::Stay
+            }
             Key::TypePath => {
                 self.typing = Some(String::new());
                 self.error = None;
@@ -292,6 +314,9 @@ pub enum Role {
     Footer,
     Blank,
     Confirm,
+    /// A small uppercase heading over a group of lines — the frame's
+    /// structure made visible, asked for on the 2026-09-28 walk.
+    Section,
 }
 
 pub struct Line {
@@ -331,8 +356,10 @@ pub fn draw(modal: &Modal, visible: usize) -> Vec<Line> {
         } else {
             "OPEN CODE OFF — dashboard shows the map only"
         };
-        lines.push(line(Role::Where, &format!("ready: {}", chosen.display())));
+        lines.push(line(Role::Section, "READY"));
+        lines.push(line(Role::Where, &format!("{}", chosen.display())));
         lines.push(line(Role::Blank, ""));
+        lines.push(line(Role::Section, "SETTINGS"));
         lines.push(line(Role::Confirm, open));
         // Stated as loudly as open code, because each one reaches a model —
         // through the reader's own `claude` login, and that is said on the
@@ -342,10 +369,12 @@ pub fn draw(modal: &Modal, visible: usize) -> Vec<Line> {
         if modal.offers_model {
             lines.push(line(
                 Role::Confirm,
-                if modal.enrich {
-                    "ENRICH ON — buys prose through your `claude` login first"
-                } else {
-                    "ENRICH OFF — the map stays structural"
+                match (modal.enrich, modal.dry_run) {
+                    (true, true) => {
+                        "ENRICH DRY RUN — says the price, buys nothing, serves the structural map"
+                    }
+                    (true, false) => "ENRICH ON — buys prose through your `claude` login first",
+                    (false, _) => "ENRICH OFF — the map stays structural",
                 },
             ));
             lines.push(line(
@@ -361,10 +390,11 @@ pub fn draw(modal: &Modal, visible: usize) -> Vec<Line> {
             lines.push(line(Role::Error, &format!("! {error}")));
         }
         lines.push(line(Role::Blank, ""));
+        lines.push(line(Role::Section, "KEYS"));
         lines.push(line(
             Role::Footer,
             if modal.offers_model {
-                "Enter go · o open code · e enrich · a ask · Esc back"
+                "Enter go · o open code · e enrich · d dry run · a ask · Esc back"
             } else {
                 "Enter go · o flip open code · Esc back"
             },
@@ -372,8 +402,8 @@ pub fn draw(modal: &Modal, visible: usize) -> Vec<Line> {
         return lines;
     }
 
+    lines.push(line(Role::Section, "REPOSITORY"));
     lines.push(line(Role::Where, &format!("in {}", modal.dir.display())));
-    lines.push(line(Role::Blank, ""));
     let rows = modal.rows();
     let first = modal
         .cursor
@@ -401,24 +431,34 @@ pub fn draw(modal: &Modal, visible: usize) -> Vec<Line> {
     }
 
     lines.push(line(Role::Blank, ""));
+    lines.push(line(Role::Section, "OPTIONS"));
+    // Each option row leads with its key, so the key is read where the
+    // choice is made rather than hunted for in the footer.
     let checkbox = |on: bool| if on { "[x]" } else { "[ ]" };
     lines.push(line(
         Role::Option,
-        &format!("{} open code in dashboard", checkbox(modal.open_code)),
+        &format!("o {} open code in dashboard", checkbox(modal.open_code)),
     ));
     #[cfg(feature = "agent-cli")]
     if modal.offers_model {
         lines.push(line(
             Role::Option,
             &format!(
-                "{} enrich — buy prose through your `claude` login",
+                "e {} enrich — buy prose through your `claude` login",
                 checkbox(modal.enrich)
             ),
         ));
         lines.push(line(
             Role::Option,
             &format!(
-                "{} ask — questions in the dashboard, same login",
+                "d {} dry run — say the price, spend nothing",
+                checkbox(modal.dry_run)
+            ),
+        ));
+        lines.push(line(
+            Role::Option,
+            &format!(
+                "a {} ask — questions in the dashboard, same login",
                 checkbox(modal.ask)
             ),
         ));
@@ -432,18 +472,17 @@ pub fn draw(modal: &Modal, visible: usize) -> Vec<Line> {
     }
 
     lines.push(line(Role::Blank, ""));
+    lines.push(line(Role::Section, "KEYS"));
     if modal.typing.is_some() {
         lines.push(line(Role::Footer, "Enter continue · Esc back to list"));
     } else {
-        lines.push(line(Role::Footer, "j/k move · Enter open · h up · / type"));
+        // The option keys live on their rows now; the footer keeps the
+        // movement keys and the one rule worth repeating.
         lines.push(line(
             Role::Footer,
-            if modal.offers_model {
-                "Enter on . maps here · o open code · e enrich · a ask · q quit"
-            } else {
-                "Enter on . maps here · o open code · q quit"
-            },
+            "j/k move · Enter open · h up · / type · q quit",
         ));
+        lines.push(line(Role::Footer, "Enter on . maps here"));
     }
     lines
 }
@@ -501,6 +540,7 @@ fn map_key(event: &event::KeyEvent, typing: bool) -> Option<Key> {
         KeyCode::Char('o') => Some(Key::ToggleOpenCode),
         KeyCode::Char('e') => Some(Key::ToggleEnrich),
         KeyCode::Char('a') => Some(Key::ToggleAsk),
+        KeyCode::Char('d') => Some(Key::ToggleDryRun),
         KeyCode::Char('/') => Some(Key::TypePath),
         KeyCode::Esc | KeyCode::Char('q') => Some(Key::Quit),
         _ => None,
@@ -513,18 +553,65 @@ fn map_key(event: &event::KeyEvent, typing: bool) -> Option<Key> {
 /// without shipping a palette.
 fn paint(l: &Line, inner: usize) -> String {
     let clipped = clip(&l.text, inner);
-    let pad = inner - clipped.chars().count();
-    let padded = format!("{clipped}{:pad$}", "");
+    let pad = " ".repeat(inner - clipped.chars().count());
     let body = match l.role {
-        Role::Title => padded.bold().cyan().to_string(),
-        Role::Cursor => padded.black().on_cyan().to_string(),
-        Role::Confirm => padded.bold().cyan().to_string(),
-        Role::Where => padded.dark_grey().to_string(),
-        Role::Error => padded.red().to_string(),
-        Role::Footer => padded.dark_grey().to_string(),
-        Role::Option | Role::Input | Role::Row | Role::Blank | Role::Border => padded,
+        Role::Title => format!("{}{pad}", clipped.as_str().bold().cyan()),
+        Role::Cursor => format!("{clipped}{pad}").black().on_cyan().to_string(),
+        Role::Section => format!("{}{pad}", clipped.as_str().bold().dark_grey()),
+        Role::Confirm => format!("{}{pad}", paint_setting(&clipped)),
+        Role::Option => format!("{}{pad}", paint_option(&clipped)),
+        Role::Footer => format!("{}{pad}", paint_keys(&clipped)),
+        Role::Where => format!("{}{pad}", clipped.as_str().dark_grey()),
+        Role::Error => format!("{}{pad}", clipped.as_str().red()),
+        Role::Input | Role::Row | Role::Blank | Role::Border => format!("{clipped}{pad}"),
     };
     format!("{} {} {}", "│".dark_grey(), body, "│".dark_grey())
+}
+
+/// A key legend: `key words · key words`. Each segment's first token is
+/// the key and wears the accent; the rest stays dim — so `o`, `e`, `d`,
+/// `a`, `j/k` and `Enter` are read at a glance rather than hunted.
+fn paint_keys(text: &str) -> String {
+    text.split(" · ")
+        .map(|segment| match segment.split_once(' ') {
+            Some((key, rest)) => format!("{} {}", key.bold().cyan(), rest.dark_grey()),
+            None => segment.bold().cyan().to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(&" · ".dark_grey().to_string())
+}
+
+/// An option row: `k [x] label`. The key wears the accent; the checkbox
+/// lights up when on and dims when off; the label stays plain.
+fn paint_option(text: &str) -> String {
+    let Some((key, rest)) = text.split_once(' ') else {
+        return text.to_string();
+    };
+    let (marker, label) = rest.split_once(' ').unwrap_or((rest, ""));
+    let marker = if marker == "[x]" {
+        marker.bold().cyan().to_string()
+    } else {
+        marker.dark_grey().to_string()
+    };
+    format!("{} {marker} {label}", key.bold().cyan())
+}
+
+/// A confirm-frame setting: `NAME STATE — what that means`. ON and DRY
+/// RUN wear the accent; OFF is dim; the explanation stays plain.
+fn paint_setting(text: &str) -> String {
+    let (state, meaning) = match text.split_once(" — ") {
+        Some((state, meaning)) => (state, Some(meaning)),
+        None => (text, None),
+    };
+    let state = if state.ends_with(" OFF") {
+        state.dark_grey().to_string()
+    } else {
+        state.bold().cyan().to_string()
+    };
+    match meaning {
+        Some(meaning) => format!("{state} — {meaning}"),
+        None => state,
+    }
 }
 
 /// Restores the terminal on every exit path, panic included — a raw-mode
@@ -595,6 +682,7 @@ pub fn run_modal(start: &Path, home: Option<PathBuf>) -> io::Result<Option<Choic
                         open_code: modal.open_code,
                         enrich: modal.enrich,
                         ask: modal.ask,
+                        dry_run: modal.dry_run,
                     }));
                 }
                 _ => modal.reject(&path),
@@ -712,7 +800,7 @@ mod tests {
         assert!(text.contains("ENRICH OFF"), "{text}");
         assert!(text.contains("ASK OFF"), "{text}");
         assert!(
-            text.contains("e enrich · a ask"),
+            text.contains("e enrich · d dry run · a ask"),
             "the keys must be in the footer, not just bound: {text}"
         );
         modal.handle(Key::ToggleEnrich);
@@ -720,6 +808,16 @@ mod tests {
         let text = frame(&modal);
         assert!(text.contains("ENRICH ON"), "{text}");
         assert!(text.contains("ASK ON"), "{text}");
+        // Dry run rides on enrich: it changes the enrich line, and says
+        // both what it does and what it does not spend.
+        modal.handle(Key::ToggleDryRun);
+        let text = frame(&modal);
+        assert!(text.contains("ENRICH DRY RUN"), "{text}");
+        assert!(text.contains("buys nothing"), "{text}");
+        assert!(text.contains("d dry run"), "{text}");
+        modal.handle(Key::ToggleDryRun);
+        assert!(frame(&modal).contains("ENRICH ON"));
+        modal.handle(Key::ToggleDryRun);
         assert!(
             text.contains("`claude` login"),
             "each ON line must say what it reaches a model through: {text}"
@@ -729,7 +827,7 @@ mod tests {
             Step::Choose(PathBuf::from("/repos"))
         );
         assert!(
-            modal.enrich && modal.ask,
+            modal.enrich && modal.ask && modal.dry_run,
             "the flips did not survive the confirm"
         );
     }
@@ -743,7 +841,13 @@ mod tests {
             let text = frame(&offered);
             assert!(text.contains("[ ] enrich"), "{text}");
             assert!(text.contains("[ ] ask"), "{text}");
-            assert!(text.contains("e enrich · a ask"), "{text}");
+            assert!(text.contains("d [ ] dry run"), "{text}");
+            assert!(text.contains("e [ ] enrich"), "{text}");
+            assert!(text.contains("a [ ] ask"), "{text}");
+            assert!(
+                text.contains("OPTIONS"),
+                "the options need their heading: {text}"
+            );
         } else {
             let asked = modal_over(&["alpha"]).offering_model(true);
             assert!(!asked.offers_model, "a sealed build accepted the offer");
@@ -757,7 +861,11 @@ mod tests {
         assert!(!text.contains("ask"), "{text}");
         sealed.handle(Key::ToggleEnrich);
         sealed.handle(Key::ToggleAsk);
-        assert!(!sealed.enrich && !sealed.ask, "an unoffered toggle flipped");
+        sealed.handle(Key::ToggleDryRun);
+        assert!(
+            !sealed.enrich && !sealed.ask && !sealed.dry_run,
+            "an unoffered toggle flipped"
+        );
         sealed.handle(Key::Enter);
         let text = frame(&sealed);
         assert!(!text.contains("ENRICH"), "{text}");
@@ -839,6 +947,18 @@ mod tests {
             text.contains("Enter on . maps here"),
             "the selection rule must be spoken, not implied: {text}"
         );
+        assert!(
+            text.contains("o [ ] open code"),
+            "an option row leads with its key: {text}"
+        );
+        for heading in ["REPOSITORY", "OPTIONS", "KEYS"] {
+            assert!(
+                draw(&modal, 9)
+                    .iter()
+                    .any(|l| l.role == Role::Section && l.text == heading),
+                "{heading} heading missing or not a section"
+            );
+        }
         let cursor_role = draw(&modal, 9)
             .iter()
             .find(|l| l.text.contains(". (map this directory)"))
@@ -848,6 +968,31 @@ mod tests {
             Some(Role::Cursor),
             "the highlighted row must carry the cursor role for the shell to colour"
         );
+    }
+
+    #[test]
+    fn keys_and_lit_checkboxes_wear_the_accent_and_off_states_dim() {
+        // Painted strings are what the terminal gets; the accent is the
+        // terminal's cyan and the quiet parts its dark grey — crossterm
+        // writes both in the 256-colour form, so those are the proof.
+        let cyan = "\x1b[38;5;14m";
+        let dim = "\x1b[38;5;8m";
+        let keys = paint_keys("j/k move · Enter open");
+        assert!(
+            keys.contains(&format!("{cyan}j/k")) || keys.contains("j/k\x1b"),
+            "{keys:?}"
+        );
+        assert!(keys.contains(dim), "{keys:?}");
+        let on = paint_option("e [x] enrich — buy prose");
+        assert!(on.contains("[x]"), "{on:?}");
+        assert!(
+            on.matches(cyan).count() >= 2,
+            "key and lit box both accent: {on:?}"
+        );
+        let off = paint_option("e [ ] enrich — buy prose");
+        assert!(off.contains(dim), "an unlit box dims: {off:?}");
+        assert!(paint_setting("ENRICH OFF — the map stays structural").contains(dim));
+        assert!(paint_setting("ENRICH ON — buys prose").contains(cyan));
     }
 
     #[test]

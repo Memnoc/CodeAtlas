@@ -80,9 +80,10 @@ options: `Enter` opens a folder exactly like a file manager, `h` climbs,
 `/` types a path,
 `Enter` on the pinned `.` row maps the directory you are in — one confirm
 screen states plainly whether open code is on (`o` toggles it), and, on a
-build with the CLI backend, whether it will enrich first (`e`) and serve
-with Ask (`a`): both go through your own `claude` login and nothing else,
-so there is no key to configure and no flag to get wrong. Then it scans,
+build with the CLI backend, whether it will enrich first (`e`, or `d` for
+a dry run that states the price and buys nothing) and serve with Ask
+(`a`): both go through your own `claude` login and nothing else, so there
+is no key to configure and no flag to get wrong. Then it scans,
 serves, and opens the map at `http://127.0.0.1:4173/` itself. If the port
 is already taken it says so before scanning anything. The
 menu remembers nothing: no history, no file written anywhere but the

@@ -51,6 +51,9 @@ pub struct Choices {
     pub enrich: bool,
     /// Serve with Ask, through the same login. Same rule.
     pub ask: bool,
+    /// With `enrich`: say what the run would cost, buy nothing, serve the
+    /// structural map — `scan --enrich --dry-run` from the menu.
+    pub dry_run: bool,
 }
 
 /// The one provider the launcher can ever select: the reader's own CLI
@@ -115,33 +118,35 @@ pub fn interview(
         None => return Ok(None),
     };
     #[cfg(feature = "agent-cli")]
-    let Some((enrich, ask)) = model_questions(input, out, offers_model)? else {
+    let Some((enrich, dry_run, ask)) = model_questions(input, out, offers_model)? else {
         return Ok(None);
     };
     #[cfg(not(feature = "agent-cli"))]
-    let (enrich, ask) = {
+    let (enrich, dry_run, ask) = {
         let _ = offers_model;
-        (false, false)
+        (false, false, false)
     };
     Ok(Some(Choices {
         root,
         open_code,
         enrich,
         ask,
+        dry_run,
     }))
 }
 
-/// The enrich and ask questions, compiled only with the backend like the
-/// modal's rows: the sealed byte-probe must find no trace of the CLI's
-/// name. `None` means stdin closed at one of them.
+/// The enrich, dry-run and ask questions, compiled only with the backend
+/// like the modal's rows: the sealed byte-probe must find no trace of the
+/// CLI's name. Dry run is asked only after a yes to enrich, since it is
+/// enrich's own switch. `None` means stdin closed at one of them.
 #[cfg(feature = "agent-cli")]
 fn model_questions(
     input: &mut dyn BufRead,
     out: &mut dyn Write,
     offers_model: bool,
-) -> io::Result<Option<(bool, bool)>> {
+) -> io::Result<Option<(bool, bool, bool)>> {
     if !offers_model {
-        return Ok(Some((false, false)));
+        return Ok(Some((false, false, false)));
     }
     let _ = write!(
         out,
@@ -152,6 +157,18 @@ fn model_questions(
         return Ok(None);
     };
     let enrich = parse_yes(&line);
+    let mut dry_run = false;
+    if enrich {
+        let _ = write!(
+            out,
+            "dry run — say what enrichment would cost and spend nothing? [y/N]: "
+        );
+        let _ = out.flush();
+        let Some(line) = read_line(input)? else {
+            return Ok(None);
+        };
+        dry_run = parse_yes(&line);
+    }
     let _ = write!(
         out,
         "ask — answer questions in the dashboard through the same login? [y/N]: "
@@ -160,7 +177,7 @@ fn model_questions(
     let Some(line) = read_line(input)? else {
         return Ok(None);
     };
-    Ok(Some((enrich, parse_yes(&line))))
+    Ok(Some((enrich, dry_run, parse_yes(&line))))
 }
 
 fn read_line(input: &mut dyn BufRead) -> io::Result<Option<String>> {
@@ -283,7 +300,17 @@ pub fn run() -> ExitCode {
     // serves it anyway: the reader asked for a dashboard, and a map
     // without prose is still that.
     #[cfg(feature = "agent-cli")]
-    if choices.enrich {
+    if choices.enrich && choices.dry_run {
+        // The same sentence `scan --enrich --dry-run` prints, from the same
+        // `Plan::of`, and then the structural map is served: the reader
+        // learns the price now and flips dry run off next time.
+        eprintln!(
+            "would enrich: {} — dry run, nothing bought; serving the structural map",
+            crate::enrich::Plan::of(&graph).describe()
+        );
+    }
+    #[cfg(feature = "agent-cli")]
+    if choices.enrich && !choices.dry_run {
         let mut graph = graph;
         match crate::enrich::run(&choices.root, &mut graph, cli_choice()) {
             Ok(crate::enrich::Outcome::NothingToEnrich) => {
@@ -351,9 +378,19 @@ mod tests {
             let result = interview(&mut input, &mut out, None, Path::new("/"), true);
             (result.unwrap(), String::from_utf8(out).unwrap())
         };
-        let (choices, prompts) = ask(format!("{}\nn\ny\ny\n", repo.path().display()));
+        // path · open code · enrich · dry run · ask
+        let (choices, prompts) = ask(format!("{}\nn\ny\ny\ny\n", repo.path().display()));
         let choices = choices.unwrap();
-        assert!(choices.enrich && choices.ask);
+        assert!(choices.enrich && choices.dry_run && choices.ask);
+        assert!(
+            prompts.contains("spend nothing"),
+            "the dry-run question must say what it does not do: {prompts:?}"
+        );
+        // A no to enrich skips the dry-run question: the next answer is ask's.
+        let (choices, prompts) = ask(format!("{}\nn\nn\ny\n", repo.path().display()));
+        let choices = choices.unwrap();
+        assert!(!choices.enrich && !choices.dry_run && choices.ask);
+        assert!(!prompts.contains("dry run"), "{prompts:?}");
         assert!(
             prompts.contains("`claude` login"),
             "each question must say what it reaches a model through: {prompts:?}"
