@@ -619,12 +619,12 @@ text — those claims are about what git does:
   `.gitignore` excluded outright, so a repository whose own rules say
   `.codeatlas/` gets no annotation store in git no matter what section 5's
   nested file says. Narrowing the outer rule to `**/.codeatlas/*` — this
-  repository's own rule, and what the README tells a reader to write —
+  repository's own rule, and what `docs/enrichment.md` tells a reader to write —
   restores it: the contents are ignored, the directory is reachable, and the
   `**/` keeps the rule applying below the root, where a scan run from a
   subdirectory leaves a `.codeatlas/` too. The failure is in the safe
   direction — prose stays unpublished rather than being published by surprise
-  — and it is documented in the README rather than detected, because
+  — and it is documented in `docs/enrichment.md` rather than detected, because
   CodeAtlas does not read the repository's own ignore rules to second-guess
   them. What is guarded is this repository's own case:
   `this_repositorys_own_annotation_store_is_publishable`

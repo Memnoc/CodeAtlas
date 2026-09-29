@@ -12,14 +12,14 @@
   <a href="#install"><img src="https://img.shields.io/badge/platforms-Linux_%C2%B7_macOS-9ccfd8" alt="Platforms: Linux and macOS"></a>
   <a href="https://github.com/Memnoc/CodeAtlas/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Memnoc/CodeAtlas/ci.yml?branch=main&label=CI" alt="CI status on main"></a>
   <a href="contract/README.md"><img src="https://img.shields.io/badge/map_contract-0.5.0-f6c177" alt="Map contract version 0.5.0"></a>
-  <a href="#development"><img src="https://img.shields.io/badge/Rust-edition_2024-31748f" alt="Rust edition 2024"></a>
+  <a href="docs/development.md"><img src="https://img.shields.io/badge/Rust-edition_2024-31748f" alt="Rust edition 2024"></a>
 </p>
 
 <p align="center">
   <a href="#install"><strong>Install</strong></a> ·
-  <a href="#how-it-works">Overview</a> ·
-  <a href="#commands">Commands</a> ·
-  <a href="#enrichment-optional">Enrichment</a> ·
+  <a href="docs/tour.md">Tour</a> ·
+  <a href="docs/commands.md">Commands</a> ·
+  <a href="docs/enrichment.md">Enrichment</a> ·
   <a href="#security">Security</a> ·
   <a href="https://github.com/Memnoc/CodeAtlas/releases">Releases</a>
 </p>
@@ -73,23 +73,14 @@ what you downloaded.
 </details>
 
 <details>
-<summary>Run it <strong>bare</strong> — the terminal menu, key by key</summary>
+<summary>Run it <strong>bare</strong> — the terminal menu</summary>
 
-`./codeatlas` will spawn a small terminal menu that guides you through
-options: `Enter` opens a folder exactly like a file manager, `h` climbs,
-`/` types a path,
-`Enter` on the pinned `.` row maps the directory you are in — one confirm
-screen states plainly whether open code is on (`o` toggles it), and, on a
-build with the CLI backend, whether it will enrich first (`e`, or `d` for
-a dry run that states the price and buys nothing) and serve with Ask
-(`a`): both go through your own `claude` login and nothing else, so there
-is no key to configure and no flag to get wrong. Then it scans,
-serves, and opens the map at `http://127.0.0.1:4173/` itself. If the port
-is already taken it says so before scanning anything. The
-menu remembers nothing: no history, no file written anywhere but the
-repository you choose, and only ever appears when you run the binary by
-hand at a terminal; in scripts and pipes a bare invocation prints usage,
-exactly as a CLI should.
+`./codeatlas` with nothing after it opens a small terminal menu: pick the
+repository like a file manager, flip open code, enrich, dry run and ask
+with one key each, press Enter, and it scans, serves, and opens the map at
+`http://127.0.0.1:4173/` itself. It remembers nothing and only appears at
+a real terminal; in scripts and pipes a bare invocation prints usage. The
+keys, one by one: [Commands → The terminal menu](docs/commands.md#the-terminal-menu).
 
 </details>
 
@@ -102,8 +93,8 @@ The commands to remember are:
 
 Everything CodeAtlas writes lands in `.codeatlas/` under the scanned root,
 and a scan puts a `.gitignore` there so you do not have to: the regenerated
-map is ignored, the annotation store is published and that one exception is
-deliberate, and it's explained in [Enrichment](#enrichment-optional).
+map is ignored, the annotation store is published, and that one exception
+is deliberate — [Enrichment](docs/enrichment.md) explains it.
 
 > **macOS, browser downloads only:** these binaries are not Apple-signed or
 > notarized, so macOS quarantines what a _browser_ saves and Gatekeeper
@@ -129,245 +120,21 @@ cargo build --release
 
 </details>
 
-<details>
-<summary><strong>Optional: shell aliases</strong></summary>
+## Documentation
 
-Point the first path at wherever your binary lives, whether that is the downloaded file or
-your clone's build. The model-touching pair carry `--provider cli:claude` on
-purpose: baking the flag in makes the bare-flag trap described in
-[Enrichment](#enrichment-optional) impossible to hit from muscle memory.
-
-```sh
-alias codeatlas='$HOME/Code/CodeAtlas/target/release/codeatlas'
-alias cas='codeatlas scan .'                                        # map this repo
-alias cav='codeatlas serve .'                                       # view it (127.0.0.1:4173)
-alias caq='codeatlas serve . --ask --provider cli:claude'           # view it + questions
-alias cae='codeatlas scan . --enrich --provider cli:claude'         # buy prose for what changed
-alias caed='codeatlas scan . --enrich --dry-run --provider cli:claude'  # say the price, spend nothing
-alias cakill='pkill -x codeatlas'                                   # stop a running server
-```
-
-</details>
-
-## How it works
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/viz-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/viz-light.png">
-  <img alt="Why a map: code is read one file at a time, a codebase is understood all at once — the text on the left becomes the picture on the right" src="docs/images/viz-dark.png" width="100%">
-</picture>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/pipeline-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/pipeline-light.png">
-  <img alt="From repository to map in one command: scan parses and groups, map.json is the contract, --enrich is the optional model pass, then read it in the dashboard or share one HTML file" src="docs/images/pipeline-dark.png" width="100%">
-</picture>
-
-Parsing uses tree-sitter grammars compiled into the binary; nothing is
-downloaded at runtime. Files in unsupported languages still appear as nodes,
-so the map stays complete, and every parser resolves imports and calls
-conservatively. An edge that cannot be resolved to a node inside the map is
-dropped rather than emitted dangling.
-
-The emitted map conforms to a published, versioned contract
-(`contract/map.schema.json`, currently **0.5.0**) generated from the Rust
-types, which works as the single source of truth. The dashboard's TypeScript types are
-generated from the same schema, CI is meant to fail on any drift, and consumers other
-than the bundled dashboard can rely on it; `contract/README.md` states the
-compatibility policy. Node descriptions carry a `provenance` field of
-`structural` or `llm`, so a reader can always tell a mechanically derived
-fact from a generated one.
-
-## What it looks like
-
-The cards are minimal but exhaustive, and the main feature they carry is
-their connections to other cards, plus what they open in the sidebar once
-clicked. Some of these images are real screenshots: the numbers in them were
-true the day they were captured, not necessarily today. The rest are
-illustrations drawn from a small example repository, not from CodeAtlas
-itself.
-
-### How to read the map
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/legend-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/legend-light.png">
-  <img alt="The legend: regions, edges, elevation, and the structural-versus-llm provenance badges" src="docs/images/legend-dark.png" width="100%">
-</picture>
-
-### One root, a few branches, hundreds of leaves
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/tree-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/tree-light.png">
-  <img alt="The shape of a repository: the trunk everything grows from, the regions it branches into, and the files at the tips" src="docs/images/tree-dark.png" width="100%">
-</picture>
-
-### Every region is a card, every import is a line
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/constellation-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/constellation-light.png">
-  <img alt="Cards that know each other: pick any card and the map answers what it uses, what leans on it, and the shortest route between two corners of the codebase" src="docs/images/constellation-dark.png" width="100%">
-</picture>
-
-### The files that matter, first
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/drill-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/drill-light.png">
-  <img alt="The drill view: a dense region opens on the files it leans on, already readable, with the rest behind one show-the-rest chip — and the map keeps its place" src="docs/images/drill-dark.png" width="100%">
-</picture>
-
-### A lens, not a place
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/magnify-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/magnify-light.png">
-  <img alt="Magnify: hold the lens over a file and it is redrawn alone with its direct neighbours; the map never moves, and lifting the lens changes nothing" src="docs/images/magnify-dark.png" width="100%">
-</picture>
-
-### The same repository, structurally and by behaviour
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/twoviews-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/twoviews-light.png">
-  <img alt="Structural groups by where files live; Domain groups by what actually runs; one toggle swaps between them" src="docs/images/twoviews-dark.png" width="100%">
-</picture>
-
-### The map stays, the conversation joins it
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/conversation-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/conversation-light.png">
-  <img alt="The conversation docked beside the canvas: follow-ups keep context, every read is scoped and metered, and the map stays drawn while you read" src="docs/images/conversation-dark.png" width="100%">
-</picture>
-
-### You always know which parts a model wrote
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/provenance-dark.png">
-  <source media="(prefers-color-scheme: light)" srcset="docs/images/provenance-light.png">
-  <img alt="Two kinds of label: structural read off the code, llm written during enrichment and stripped from the shared page" src="docs/images/provenance-dark.png" width="100%">
-</picture>
-
-## Commands
-
-| Command        | What it does                                                                                                                                                                                                                                                                                                                        |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scan [PATH]`  | Walk the repo, parse it, write the map to `.codeatlas/knowledge-graph.json`. `--enrich` additionally fills prose slots through an LLM (see below); `--provider` chooses which one.                                                                                                                                                  |
-| `serve [PATH]` | Serve the dashboard and the local map from memory on `127.0.0.1`. `--port` chooses the port; there is deliberately no `--host`. `--open-code` additionally serves a mapped file's own source to the dashboard. `--ask` additionally answers questions about the map at `POST /api/ask`, through the same providers `--enrich` uses. |
-| `diff [PATH]`  | Project a git diff onto the map: changed nodes plus their one-hop blast radius, written to `.codeatlas/diff-overlay.json`. Pure git and graph traversal — no LLM, no network.                                                                                                                                                       |
-| `share [PATH]` | Export one self-contained, redacted HTML file that opens by double-click, with no server and no external requests.                                                                                                                                                                                                                  |
-| `schema`       | Print the JSON Schema of the map contract.                                                                                                                                                                                                                                                                                          |
-
-The dashboard picks up the diff overlay automatically when one exists, offering
-a toggle that distinguishes changed nodes from the ones they affect.
-
-## Languages
-
-| Language   | Extensions                                                   |
-| ---------- | ------------------------------------------------------------ |
-| TypeScript | `.ts`, `.tsx`                                                |
-| JavaScript | `.js`, `.jsx`, `.mjs`, `.cjs`                                |
-| Rust       | `.rs`                                                        |
-| Python     | `.py`                                                        |
-| Go         | `.go`                                                        |
-| C          | `.c`, `.h`                                                   |
-| C++        | `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hh`, `.hxx`                 |
-| Markdown   | `.md`, `.markdown` — relative links become edges; no symbols |
-
-Open code highlights every language above except Markdown, plus CSS,
-which the scanner does not parse but the dashboard still shows in colour.
-Anything else opens as plain text, and the source panel says so.
-
-## Enrichment (optional)
-
-`scan --enrich` fills the map's prose slots: node summaries, layer names,
-domain-flow names, tour narration through an enrichment provider. It is
-entirely opt-in, and the mechanical values are always present underneath. If the provider fails or
-is never configured, you still get a complete, schema-valid structural map.
-
-Annotations are cached in `.codeatlas/annotations.json` keyed by node
-identity and a content hash, so a later scan re-attaches unchanged answers
-for free and only re-purchases the parts of the map that actually changed.
-**That store is meant to be committed**: one person enriches, commits, and
-pushes; everyone else clones and runs a plain `codeatlas scan` — no
-credential, no network, no flags, and gets the map with all its prose.
-This is handy if you are working on the same repo with some colleagues.
-The store records which provider, which model, and what date produced it. If you
-would rather not publish it, delete the `!annotations.json` line from
-`.codeatlas/.gitignore`; scans write that file only when it is missing and
-never overwrite it, so your edit stands.
-
-> One interaction to check: if your repository already ignores `.codeatlas/`
-> outright, narrow that line to `**/.codeatlas/*` — CodeAtlas's own rule.
-> Git never lets a nested file re-include anything under an excluded
-> _directory_, so an outright exclusion keeps the store unpublished no
-> matter what the nested `.gitignore` says.
-
-There are two providers, chosen with `--provider` or
-`CODEATLAS_ENRICH_PROVIDER`:
-
-- **`claude`** — the Claude API. Credentials resolve like the official SDKs:
-  `ANTHROPIC_API_KEY` first, then an `ant auth login` profile. The default
-  model is `claude-opus-5` (`--model` overrides). Billed per token, to the
-  key's account.
-- **`cli:claude`** — the Claude CLI you are already logged into, spawned as
-  a one-shot completion with no tools and no MCP servers. **CodeAtlas never
-  handles a credential**, which is the whole point; `ANTHROPIC_API_KEY` is
-  deliberately stripped from the child's environment.
-
-**Name the provider.** On a default build, plain `scan --enrich` falls
-through to `claude` and the API-key path, because that is the build's default
-backend. If you mean your subscription, you should specify it. Notice that the absence of a flag is not
-a choice:
-
-```sh
-codeatlas scan . --enrich --provider cli:claude
-```
-
-You can ask what a run would cost (i.e. tokens) before spending anything
-(`--enrich --dry-run`), and every run states its price up front and reports
-progress as it goes, one line per batch, the same on a terminal and in a
-log. The shape (the numbers are one repository on one day, not a guarantee):
-
-```text
-mapped 287 files
-enriching: 1651 slots in 67 calls: roughly 146k–194k tokens of prompt,
-plus perhaps 41k–74k more coming back
-  batch 1/67 — 25 slots filled
-  …
-enriched 1651 slots
-```
-
-**The token figure is a range** because there is no local tokenizer and a single
-number would be at best a guess. The call count is exact,
-computed by the same code that then makes the calls. No price is ever
-printed since rates move, and on `cli:claude` there is no monetary price at all.
-Batches run four at a time and **every answered batch is saved as it
-lands**: interrupting a run via Ctrl-C, a rate limit or a dropped connection
-keeps everything already bought, and the next `--enrich` re-purchases only
-what is missing (hopefully saving a lot of tokens).
-Prompts are bounded on both providers and the model receives
-the slots being filled and summarized topology, never the serialized graph
-and never file contents.
-
-### Asking the map questions
-
-`serve --ask` reaches the same providers for a different purpose: a question
-about the map, answered from a bounded slice of the map alone, citing the
-node IDs the answer came from. Same rule as `--enrich`: name the provider,
-or the default build picks the API key:
-
-```sh
-codeatlas serve . --port 4173 --ask --provider cli:claude
-```
-
-The dashboard picks up the mod automatically: the search field spawns an **Ask** button.
-Without `--ask` the feature is hidden entirely and the terminal tells you the flag exists instead.
-Every question is one provider call and an enriched map answers far better than
-a structural one, because the answer is drawn from the map's own prose.
+- **[Tour](docs/tour.md)** — how it works, what the map looks like, the
+  languages it parses and highlights.
+- **[Commands](docs/commands.md)** — every subcommand and flag, the terminal
+  menu key by key, shell aliases.
+- **[Enrichment](docs/enrichment.md)** — buying prose for the map, the two
+  providers, what a run costs, asking the map questions.
+- **[Security](docs/SECURITY.md)** — the audit entry point: every guarantee
+  mapped to the code and the test that holds it.
+- **[Development](docs/development.md)** — building and testing, the
+  design record, the transparency position, release status.
+- **[Map contract](contract/README.md)** — the versioned schema other tools
+  can build on. **[ADRs](docs/adr/)** and **[specs](docs/specs/)** — the
+  decisions and each version's scope.
 
 ## Security
 
@@ -389,54 +156,13 @@ each guarantee to the code and the committed test that enforces it, states
 what a model receives on each path, names the CI jobs that run them, and
 records the honest limitations.
 
-## Development
-
-```sh
-cargo test --workspace                        # default build
-cargo test --workspace --no-default-features  # sealed build
-cargo test --workspace --no-default-features --features agent-cli  # CLI, no HTTP client
-cd dashboard && npm test -- --run             # dashboard
-```
-
-CI runs all three Rust configurations, the dashboard suite, and a
-contract-drift check that regenerates the schema and the TypeScript types
-and fails on any diff. Requires a Rust toolchain (edition 2024) and Node 24.
-Tests run offline; the egress suite uses unprivileged Linux network
-namespaces and skips with an explicit message where those are unavailable.
-
-## Design record
-
-The decisions behind this design, with their trade-offs, are recorded as
-ADRs in [`docs/adr/`](docs/adr/); each version's scope lives in
-[`docs/specs/`](docs/specs/).
-CodeAtlas is built AI-assisted, guided by the Northstar
-engineering pipeline: specs, tickets, test-first slices, cross-checked
-reviews, with every decision recorded in those ADRs.
-
-Stated once, as the **standing transparency position: CodeAtlas's AI is
-strictly bring-your-own: `--ask` and enrichment call Anthropic's Claude
-with credentials you supply, and nothing else in the tool talks to a
-model**; the sealed build cannot even be compiled to. Wherever AI-written
-prose appears, I did my best to expose it: the dashboard badges enriched text where it
-renders it, the annotation store carries a machine-readable record naming
-the provider, the model and the UTC date of the last run that wrote it,
-and `share` removes AI prose from the exported file entirely. **Interaction
-with the model is always labelled as interaction with the model**. This is
-stated as practice, verified by the tests [`docs/SECURITY.md`](docs/SECURITY.md) so a reader
-never has to guess which words a model wrote.
-
 ## Status
 
-V3 shipped on 2026-08-18: distribution: the prebuilt, checksummed,
-provenance-attested binaries above, with a sealed variant beside each and
-open code, a mapped file's source shown in the dashboard lit at its own
-lines, opt-in via `serve --open-code`. The point releases since are
-field-feedback laps: the scan progress line, the terminal menu, the
-full-screen source view, the third Rosé Pine variant. Each version's spec
-carries its own story-by-story Verification section
-([V1](docs/specs/2026-08-09-codeatlas-v1.md),
-[V2](docs/specs/2026-08-13-codeatlas-v2.md),
-[V3](docs/specs/2026-08-16-codeatlas-v3.md)).
+v0.1 is out and stable: prebuilt, checksummed, provenance-attested binaries
+for Linux and macOS with a sealed variant beside each, the point releases
+driven by field feedback. The story-by-story record lives in
+[Development → Status](docs/development.md#status) and the
+[releases](https://github.com/Memnoc/CodeAtlas/releases).
 
 ## License
 

@@ -1,7 +1,9 @@
 # README images
 
-The banners the top-level [README](../../README.md) embeds. Every image
-ships as a dark/light pair and the README's `<picture>` blocks follow the
+The banners the [tour](../tour.md) embeds (they lived in the top-level
+README until 2026-09-29, when the README was cut down to install, security
+and credits). Every image
+ships as a dark/light pair and the tour's `<picture>` blocks follow the
 reader's GitHub theme, so both halves of a pair must exist for its slot to
 work everywhere.
 
@@ -24,8 +26,8 @@ drop-in replacement and no document changes. A renamed one is a broken slot.
 
 The concept cards (`viz`, `tree`, `constellation`, `drill`, `magnify`,
 `conversation`) draw an illustrative repository, not this one — the
-README's showcase copy says so, and must keep saying so as long as they
-are published.
+tour's showcase copy says so, and must keep saying so as long as they
+are published (the copy now lives in `docs/tour.md`).
 
 ## Retired pairs — 2026-08-14
 
@@ -55,9 +57,9 @@ Two rules for the copy inside the images, learned the usual way:
 - **No product numbers.** "Thirteen steps" and "nine themes" were both
   wrong within a day of export — step counts and feature tallies move with
   every ticket. Counts that come from the day's map (files, regions,
-  enriched slots) are fine; the README says the shots belong to their day.
+  enriched slots) are fine; the tour says the shots belong to their day.
   Illustrative counts on the concept cards are fine for the same reason the
-  README's copy declares them illustrative.
+  tour's copy declares them illustrative.
 - **Read the screenshots before exporting.** The first export immortalised
   a live UI bug ("2 importss") that a minute of reading would have caught —
   it became a fix, but the pictures had already framed it.
